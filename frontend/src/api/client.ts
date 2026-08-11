@@ -591,8 +591,14 @@ export type TaskPromptResponse = {
   items: TaskPromptItem[];
 };
 
+// 2026-08-11: 4c 프롬프트 재사용에 서버사이드 페이지네이션 추가 - 이전에는
+// `items`만 내려주고 전체 건수를 몰라 카드 그리드를 통째로 렌더링했다.
+// `HistoryResponse`/`AuditLogResponse`와 동일한 {items,page,pageSize,total} 규격.
 export type ReusablePromptResponse = {
   items: TaskPromptItem[];
+  page: number;
+  pageSize: number;
+  total: number;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
@@ -829,14 +835,15 @@ export const apiClient = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
-  reusablePrompts: (params: { keyword?: string; workflowId?: string; minRating?: number; reviewedOnly?: boolean; reuseEligible?: boolean; limit?: number }) => {
+  reusablePrompts: (params: { keyword?: string; workflowId?: string; minRating?: number; reviewedOnly?: boolean; reuseEligible?: boolean; page?: number; pageSize?: number }) => {
     const search = new URLSearchParams();
     if (params.keyword) search.set("keyword", params.keyword);
     if (params.workflowId) search.set("workflowId", params.workflowId);
     if (params.minRating) search.set("minRating", String(params.minRating));
     if (params.reviewedOnly) search.set("reviewedOnly", "true");
     if (typeof params.reuseEligible === "boolean") search.set("reuseEligible", String(params.reuseEligible));
-    if (params.limit) search.set("limit", String(params.limit));
+    search.set("page", String(params.page || 1));
+    search.set("pageSize", String(params.pageSize || 20));
     return requestJson<ReusablePromptResponse>(`/api/prompts/reusable?${search.toString()}`);
   },
   cancelJob: (taskId: string) =>

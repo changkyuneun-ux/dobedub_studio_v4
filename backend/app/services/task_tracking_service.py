@@ -331,8 +331,9 @@ def reusable_task_prompts(
     min_rating: int | None = None,
     reviewed_only: bool = False,
     reuse_eligible: bool | None = None,
-    limit: int = 50,
-) -> list[dict]:
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
     session = SessionLocal()
     try:
         query = select(TaskPrompt).order_by(
@@ -366,15 +367,29 @@ def reusable_task_prompts(
             .where(WorkflowTask.id == TaskPrompt.task_id, WorkflowTask.deleted_at.is_not(None))
             .exists()
         )
-        cleaned_keyword = str(keyword or "").strip()
-        fetch_limit = 200 if cleaned_keyword else max(1, min(200, int(limit or 50)))
-        rows = session.scalars(query.limit(fetch_limit)).all()
+        # 프롬프트 재사용 목록 페이지네이션(2026-08-11): 키워드는 asset 파일명·
+        # 평가 코멘트 등 JSON으로 합성된 필드까지 검색해야 해서
+        # (`_reusable_prompt_matches_keyword`) SQL WHERE로 옮길 수 없다. 그래서
+        # SQL 단계에서는 workflow/rating/reviewed/reuse_eligible 필터만 적용한
+        # 전체 후보를 가져온 뒤, 파이썬에서 키워드 필터 + total 계산 + 페이지
+        # 슬라이스를 적용한다. 이전 버전은 키워드가 있으면 무조건 200건까지만
+        # 조회해 필터링한 뒤 그중 앞 `limit`개만 반환했는데, 조건에 맞는 결과가
+        # 200건 뒤쪽에 있으면 조용히 누락되는 버그였다 - 이 화면은 reuse_eligible로
+        # 걸러진 소량의 큐레이션된 데이터만 다루므로 전체 후보를 메모리에 올리는
+        # 비용이 감내할 만하다고 판단했다.
+        rows = session.scalars(query).all()
         assets_by_id = _assets_by_id(session)
         feedback_by_output_id = _prompt_feedback_by_output_id(session, [row.prompt_generation_output_id for row in rows])
         items = [_task_prompt_to_json(row, assets_by_id, feedback_by_output_id) for row in rows]
+        cleaned_keyword = str(keyword or "").strip()
         if cleaned_keyword:
             items = [item for item in items if _reusable_prompt_matches_keyword(item, cleaned_keyword)]
-        return items[:max(1, min(200, int(limit or 50)))]
+        total = len(items)
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(200, int(page_size or 20)))
+        start = (safe_page - 1) * safe_page_size
+        page_items = items[start:start + safe_page_size]
+        return {"items": page_items, "page": safe_page, "pageSize": safe_page_size, "total": total}
     finally:
         session.close()
 

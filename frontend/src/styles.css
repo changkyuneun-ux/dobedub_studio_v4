@@ -139,20 +139,9 @@ button {
   justify-content: space-between;
 }
 
-.login-card input,
-select,
-textarea {
-  background: #0f1317;
-  border: 1px solid #444b55;
-  border-radius: 6px;
-  color: var(--text);
-  padding: 12px;
-}
-
-textarea {
-  min-height: 88px;
-  resize: vertical;
-}
+/* 구버전 다크 테마 폼 규칙(select/textarea에 background:#0f1317) 제거:
+   배경을 지정하지 않은 v3 textarea/select가 검은 배경 + 어두운 글자로 안 보이던
+   버그의 원인이었다. v3 폼 요소는 각자 v3 토큰 배경을 쓴다(아래 .v3-*-textarea 등). */
 
 .primary-button {
   background: var(--blue);
@@ -4738,6 +4727,7 @@ textarea {
 }
 
 .v3-scene-textarea {
+  background: var(--v3-bg-panel);
   border: 1px solid var(--v3-border);
   border-radius: 8px;
   color: var(--v3-text-body);
@@ -4747,6 +4737,9 @@ textarea {
   resize: vertical;
   width: 100%;
 }
+
+.v3-scene-textarea:focus,
+.v3-system-prompt-textarea:focus { border-color: var(--v3-accent); outline: none; }
 
 .v3-catalog-actions {
   border-top: 1px solid var(--v3-border-inner);
@@ -4763,6 +4756,7 @@ textarea {
 }
 
 .v3-system-prompt-textarea {
+  background: var(--v3-bg-panel);
   border: 1px solid var(--v3-border);
   border-radius: 8px;
   color: var(--v3-text-body);

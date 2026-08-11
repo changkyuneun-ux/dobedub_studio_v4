@@ -99,20 +99,20 @@ def reusable_prompts(
     minRating: int | None = None,
     reviewedOnly: bool = False,
     reuseEligible: bool | None = None,
-    limit: int = 50,
+    page: int = 1,
+    pageSize: int = 20,
     _: CurrentUser = Depends(require_permission("prompts:reuse")),
 ):
     try:
-        return {
-            "items": studio_api_service.reusable_prompts(
-                keyword=keyword,
-                workflow_id=workflowId,
-                min_rating=minRating,
-                reviewed_only=reviewedOnly,
-                reuse_eligible=reuseEligible,
-                limit=limit,
-            )
-        }
+        return studio_api_service.reusable_prompts(
+            keyword=keyword,
+            workflow_id=workflowId,
+            min_rating=minRating,
+            reviewed_only=reviewedOnly,
+            reuse_eligible=reuseEligible,
+            page=page,
+            page_size=pageSize,
+        )
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Reusable prompt query failed: {exc}") from exc
 

@@ -261,6 +261,11 @@ export function StudioShell({
   const [promptReuseItems, setPromptReuseItems] = useState<TaskPromptItem[]>([]);
   const [promptReuseLoading, setPromptReuseLoading] = useState(false);
   const [promptReuseNotice, setPromptReuseNotice] = useState("");
+  // 2026-08-11: 카드 그리드 → 리스트 전환과 함께 서버사이드 페이지네이션 추가
+  // (고정 20건/페이지 - "최대 20개 이내" 요건). 3a(historyPage 등)와 동일한 패턴.
+  const [promptReusePage, setPromptReusePage] = useState(1);
+  const [promptReusePageSize] = useState<20>(20);
+  const [promptReuseTotal, setPromptReuseTotal] = useState(0);
   const [selectedWorkflow, setSelectedWorkflow] = useState("");
   const [schema, setSchema] = useState<WorkflowSchema | null>(null);
   const [segments, setSegments] = useState<SegmentState[]>([]);
@@ -509,25 +514,34 @@ export function StudioShell({
   // 쓰던 모달 방식(openPromptReuse/promptReuseOpen/PromptReuseModal)은 제거됐다.
   async function goToPromptReuseScreen() {
     setPromptReuseNotice("");
-    await searchPromptReuse(promptReuseKeyword);
+    await searchPromptReuse(promptReuseKeyword, 1);
     onNavigate("review.reuse");
   }
 
-  async function searchPromptReuse(keyword = promptReuseKeyword) {
+  // page를 생략하면(새 검색어로 Search 버튼을 누른 경우) 1페이지로 리셋한다 -
+  // 이전 검색의 마지막 페이지에 머물러 있다가 새 검색 결과가 그보다 적으면
+  // 빈 페이지가 뜨는 상황을 막는다. 페이지 이동(onPageChange)에서만 명시적으로
+  // page를 넘긴다.
+  async function searchPromptReuse(keyword = promptReuseKeyword, page?: number) {
+    const targetPage = page ?? 1;
     setPromptReuseLoading(true);
     setPromptReuseNotice("");
     try {
       const response = await apiClient.reusablePrompts({
         keyword: keyword.trim(),
         reuseEligible: true,
-        limit: 50
+        page: targetPage,
+        pageSize: promptReusePageSize
       });
       setPromptReuseItems(response.items || []);
+      setPromptReusePage(response.page || targetPage);
+      setPromptReuseTotal(response.total || 0);
       if (!(response.items || []).length) {
         setPromptReuseNotice("검색 조건에 맞는 재사용 프롬프트가 없습니다.");
       }
     } catch (error) {
       setPromptReuseItems([]);
+      setPromptReuseTotal(0);
       setPromptReuseNotice(error instanceof Error ? error.message : "재사용 프롬프트 검색에 실패했습니다.");
     } finally {
       setPromptReuseLoading(false);
@@ -1867,9 +1881,13 @@ export function StudioShell({
         items={promptReuseItems}
         loading={promptReuseLoading}
         notice={promptReuseNotice}
+        page={promptReusePage}
+        pageSize={promptReusePageSize}
+        total={promptReuseTotal}
         workflowName={selected?.label || selected?.name || selectedWorkflow}
         onKeywordChange={setPromptReuseKeyword}
-        onSearch={() => void searchPromptReuse()}
+        onSearch={() => void searchPromptReuse(promptReuseKeyword, 1)}
+        onPageChange={(page) => void searchPromptReuse(promptReuseKeyword, page)}
         onApply={(prompt) => {
           applyReusablePrompt(prompt);
           onNavigate("create.prompt");

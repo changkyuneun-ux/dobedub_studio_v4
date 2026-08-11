@@ -185,7 +185,7 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] **C-02 `2c` 취소 상태** — `POST /api/jobs/{id}/cancel` 존재. 요청 후 UI 잠금은 클라이언트 상태. — *E-02(`851dac4`)에서 `Create2cScreen` 구현으로 반영.*
 - [x] **C-03 `3a` 삭제** — `POST /api/history/{task_id}/delete` 존재. — *E-03(`9e6e7f8`)에서 `Create3aScreen`의 삭제 모달로 반영.*
 - [x] **C-04 `3f` `3c` Run 상세** — `GET /jobs/{id}/prompts`, `PATCH …/quality`, `PATCH …/review`, `review_status`·`review_flags_json` 컬럼 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create3RunDetailScreen` 구현으로 반영.*
-- [x] **C-05 `4c` 재사용** — `GET /api/prompts/reusable` (keyword·workflowId·minRating·reviewedOnly·reuseEligible·limit) 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create4cScreen` 구현으로 반영.*
+- [x] **C-05 `4c` 재사용** — `GET /api/prompts/reusable` (keyword·workflowId·minRating·reviewedOnly·reuseEligible·page·pageSize) 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create4cScreen` 구현으로 반영. 2026-08-11: 카드 그리드 → 리스트 + 서버사이드 페이지네이션(20건 고정) 요청으로 `limit` 파라미터를 `page`/`pageSize`로 교체하고 응답을 `{items,page,pageSize,total}` 규격으로 통일(`/api/history`·`/api/admin/audit-logs`와 동일 규격). 이전엔 키워드 검색 시 200건까지만 조회해 필터링한 뒤 앞부분만 반환해 뒤쪽 결과가 조용히 누락될 수 있던 버그도 함께 해소.*
 - [x] **C-06 `7a` 시스템 프롬프트** — `GET/PUT /api/prompts/system-prompt` 존재. — *2026-08-10 점검: E-04에서 `Create7aScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-07 `7b` 기능 리소스 매핑** — `GET /api/admin/permissions`가 roles·permissions·resources를 함께 반환. 조회 전용 화면. — *2026-08-10 점검: E-04에서 `Create7bScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-08 `7c` 사용자 상세** — `PUT /admin/users/{id}`, `POST …/reset-password`, `POST …/deactivate`, `user_permissions` 테이블 존재. — *E-04(금번 세션)에서 `Create3eScreen`/`Create7cScreen` 구현으로 반영, `resetAdminUserPassword`/`deactivateAdminUser`를 처음으로 UI에 연결.*

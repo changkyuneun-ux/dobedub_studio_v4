@@ -569,6 +569,13 @@ export function V3PromptReviewGroup({
 // E-03 · 4c "프롬프트 재사용" — design_handoff_dobedub_v3/3 Review.dc.html의
 // 세 번째 화면. 검색·목록·적용 로직은 기존 searchPromptReuse/applyReusablePrompt를
 // 그대로 재사용하고(`GET /api/prompts/reusable`), 화면만 새로 짰다.
+// 2026-08-11: 카드 그리드 → 리스트로 전환 + 서버사이드 페이지네이션(고정
+// 20건/페이지) 추가. 3a 작업 이력(Create3aScreen)이 쓰는
+// `.v3-review-table-head/-row` + `.v3-pagination` 패턴을 그대로 재사용한다 -
+// 카드 하나가 담던 정보(워크플로·세그먼트, Rating, 프롬프트 본문, 사유 칩,
+// Task ID, Model, 적용 버튼)를 한 줄로 압축했다. 프롬프트 본문은 한 줄
+// 말줄임(`title` 속성으로 전체 텍스트는 hover 시 노출)으로 바꿨다 - 여러 줄
+// 카드 본문을 표 행에 그대로 넣으면 행 높이가 들쭉날쭉해진다.
 export function Create4cScreen({
   user,
   health,
@@ -577,9 +584,13 @@ export function Create4cScreen({
   items,
   loading,
   notice,
+  page,
+  pageSize,
+  total,
   workflowName,
   onKeywordChange,
   onSearch,
+  onPageChange,
   onApply
 }: {
   user: User | null;
@@ -589,15 +600,24 @@ export function Create4cScreen({
   items: TaskPromptItem[];
   loading: boolean;
   notice: string;
+  page: number;
+  pageSize: number;
+  total: number;
   workflowName: string;
   onKeywordChange: (value: string) => void;
   onSearch: () => void;
+  onPageChange: (page: number) => void;
   onApply: (prompt: TaskPromptItem) => void;
 }) {
   function reviewReasons(prompt: TaskPromptItem) {
     const flags = prompt.reviewFlags || {};
     return PROMPT_REVIEW_FLAGS.filter(([key]) => Boolean(flags[key])).map(([, label]) => label);
   }
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const pageStart = total ? (page - 1) * pageSize + 1 : 0;
+  const pageEnd = Math.min(total, page * pageSize);
+  const gridColumns = "180px minmax(0,1fr) 160px 70px 150px 110px";
 
   return (
     <AppShell
@@ -625,28 +645,58 @@ export function Create4cScreen({
       }
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
-      {!loading && !items.length ? <p className="v3-muted-text">재사용 가능으로 등록된 프롬프트가 없습니다. Task History의 Run 상세에서 평가·재사용 등록을 먼저 진행하세요.</p> : null}
-      <div className="v3-reuse-grid">
-        {items.map((prompt) => {
+      <div className="v3-card">
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns }}>
+          <span>워크플로 · 세그먼트</span><span>프롬프트</span><span>사유</span><span>Rating</span><span>Task ID · Model</span><span style={{ textAlign: "right" }}>적용</span>
+        </div>
+        {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
+        {!loading && !items.length ? (
+          <p className="v3-muted-text" style={{ padding: 16 }}>재사용 가능으로 등록된 프롬프트가 없습니다. Task History의 Run 상세에서 평가·재사용 등록을 먼저 진행하세요.</p>
+        ) : null}
+        {!loading && items.map((prompt) => {
           const reasons = reviewReasons(prompt);
           return (
-            <div className="v3-card v3-reuse-card" key={prompt.id}>
-              <div className="v3-card-header">
-                <div className="v3-card-header-title">{prompt.workflowId} · Segment {prompt.segmentIndex}</div>
-                <span className="v3-status-badge is-ready">Rating {prompt.qualityRating || "-"}</span>
-              </div>
-              <div className="v3-reuse-body">
-                <div className="v3-prompt-text-block">{prompt.positivePrompt || "-"}</div>
-                <div className="v3-term-chip-row">
-                  {reasons.length ? reasons.map((reason) => <span key={reason} className="v3-term-chip is-selected">{reason}</span>) : <span className="v3-muted-text">사유 없음</span>}
-                </div>
-                <div className="v3-summary-row"><span>Task ID</span><strong>#{prompt.taskId.slice(0, 8)}</strong></div>
-                <div className="v3-summary-row"><span>Model</span><strong>{prompt.modelName || prompt.modelProfileId || "-"}</strong></div>
-                <button className="v3-primary-button" type="button" onClick={() => onApply(prompt)}>이 프롬프트 적용</button>
-              </div>
+            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns }} key={prompt.id}>
+              <span className="v3-review-seg-name">{prompt.workflowId} · Segment {prompt.segmentIndex}</span>
+              <span
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={prompt.positivePrompt || "-"}
+              >
+                {prompt.positivePrompt || "-"}
+              </span>
+              <span>
+                {reasons.length ? (
+                  <span className="v3-term-chip-row">
+                    <span className="v3-term-chip is-selected">{reasons[0]}</span>
+                    {reasons.length > 1 ? <span className="v3-muted-text">+{reasons.length - 1}</span> : null}
+                  </span>
+                ) : (
+                  <span className="v3-muted-text">사유 없음</span>
+                )}
+              </span>
+              <span>
+                <span className="v3-status-badge is-ready">{prompt.qualityRating || "-"}</span>
+              </span>
+              <span style={{ fontSize: 11.5 }}>
+                #{prompt.taskId.slice(0, 8)}<br />
+                <span className="v3-muted-text">{prompt.modelName || prompt.modelProfileId || "-"}</span>
+              </span>
+              <span style={{ textAlign: "right" }}>
+                <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>적용</button>
+              </span>
             </div>
           );
         })}
+        {total > pageSize ? (
+          <div className="v3-pagination">
+            <span className="v3-pagination-meta">{pageStart}–{pageEnd} / {total}</span>
+            <div className="v3-pagination-controls">
+              <button className="v3-page-button" type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>이전</button>
+              <span className="v3-page-button is-current">{page}</span>
+              <button className="v3-page-button" type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>다음</button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </AppShell>
   );

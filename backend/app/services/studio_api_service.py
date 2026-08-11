@@ -310,15 +310,17 @@ def reusable_prompts(
     min_rating: int | None = None,
     reviewed_only: bool = False,
     reuse_eligible: bool | None = None,
-    limit: int = 50,
-) -> list[dict]:
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
     return reusable_task_prompts(
         keyword=keyword,
         workflow_id=workflow_id,
         min_rating=min_rating,
         reviewed_only=reviewed_only,
         reuse_eligible=reuse_eligible,
-        limit=limit,
+        page=page,
+        page_size=page_size,
     )
 
 
