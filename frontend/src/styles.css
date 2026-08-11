@@ -4726,6 +4726,51 @@ button {
   font-weight: 600;
 }
 
+/* 2026-08-11: 4e/3d/4b 카탈로그 트리(스코프 → 카테고리 그룹 → 서브카테고리 →
+   용어)의 4개 레벨이 전부 같은 .v3-segment-nav-item 스타일을 재사용해 들여쓰기
+   몇 px 차이로만 구분되던 문제를 고쳤다. 레벨별 크기·굵기·색을 단계적으로
+   낮춰 위계를 눈으로 바로 읽히게 하고, 들여쓰기 div를 트리 가이드 선으로
+   바꿔 부모-자식 관계를 명시한다. */
+.v3-catalog-tree-scope .v3-segment-nav-head {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.v3-catalog-tree-group .v3-segment-nav-head {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.v3-catalog-tree-subcategory .v3-segment-nav-head {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.v3-catalog-tree-subcategory .v3-segment-nav-head span:first-child {
+  color: var(--v3-text-secondary);
+}
+
+.v3-catalog-tree-children {
+  border-left: 1px solid var(--v3-border-inner);
+  margin-left: 6px;
+  padding-left: 10px;
+}
+
+.v3-catalog-tree-terms {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 4px;
+  padding-top: 4px;
+}
+
+.v3-catalog-tree-term {
+  background: var(--v3-accent-bg);
+  font-size: 11px;
+}
+
 .v3-scene-textarea {
   background: var(--v3-bg-panel);
   border: 1px solid var(--v3-border);

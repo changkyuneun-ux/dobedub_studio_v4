@@ -185,7 +185,7 @@ export function PromptCatalogAdminPanelV3({
               <div key={scope.key}>
                 <button
                   type="button"
-                  className={`v3-segment-nav-item ${selectedScopeKey === scope.key ? "is-active" : ""}`}
+                  className={`v3-segment-nav-item v3-catalog-tree-scope ${selectedScopeKey === scope.key ? "is-active" : ""}`}
                   onClick={() => {
                     setSelectedScopeKey(scope.key);
                     toggleAdminTreeAccordion(scopeKey);
@@ -193,67 +193,78 @@ export function PromptCatalogAdminPanelV3({
                 >
                   <div className="v3-segment-nav-head"><span>{scope.label} Prompt</span><span>{scope.groups.length} {scopeExpanded ? "-" : "+"}</span></div>
                 </button>
-                {scopeExpanded ? scope.groups.map((group) => {
-                  const groupKey = promptAdminGroupAccordionKey(scope.key, group.id);
-                  const groupExpanded = expandedAdminTreeKeys.has(groupKey);
-                  return (
-                    <div key={group.id} style={{ paddingLeft: 10 }}>
-                      <button
-                        type="button"
-                        className={`v3-segment-nav-item ${selectedScopeKey === scope.key && selectedGroupId === group.id ? "is-active" : ""}`}
-                        onClick={() => {
-                          setSelectedScopeKey(scope.key);
-                          setSelectedGroupId(group.id);
-                          setSelectedCategoryId("new");
-                          setSelectedTermId("new");
-                          setActiveCatalogAdminLevel("category");
-                          toggleAdminTreeAccordion(groupKey);
-                        }}
-                      >
-                        <div className="v3-segment-nav-head"><span>{group.nameKo || group.code}</span><span>{group.subcategories.length} {groupExpanded ? "-" : "+"}</span></div>
-                      </button>
-                      {groupExpanded ? group.subcategories.map((category) => {
-                        const categoryKey = promptAdminSubcategoryAccordionKey(category.id);
-                        const categoryExpanded = expandedAdminTreeKeys.has(categoryKey);
-                        return (
-                          <div key={category.id} style={{ paddingLeft: 10 }}>
-                            <button
-                              type="button"
-                              className={`v3-segment-nav-item ${selectedCategoryId === category.id ? "is-active" : ""}`}
-                              onClick={() => {
-                                setSelectedScopeKey(scope.key);
-                                setSelectedGroupId(group.id);
-                                setSelectedCategoryId(category.id);
-                                setSelectedTermId("new");
-                                setActiveCatalogAdminLevel("subcategory");
-                                toggleAdminTreeAccordion(categoryKey);
-                              }}
-                            >
-                              <div className="v3-segment-nav-head"><span>{category.nameKo || category.code}</span><span>{(category.terms || []).length} {categoryExpanded ? "-" : "+"}</span></div>
-                            </button>
-                            {categoryExpanded ? (category.terms || []).map((term) => (
-                              <button
-                                key={term.id}
-                                type="button"
-                                className={`v3-term-chip ${selectedTermId === term.id ? "is-selected" : ""}`}
-                                style={{ marginLeft: 10, marginTop: 4 }}
-                                onClick={() => {
-                                  setSelectedScopeKey(scope.key);
-                                  setSelectedGroupId(group.id);
-                                  setSelectedCategoryId(category.id);
-                                  setSelectedTermId(term.id);
-                                  setActiveCatalogAdminLevel("keyword");
-                                }}
-                              >
-                                {term.labelKo || term.code}
-                              </button>
-                            )) : null}
-                          </div>
-                        );
-                      }) : null}
-                    </div>
-                  );
-                }) : null}
+                {scopeExpanded ? (
+                  <div className="v3-catalog-tree-children">
+                    {scope.groups.map((group) => {
+                      const groupKey = promptAdminGroupAccordionKey(scope.key, group.id);
+                      const groupExpanded = expandedAdminTreeKeys.has(groupKey);
+                      return (
+                        <div key={group.id}>
+                          <button
+                            type="button"
+                            className={`v3-segment-nav-item v3-catalog-tree-group ${selectedScopeKey === scope.key && selectedGroupId === group.id ? "is-active" : ""}`}
+                            onClick={() => {
+                              setSelectedScopeKey(scope.key);
+                              setSelectedGroupId(group.id);
+                              setSelectedCategoryId("new");
+                              setSelectedTermId("new");
+                              setActiveCatalogAdminLevel("category");
+                              toggleAdminTreeAccordion(groupKey);
+                            }}
+                          >
+                            <div className="v3-segment-nav-head"><span>{group.nameKo || group.code}</span><span>{group.subcategories.length} {groupExpanded ? "-" : "+"}</span></div>
+                          </button>
+                          {groupExpanded ? (
+                            <div className="v3-catalog-tree-children">
+                              {group.subcategories.map((category) => {
+                                const categoryKey = promptAdminSubcategoryAccordionKey(category.id);
+                                const categoryExpanded = expandedAdminTreeKeys.has(categoryKey);
+                                return (
+                                  <div key={category.id}>
+                                    <button
+                                      type="button"
+                                      className={`v3-segment-nav-item v3-catalog-tree-subcategory ${selectedCategoryId === category.id ? "is-active" : ""}`}
+                                      onClick={() => {
+                                        setSelectedScopeKey(scope.key);
+                                        setSelectedGroupId(group.id);
+                                        setSelectedCategoryId(category.id);
+                                        setSelectedTermId("new");
+                                        setActiveCatalogAdminLevel("subcategory");
+                                        toggleAdminTreeAccordion(categoryKey);
+                                      }}
+                                    >
+                                      <div className="v3-segment-nav-head"><span>{category.nameKo || category.code}</span><span>{(category.terms || []).length} {categoryExpanded ? "-" : "+"}</span></div>
+                                    </button>
+                                    {categoryExpanded ? (
+                                      <div className="v3-catalog-tree-children v3-catalog-tree-terms">
+                                        {(category.terms || []).map((term) => (
+                                          <button
+                                            key={term.id}
+                                            type="button"
+                                            className={`v3-term-chip v3-catalog-tree-term ${selectedTermId === term.id ? "is-selected" : ""}`}
+                                            onClick={() => {
+                                              setSelectedScopeKey(scope.key);
+                                              setSelectedGroupId(group.id);
+                                              setSelectedCategoryId(category.id);
+                                              setSelectedTermId(term.id);
+                                              setActiveCatalogAdminLevel("keyword");
+                                            }}
+                                          >
+                                            {term.labelKo || term.code}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             );
           })}
