@@ -83,7 +83,6 @@ import {
 } from "./screens/createScreens";
 import {
   Create3aScreen,
-  Create3RunDetailScreen,
   Create4cScreen,
   Create5aScreen,
   Create5cScreen
@@ -1267,9 +1266,11 @@ export function StudioShell({
     }
   }, [running, latestJob, route]);
 
-  // E-03: 3f(Run 상세 · 완료)의 평가 패널은 세그먼트별 task_prompts를 보여준다.
+  // E-03: 3a 우측 패널 Prompt Review 아코디언은 세그먼트별 task_prompts를 보여준다.
+  // 2026-08-11: 별도 화면(review.runDetail)이 폐지되면서 3a 목록 화면 자체에서
+  // 선택된 작업이 바뀔 때마다 로드하도록 조건을 옮겼다.
   useEffect(() => {
-    if (route === "review.runDetail" && selectedHistoryTaskId) {
+    if (route === "review.history" && selectedHistoryTaskId) {
       void loadPromptReview(selectedHistoryTaskId);
     }
   }, [route, selectedHistoryTaskId]);
@@ -1837,38 +1838,21 @@ export function StudioShell({
         selectedTaskId={selectedHistoryTaskId}
         deleteTarget={deleteTarget}
         deleteError={modalNotice}
+        promptReviewItems={promptReviewItems}
+        promptReviewLoading={promptReviewLoading}
+        promptReviewNotice={promptReviewNotice}
         onSelect={(item) => setSelectedHistoryTaskId(item.taskId)}
         onPageChange={(page) => void loadHistoryPage(page)}
         onPageSizeChange={changeHistoryPageSize}
         onDownload={(item) => openOutputAsset(item)}
         onRework={(item) => void applyHistoryRework(item)}
-        onOpenDetail={(item) => {
-          setSelectedHistoryTaskId(item.taskId);
-          onNavigate("review.runDetail");
-        }}
+        onSavePromptReview={(segmentIndex, payload) => void savePromptReview(segmentIndex, payload)}
+        onSavePromptFeedback={(outputId, payload) => void savePromptFeedback(outputId, payload)}
         onRequestDelete={(item) => { setModalNotice(""); setDeleteTarget(item); }}
         onCancelDelete={() => { setModalNotice(""); setDeleteTarget(null); }}
         onConfirmDelete={() => void deleteHistoryItem()}
         canRework={canUse(user, "jobs:run")}
         canDelete={canUse(user, "history:delete")}
-      />
-    ) : route === "review.runDetail" ? (
-      <Create3RunDetailScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        item={history.find((run) => run.taskId === selectedHistoryTaskId) || null}
-        history={history}
-        promptReviewItems={promptReviewItems}
-        promptReviewLoading={promptReviewLoading}
-        promptReviewNotice={promptReviewNotice}
-        onSelectRun={(run) => setSelectedHistoryTaskId(run.taskId)}
-        onSavePromptReview={(segmentIndex, payload) => void savePromptReview(segmentIndex, payload)}
-        onSavePromptFeedback={(outputId, payload) => void savePromptFeedback(outputId, payload)}
-        onDownload={(item) => openOutputAsset(item)}
-        onRework={(item) => void applyHistoryRework(item)}
-        onBackToList={() => onNavigate("review.history")}
-        canRework={canUse(user, "jobs:run")}
         canReview={canUse(user, "prompts:review")}
         canGiveFeedback={canUse(user, "prompts:review")}
       />
@@ -1898,7 +1882,9 @@ export function StudioShell({
         user={user}
         health={health}
         onGoTo={(nextRoute) => {
-          if (nextRoute === "review.runDetail" && selectedAssetId) {
+          // 2026-08-11: review.runDetail 폐지 - 자산에 연결된 Run을 볼 때도
+          // review.history로 이동하고 그 Run을 선택 상태로 만든다.
+          if (nextRoute === "review.history" && selectedAssetId) {
             const asset = assets.find((item) => item.assetId === selectedAssetId);
             if (asset?.taskId) {
               setSelectedHistoryTaskId(asset.taskId);

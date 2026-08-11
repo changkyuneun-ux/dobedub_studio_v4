@@ -414,6 +414,9 @@ export type HistoryItem = {
   workflowId?: string;
   workflowName?: string;
   workflow?: string;
+  // 2026-08-11: 백엔드 _task_to_history_item()이 이미 내려주고 있었지만 타입에는
+  // 빠져 있던 필드 - 3a 우측 패널 Overview 섹션(runpod_job_id 노출)에서 사용.
+  runpodJobId?: string;
   workerName?: string;
   user?: { id?: string; name?: string };
   status?: string;

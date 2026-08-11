@@ -50,10 +50,12 @@ type NavItem = {
 };
 
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
+// 2026-08-11: Task History를 Prompt Library보다 위로 이동(사용자 요청) - 작업
+// 이력 확인이 더 빈번한 진입점이라는 판단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "workspace", label: "Workspace" },
-  { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
+  { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse" },
   { key: "assets", label: "Assets", permission: "history:read" },
   // A-02: 5c 컬렉션. 자산과 같은 history:read로 노출.
   { key: "collections", label: "Collections", permission: "history:read" }

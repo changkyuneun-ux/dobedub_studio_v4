@@ -4362,6 +4362,27 @@ button {
   font-weight: 500;
 }
 
+/* 2026-08-11: 3a 우측 패널 아코디언(Assets/Node Config/Prompt Review) - 폐지된
+   Run 상세(3f/3c) 화면 내용을 목록 화면 안으로 흡수하면서 추가. .v3-card-header를
+   버튼으로 써서 기존 카드 헤더 스타일을 그대로 재사용한다. */
+.v3-accordion-header {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  width: 100%;
+}
+
+.v3-accordion-toggle {
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: 13px;
+}
+
+.v3-accordion-body {
+  padding: 13px 16px;
+}
+
 .v3-keyframe-row {
   display: flex;
   flex-wrap: wrap;
@@ -5331,6 +5352,24 @@ button {
   background: #000;
   flex: 1;
   min-height: 0;
+  width: 100%;
+}
+
+/* 2026-08-11: 생성완료 화면(2d)·3a Assets 아코디언 공용 - 아웃풋 실제 크기와
+   무관하게 16:9 고정 박스로 보여준다(사용자 요청). object-fit: contain으로
+   비율이 다른 영상은 레터박스 처리, 크롭하지 않는다. */
+.v3-result-video-frame {
+  aspect-ratio: 16 / 9;
+  background: #000;
+  flex: none;
+  overflow: hidden;
+  width: 100%;
+}
+
+.v3-result-video-frame .v3-result-video {
+  flex: none;
+  height: 100%;
+  object-fit: contain;
   width: 100%;
 }
 

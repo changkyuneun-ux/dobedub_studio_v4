@@ -1178,7 +1178,7 @@ export function Create2dScreen({
           </div>
           <div className="v3-note-block" style={{ border: "none", padding: 0, margin: 0 }}>
             <div className="v3-label">평가 &amp; 재사용 등록</div>
-            <p className="v3-muted-text">이 화면은 실행 직후 결과 확인용입니다. 평가와 재사용 등록은 Task History의 Run 상세에서 진행합니다.</p>
+            <p className="v3-muted-text">이 화면은 실행 직후 결과 확인용입니다. 평가와 재사용 등록은 Task History에서 이 작업을 선택해 진행합니다.</p>
             <button className="v3-text-link-button" type="button" onClick={onOpenHistory}>Task History에서 열기</button>
           </div>
           <div className="v3-inline-actions">
@@ -1189,6 +1189,32 @@ export function Create2dScreen({
         </>
       }
     >
+      {/* 2026-08-11: 사용자 요청 - 진행 화면(2c)의 큐→진행→완료 스테퍼 구조를
+          결과 화면에서도 그대로 유지하고 완료 단계를 하이라이트한다. 2d는 이미
+          종료된 상태만 보여주므로(진행 중 %가 없음) 2c처럼 실시간 값을 쓰지 않고
+          성공/실패 두 가지 종료 상태만 표현한다. */}
+      <div className="v3-card v3-progress-card">
+        <div className="v3-card-header">
+          <div className="v3-card-header-title">진행 단계</div>
+        </div>
+        <div className="v3-progress-stages">
+          <div className="v3-progress-stage">
+            <div className="v3-progress-dot is-past">✓</div>
+            <div className="v3-progress-stage-label"><div>IN_QUEUE</div><span>지남</span></div>
+          </div>
+          <div className={`v3-progress-connector ${hasFailedJob ? "is-filled" : ""}`} />
+          <div className="v3-progress-stage">
+            <div className={`v3-progress-dot ${hasFailedJob ? "is-active" : "is-past"}`}>{hasFailedJob ? "!" : "✓"}</div>
+            <div className="v3-progress-stage-label"><div>IN_PROGRESS</div><span>{hasFailedJob ? "실패 지점" : "지남"}</span></div>
+          </div>
+          <div className={`v3-progress-connector ${hasFailedJob ? "is-filled" : ""}`} />
+          <div className="v3-progress-stage">
+            <div className={`v3-progress-dot ${hasFailedJob ? "is-pending" : "is-active"}`}>{hasFailedJob ? "-" : "✓"}</div>
+            <div className="v3-progress-stage-label"><div>COMPLETED</div><span>{hasFailedJob ? "" : "완료 · 결과물 저장됨"}</span></div>
+          </div>
+        </div>
+      </div>
+
       {hasFailedJob ? (
         <div className="v3-card v3-failure-card">
           <div className="v3-card-header">
@@ -1206,7 +1232,11 @@ export function Create2dScreen({
           </div>
           {hasSuccessfulOutput ? (
             <>
-              <video className="v3-result-video" src={displayOutputMediaUrl} controls playsInline preload="metadata" />
+              {/* 2026-08-11: 사용자 요청 - 아웃풋 실제 해상도와 무관하게 16:9 고정
+                  박스로 보여준다(.v3-result-video-frame, object-fit: contain). */}
+              <div className="v3-result-video-frame">
+                <video className="v3-result-video" src={displayOutputMediaUrl} controls playsInline preload="metadata" />
+              </div>
               <div className="v3-result-footer">
                 <span>File: {displayOutput?.fileName || displayOutput?.assetId || "generated output"}</span>
                 <button className="v3-primary-button" type="button" onClick={onDownload}>Download MP4</button>

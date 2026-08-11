@@ -22,9 +22,9 @@
 //                       E-06에서 삭제됐다 - 이 라우트 자체가 도달 불가능해져
 //                       StudioRoute에서 제거했다(옛 /studio/studio 북마크는
 //                       LEGACY_LAST_SEGMENT_ROUTE로 create.load로 보낸다).
-//   review.history    — 3a 작업 이력 ("3 Review.dc.html" 소속)
-//   review.runDetail  — 3f(완료)·3c(실패) Run 상세. 상태로 분기하므로 화면 하나가
-//                       두 id를 함께 담당한다(신규 구현, E-03)
+//   review.history    — 3a 작업 이력 ("3 Review.dc.html" 소속). 2026-08-11: 별도
+//                       화면이던 review.runDetail(3f/3c Run 상세)을 폐지하고 그
+//                       내용을 이 화면 우측 패널 아코디언으로 흡수했다(사용자 요청).
 //   review.reuse      — 4c 프롬프트 재사용 (신규 구현, E-03)
 //   review.assets     — 5a 자산 목록 (신규 구현, E-03)
 //   review.collections — 5c 자산 컬렉션 (A-02 백엔드 구현 후 추가). 컬렉션 생성·
@@ -82,7 +82,6 @@ export type StudioRoute =
   | "create.progress"
   | "create.result"
   | "review.history"
-  | "review.runDetail"
   | "review.reuse"
   | "review.assets"
   | "review.collections"
@@ -126,7 +125,6 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "create.progress": "/studio/create/progress",
   "create.result": "/studio/create/result",
   "review.history": "/studio/review/history",
-  "review.runDetail": "/studio/review/run",
   "review.reuse": "/studio/review/reuse",
   "review.assets": "/studio/review/assets",
   "review.collections": "/studio/review/collections",

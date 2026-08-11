@@ -106,7 +106,7 @@
 평가를 담는 곳이 둘입니다. `task_prompts.quality_rating`(`PATCH /jobs/{id}/prompts/{n}/quality`)과 `prompt_feedback.rating`(`POST /prompts/feedback`). 두 번째는 편집한 프롬프트 원문까지 받습니다.
 
 - [x] 역할 고정: **영상 결과 평가 → `task_prompts`**, **프롬프트 생성 품질 → `prompt_feedback`**
-- [x] 화면은 `3f` Run 상세 한 곳에서만 평가를 남기도록 구현. 세그먼트 편집 화면에 평가 UI를 넣지 마십시오(설계에서 의도적으로 제거함) — *구버전 `HistoryDetail`(3f에 대응) 안에 `PromptReviewCard`/`PromptFeedbackCard`로 구현됨. B-01과 동일하게 신규 `3f` 화면 이관 시 로직만 재사용하고 UI는 재구현 — E-03 참조.*
+- [x] 화면은 한 곳에서만 평가를 남기도록 구현. 세그먼트 편집 화면에 평가 UI를 넣지 마십시오(설계에서 의도적으로 제거함) — *구버전 `HistoryDetail`(3f에 대응) 안에 `PromptReviewCard`/`PromptFeedbackCard`로 구현됨. B-01과 동일하게 신규 `3f` 화면 이관 시 로직만 재사용하고 UI는 재구현 — E-03 참조. 2026-08-11: 사용자 요청으로 독립 화면이던 `3f`/`3c` Run 상세를 폐지하고 `3a` 작업 이력 우측 패널의 Prompt Review 아코디언으로 흡수(`V3PromptReviewGroup` 그대로 재사용) — 여전히 한 곳(3a)에서만 평가한다는 원칙은 유지됨.*
 - [x] `prompt_feedback.task_id`를 채워 두 기록이 연결되게 할 것
 
 ### B-03 · 피드백 저장 권한 — P1 — **완료** (커밋 `bb77be1`)
@@ -184,7 +184,7 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] **C-01 `2b` 프롬프트 경고 표시** — `generate_prompt`가 이미 용어 검증·관계 적용·`prompt_rules` 평가·Scene 검증을 거쳐 `{code, message, severity}` 배열을 반환하고 `warnings_json`에 저장합니다. 화면은 이를 심각도별로 나눠 그리기만 하면 됩니다. — *경고 심각도별 그룹핑 로직은 완료(커밋 `9535b9f`, `e048f72`)했으나, 구버전 `PromptBuilderModal`(기존 dark 테마) 안에 구현되어 README Design Tokens를 적용하지 않음. 신규 `2b` 화면(E-02)에서 로직만 재사용하고 UI는 새로 그려야 함. 참고 — 이 커밋은 error 심각도일 때 Apply 버튼을 실제로 비활성화하는 동작을 TASKS.md 문구("그리기만 하면 됩니다")보다 넓게 추가했음(라벨-동작 불일치 방지 목적) — E-02 재구현 시 이 동작도 유지.*
 - [x] **C-02 `2c` 취소 상태** — `POST /api/jobs/{id}/cancel` 존재. 요청 후 UI 잠금은 클라이언트 상태. — *E-02(`851dac4`)에서 `Create2cScreen` 구현으로 반영.*
 - [x] **C-03 `3a` 삭제** — `POST /api/history/{task_id}/delete` 존재. — *E-03(`9e6e7f8`)에서 `Create3aScreen`의 삭제 모달로 반영.*
-- [x] **C-04 `3f` `3c` Run 상세** — `GET /jobs/{id}/prompts`, `PATCH …/quality`, `PATCH …/review`, `review_status`·`review_flags_json` 컬럼 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create3RunDetailScreen` 구현으로 반영.*
+- [x] **C-04 `3f` `3c` Run 상세** — `GET /jobs/{id}/prompts`, `PATCH …/quality`, `PATCH …/review`, `review_status`·`review_flags_json` 컬럼 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create3RunDetailScreen` 구현으로 반영. 2026-08-11: 사용자 요청으로 `Create3RunDetailScreen`(독립 화면)을 폐지하고 같은 API·저장 로직을 `Create3aScreen` 우측 패널의 Overview/Assets/Node Config/Prompt Review 아코디언으로 흡수 — API 계약 자체는 변경 없음.*
 - [x] **C-05 `4c` 재사용** — `GET /api/prompts/reusable` (keyword·workflowId·minRating·reviewedOnly·reuseEligible·page·pageSize) 존재. — *E-03(금번 세션, 커밋 예정)에서 `Create4cScreen` 구현으로 반영. 2026-08-11: 카드 그리드 → 리스트 + 서버사이드 페이지네이션(20건 고정) 요청으로 `limit` 파라미터를 `page`/`pageSize`로 교체하고 응답을 `{items,page,pageSize,total}` 규격으로 통일(`/api/history`·`/api/admin/audit-logs`와 동일 규격). 이전엔 키워드 검색 시 200건까지만 조회해 필터링한 뒤 앞부분만 반환해 뒤쪽 결과가 조용히 누락될 수 있던 버그도 함께 해소.*
 - [x] **C-06 `7a` 시스템 프롬프트** — `GET/PUT /api/prompts/system-prompt` 존재. — *2026-08-10 점검: E-04에서 `Create7aScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-07 `7b` 기능 리소스 매핑** — `GET /api/admin/permissions`가 roles·permissions·resources를 함께 반환. 조회 전용 화면. — *2026-08-10 점검: E-04에서 `Create7bScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
@@ -252,8 +252,8 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] `2d` 결과 — Final 병합본과 구간 검수본 — *커밋 `851dac4`.*
 
 ### E-03 · `3 Review` 흐름 — P1 — **`5c` 제외 완료** (커밋 `9e6e7f8` 및 금번 세션 미커밋분)
-- [x] `3a` 작업 이력 — **B-01 페이지네이션 로직(20/50, 총 건수·범위 표시) 재사용**, 삭제(C-03) 포함 — *커밋 `9e6e7f8`.*
-- [x] `3f`/`3c` Run 상세 — **B-02 평가 로직(task_prompts/prompt_feedback 역할 분리) 재사용**(C-04) — *`Create3RunDetailScreen`으로 완료/실패 화면 통합 구현, 평가 카드는 `V3PromptReviewGroup`으로 분리. 아직 커밋 전(다음 커밋에 포함 예정).*
+- [x] `3a` 작업 이력 — **B-01 페이지네이션 로직(20/50, 총 건수·범위 표시) 재사용**, 삭제(C-03) 포함 — *커밋 `9e6e7f8`. 2026-08-11: 목록 위치를 Prompt Library 위로 이동, 컬럼을 No/Timestamp/Worker/Positive Prompt/Negative Prompt/Status/삭제로 교체, 우측 패널을 Overview(항상 펼침)+Assets/Node Config/Prompt Review 아코디언으로 재구성(사용자 요청).*
+- [x] `3f`/`3c` Run 상세 — **B-02 평가 로직(task_prompts/prompt_feedback 역할 분리) 재사용**(C-04) — *`Create3RunDetailScreen`으로 완료/실패 화면 통합 구현, 평가 카드는 `V3PromptReviewGroup`으로 분리. 2026-08-11: 사용자 요청으로 독립 화면을 폐지하고 `3a` 우측 패널 아코디언으로 흡수(`V3PromptReviewGroup`은 그대로 재사용) — `Create3RunDetailScreen`은 삭제됨, `review.runDetail` 라우트 제거.*
 - [x] `4c` 프롬프트 재사용 (C-05) — *`Create4cScreen` 구현. 아직 커밋 전(다음 커밋에 포함 예정).*
 - [x] `5a` 자산 — A-01(자산 목록 API) 선행 필요, API 완성 후 착수 — *A-01 API·화면 모두 완료(`Create5aScreen`). 아직 커밋 전.*
 - [x] `5c` 컬렉션 — *A-02 백엔드(마이그레이션 0015·컬렉션 API) 구현 후 `Create5cScreen`으로 완료(2026-08-11). 태그·공개범위는 백엔드 부재로 제외. A-02 항목 참조.*
