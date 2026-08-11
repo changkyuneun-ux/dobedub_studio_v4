@@ -5,7 +5,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from backend.app.core.config import Settings
 from backend.app.services.runpod_client import is_real_secret, mask_secret
@@ -70,16 +70,76 @@ def _runpod_vllm_generate(
 
     url = _runpod_runsync_url(settings)
     payload = {"input": _runpod_vllm_input(settings, scene=scene, constraints=constraints, language=language, system_prompt=system_prompt)}
-    responses: list[dict] = []
-    parse_error: PromptLLMResponseError | None = None
-    for attempt in range(2):
-        response = _json_request(url, _auth_headers(_prompt_llm_api_key(settings)), payload, settings.prompt_llm_timeout)
-        responses.append(response)
+    headers = _auth_headers(_prompt_llm_api_key(settings))
+    timeout = settings.prompt_llm_timeout
+
+    def perform_request() -> dict:
+        response = _json_request(url, headers, payload, timeout)
         status = str(response.get("status") or "").upper()
         if status and status not in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
             raise RuntimeError(f"RunPod vLLM prompt job did not complete: {status}")
+        return response
+
+    return _generate_with_parse_retry(
+        perform_request=perform_request,
+        extract_output=lambda response: response.get("output", response),
+        scene=scene,
+    )
+
+
+def _openai_compatible_generate(
+    settings: Settings,
+    *,
+    scene: dict,
+    constraints: dict,
+    language: str,
+    system_prompt: str | None,
+) -> PromptLLMResult:
+    url = _openai_chat_completions_url(settings)
+    payload = {
+        "model": settings.prompt_llm_model or "default",
+        "messages": _prompt_messages(scene, constraints, language, system_prompt),
+        "temperature": settings.prompt_llm_temperature,
+        "max_tokens": settings.prompt_llm_max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    headers = _auth_headers(_prompt_llm_api_key(settings))
+    timeout = settings.prompt_llm_timeout
+
+    def perform_request() -> dict:
+        return _json_request(url, headers, payload, timeout)
+
+    # 2026-08-11: openai_compatible/vllm_openai 경로에 재시도가 없어 vLLM
+    # 콜드스타트 직후 첫 응답이 placeholder/빈 값이면 즉시 502로 실패하고,
+    # 사용자가 재요청(모델 워밍업 완료 후)해야 성공하는 것처럼 보이던 문제.
+    # runpod_vllm 경로와 동일하게 파싱 실패 1회 재시도로 통일.
+    return _generate_with_parse_retry(
+        perform_request=perform_request,
+        extract_output=lambda response: response,
+        scene=scene,
+    )
+
+
+def _generate_with_parse_retry(
+    *,
+    perform_request: Callable[[], dict],
+    extract_output: Callable[[dict], Any],
+    scene: dict,
+) -> PromptLLMResult:
+    """Shared retry-on-parse-failure logic for all Prompt LLM providers.
+
+    2026-08-11: 이전엔 runpod_vllm과 openai_compatible이 각자 재시도 로직을
+    따로 구현해 openai_compatible만 재시도가 빠져 있는 비일관성이 생겼다
+    (사용자 신고: 첫 generate_prompt 요청은 실패, 두 번째는 성공). 공통
+    헬퍼로 합쳐 앞으로도 같은 방식으로 어긋나지 않게 한다.
+    """
+    responses: list[dict] = []
+    parse_error: PromptLLMResponseError | None = None
+    for attempt in range(2):
+        response = perform_request()
+        responses.append(response)
         try:
-            result = _parse_prompt_llm_output(response.get("output", response), raw_response=response, scene=scene)
+            result = _parse_prompt_llm_output(extract_output(response), raw_response=response, scene=scene)
         except PromptLLMResponseError as exc:
             parse_error = exc
             continue
@@ -99,26 +159,6 @@ def _runpod_vllm_generate(
             raw_response={"attempts": responses, "selectedAttempt": attempt + 1},
         )
     raise RuntimeError(f"Prompt LLM returned an invalid response after one retry: {parse_error}")
-
-
-def _openai_compatible_generate(
-    settings: Settings,
-    *,
-    scene: dict,
-    constraints: dict,
-    language: str,
-    system_prompt: str | None,
-) -> PromptLLMResult:
-    url = _openai_chat_completions_url(settings)
-    payload = {
-        "model": settings.prompt_llm_model or "default",
-        "messages": _prompt_messages(scene, constraints, language, system_prompt),
-        "temperature": settings.prompt_llm_temperature,
-        "max_tokens": settings.prompt_llm_max_tokens,
-        "response_format": {"type": "json_object"},
-    }
-    response = _json_request(url, _auth_headers(_prompt_llm_api_key(settings)), payload, settings.prompt_llm_timeout)
-    return _parse_prompt_llm_output(response, raw_response=response, scene=scene)
 
 
 def _prompt_messages(scene: dict, constraints: dict, language: str, system_prompt: str | None = None) -> list[dict]:

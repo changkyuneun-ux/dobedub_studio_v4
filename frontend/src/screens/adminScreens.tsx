@@ -692,22 +692,34 @@ export function Create3bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
             <div style={{ padding: "0 16px 16px" }}>
               <p className="v3-muted-text">{selectedRole.description || selectedRole.name}</p>
               <div className="v3-term-chip-row">
-                {adminPermissionOptions(governance).map((item) => {
-                  const selected = rolePermissionDraft.includes(item.value);
-                  const locked = selectedRole.code === "SUPER_ADMIN" && item.value === "admin:*";
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      className={`v3-term-chip ${selected ? "is-selected" : ""}`}
-                      disabled={!canEdit || locked}
-                      onClick={() => toggleRolePermission(item.value)}
-                      title={item.description}
-                    >
-                      {item.value}
-                    </button>
-                  );
-                })}
+                {/* 2026-08-11 버그 수정: rolePermissionDraft가 정확히 "admin:*" 하나만
+                    담고 있는 경우(SUPER_ADMIN), 그 아래 개별 권한(sandbox:read 등)은
+                    배열에 실제로 없어 전부 "미체크"로 보였다 - 관리자가 슈퍼 어드민으로
+                    승격해도 권한이 반영 안 된 것처럼 오판하게 만든 원인. admin:*
+                    와일드카드가 있으면 나머지 항목도 포함된 것으로 표시·잠금한다. */}
+                {(() => {
+                  const hasWildcard = rolePermissionDraft.includes("admin:*");
+                  return adminPermissionOptions(governance).map((item) => {
+                    const selected = hasWildcard || rolePermissionDraft.includes(item.value);
+                    const locked = (selectedRole.code === "SUPER_ADMIN" && item.value === "admin:*")
+                      || (hasWildcard && item.value !== "admin:*");
+                    const title = hasWildcard && item.value !== "admin:*"
+                      ? `${item.description || item.value} · admin:* 와일드카드에 포함됨`
+                      : item.description;
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        className={`v3-term-chip ${selected ? "is-selected" : ""}`}
+                        disabled={!canEdit || locked}
+                        onClick={() => toggleRolePermission(item.value)}
+                        title={title}
+                      >
+                        {item.value}
+                      </button>
+                    );
+                  });
+                })()}
               </div>
               <p className="v3-muted-text" style={{ marginTop: 10 }}>Role 권한은 해당 Role 사용자 전체에 적용됩니다. 사용자별 예외 권한은 3e/7c(사용자 상세)에서 관리합니다.</p>
             </div>

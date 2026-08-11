@@ -206,12 +206,21 @@ class DbStudioRepository:
         if not user_id:
             return None
         user = self.session.get(User, user_id)
+        is_new_user = user is None
         if not user:
             user = User(id=user_id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
             self.session.add(user)
         user.name = user_payload.get("name") or fallback_name or user_id
         user.email = user_payload.get("email")
-        user.role = user_payload.get("role") or "operator"
+        # 2026-08-11 버그 수정: 이 메서드는 Job 이력·설정을 저장할 때 FK를 만족시키기
+        # 위해 호출되며(append_history/append_config), 사용자가 제출 버튼을 누른
+        # "그 시점"의 브라우저 세션 role 스냅샷을 payload로 받는다. 예전엔 role을
+        # 매번 무조건 덮어써서, 관리자가 그 사이 사용자를 승격(예: SUPER_ADMIN)시켜도
+        # 제출됐던 Job이 나중에 완료되어 이 함수가 다시 호출되면 role이 제출 당시의
+        # 옛 값으로 조용히 되돌아갔다. role은 admin_service.upsert_admin_user()(관리자
+        # 역할 변경 API)에서만 바뀌어야 하므로, 신규 사용자 최초 생성 시에만 반영한다.
+        if is_new_user:
+            user.role = user_payload.get("role") or "operator"
         user.updated_at = datetime.utcnow()
         return user
 

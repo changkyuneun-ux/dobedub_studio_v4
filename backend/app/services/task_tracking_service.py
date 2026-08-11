@@ -597,13 +597,20 @@ def _ensure_user(session: Session, user_payload: dict) -> User | None:
     if not user_id:
         return None
     user = session.get(User, user_id)
+    is_new_user = user is None
     if not user:
         user = User(id=user_id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
         session.add(user)
     user.name = user_payload.get("name") or user_id
     user.email = user_payload.get("email")
-    user.role = user_payload.get("role") or user.role or "OPERATOR"
-    user.permissions_json = user_payload.get("permissions") or user.permissions_json or []
+    # 2026-08-11 버그 수정: `or user.role` fallback은 payload에 role이 아예 없을 때만
+    # 보호해줄 뿐, Job 제출 시점의 stale-하지만-존재하는 role 값은 그대로 덮어써서
+    # db_adapter.py와 같은 승격-취소 버그를 일으켰다. role/permissions는
+    # admin_service.upsert_admin_user()(관리자 역할 변경 API)에서만 바뀌어야
+    # 하므로, 신규 사용자 최초 생성 시에만 반영한다.
+    if is_new_user:
+        user.role = user_payload.get("role") or "OPERATOR"
+        user.permissions_json = user_payload.get("permissions") or []
     user.updated_at = datetime.utcnow()
     return user
 

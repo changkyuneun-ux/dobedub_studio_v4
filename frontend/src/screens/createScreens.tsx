@@ -30,7 +30,10 @@ import {
 import {
   promptCatalogCategories,
   selectedPromptKeywordsByScope,
-  promptCatalogRenderScopes
+  promptCatalogRenderScopes,
+  promptGroupAccordionKey,
+  promptCategoryAccordionKey,
+  promptAccordionDefaultKeys
 } from "../helpers/promptCatalog";
 import {
   SegmentState,
@@ -336,6 +339,21 @@ export function Create2bScreen({
   const renderScopes = promptCatalogRenderScopes(categories);
   const [activeScopeKey, setActiveScopeKey] = useState<"positive" | "negative">("positive");
   const activeScope = renderScopes.find((scope) => scope.key === activeScopeKey) || renderScopes[0];
+  // 2026-08-11: 사용자 요청 - 키워드 카탈로그가 그룹·서브카테고리 구분 없이 전부
+  // 펼쳐진 채로 보이던 문제. helpers/promptCatalog.ts에 이미 있었지만 어디서도
+  // 쓰이지 않던 promptGroupAccordionKey/promptCategoryAccordionKey/
+  // promptAccordionDefaultKeys(빈 Set = 기본 전체 접힘)를 그대로 연결해 그룹→
+  // 서브카테고리 2단 아코디언으로 만든다(용어 칩은 서브카테고리를 펼쳐야 보임).
+  const [expandedCatalogKeys, setExpandedCatalogKeys] = useState<Set<string>>(promptAccordionDefaultKeys());
+  const toggleCatalogAccordion = (key: string) => setExpandedCatalogKeys((current) => {
+    const next = new Set(current);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    return next;
+  });
   const selectedKeywords = selectedPromptKeywordsByScope(categories, selectedTermIds);
   const positiveKeywordDraft = promptKeywordText(selectedKeywords.positive);
   const negativeKeywordDraft = promptKeywordText(selectedKeywords.negative);
@@ -526,26 +544,62 @@ export function Create2bScreen({
             <div className="v3-catalog-body">
               {!activeScope || !activeScope.groups.length ? (
                 <p className="v3-muted-text">등록된 key word가 없습니다. Admin Console에서 카테고리와 key word를 등록하세요.</p>
-              ) : activeScope.groups.flatMap((group) => group.categories).map((category) => (
-                <div className="v3-catalog-category" key={category.code}>
-                  <div className="v3-catalog-category-head">
-                    <span className="v3-label">{category.nameKo || category.nameEn || category.code}</span>
-                    <span className="v3-catalog-category-meta">{category.selectionMode === "single" ? "Single" : "Multi"}</span>
-                  </div>
-                  <div className="v3-term-chip-row">
-                    {(category.terms || []).map((term) => (
-                      <button
-                        key={term.id}
-                        type="button"
-                        className={`v3-term-chip ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
-                        onClick={() => onToggleTerm(term.id)}
-                      >
-                        {term.labelEn || term.labelKo || term.code}
-                      </button>
-                    ))}
-                  </div>
+              ) : (
+                <div className="v3-catalog-tree-scope">
+                  {activeScope.groups.map((group) => {
+                    const groupKey = promptGroupAccordionKey(activeScope.key, group.key);
+                    const groupExpanded = expandedCatalogKeys.has(groupKey);
+                    const groupTermCount = group.categories.reduce((sum, category) => sum + (category.terms || []).length, 0);
+                    const groupSelectedCount = group.categories.reduce(
+                      (sum, category) => sum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
+                      0
+                    );
+                    return (
+                      <div key={group.key} className="v3-catalog-tree-group">
+                        <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(groupKey)}>
+                          <div className="v3-segment-nav-head">
+                            <span>{group.label}</span>
+                            <span>{groupSelectedCount ? `${groupSelectedCount} selected · ` : ""}{groupTermCount} {groupExpanded ? "−" : "+"}</span>
+                          </div>
+                        </button>
+                        {groupExpanded ? (
+                          <div className="v3-catalog-tree-children">
+                            {group.categories.map((category) => {
+                              const categoryKey = promptCategoryAccordionKey(activeScope.key, group.key, category.code);
+                              const categoryExpanded = expandedCatalogKeys.has(categoryKey);
+                              const selectedInCategory = (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length;
+                              return (
+                                <div key={category.code} className="v3-catalog-tree-subcategory">
+                                  <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(categoryKey)}>
+                                    <div className="v3-segment-nav-head">
+                                      <span>{category.nameKo || category.nameEn || category.code}</span>
+                                      <span>{selectedInCategory ? `${selectedInCategory} · ` : ""}{category.selectionMode === "single" ? "Single" : "Multi"} {categoryExpanded ? "−" : "+"}</span>
+                                    </div>
+                                  </button>
+                                  {categoryExpanded ? (
+                                    <div className="v3-catalog-tree-children v3-catalog-tree-terms">
+                                      {(category.terms || []).map((term) => (
+                                        <button
+                                          key={term.id}
+                                          type="button"
+                                          className={`v3-term-chip v3-catalog-tree-term ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
+                                          onClick={() => onToggleTerm(term.id)}
+                                        >
+                                          {term.labelEn || term.labelKo || term.code}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              )}
               <div className="v3-catalog-category">
                 <div className="v3-catalog-category-head">
                   <span className="v3-label">SCENE DETAIL · optional</span>
