@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -237,19 +238,45 @@ def _sampling_params(settings: Settings) -> dict:
     }
 
 
+# 2026-08-11: 사용자 신고 - generate_prompt 첫 요청이 502 Bad Gateway로 실패하고
+# 재요청하면 대부분 성공한다(매우 간헐적). 원인 확인: RunPod 서버리스 워커가 0에서
+# 스케일업되는 콜드 스타트 구간에는 게이트웨이가 워커를 기다리지 않고 즉시
+# 502/503/504를 반환하는 경우가 있고, 몇 초 뒤 같은 요청을 다시 보내면 워커가 이미
+# 떠 있어 성공한다. 이전엔 이 계층(urllib HTTPError/URLError)에서 곧장
+# RuntimeError를 던졌고, prompts.py가 RuntimeError를 그대로 502로 변환해 사용자에게
+# 전달했다(재시도 없음) - _generate_with_parse_retry의 재시도는 "정상 응답을 받았지만
+# JSON 파싱에 실패한" 경우에만 동작해 이 상황을 커버하지 못했다. 여기서 502/503/504와
+# 연결 계열 오류(URLError)에 한해 짧은 대기 후 1회 재시도한다 - 실제 오류(401/403/400
+# 등 설정 문제)는 재시도해도 계속 실패할 뿐이므로 재시도 대상에서 제외.
+_RETRYABLE_HTTP_STATUS = {502, 503, 504}
+_TRANSIENT_RETRY_BACKOFF_SECONDS = 3
+
+
 def _json_request(url: str, headers: dict[str, str], payload: dict, timeout: int) -> dict:
     body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except TimeoutError as exc:
-        raise RuntimeError(f"Prompt LLM request timed out after {timeout} seconds.") from exc
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Prompt LLM HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Prompt LLM request failed: {exc.reason}") from exc
+    attempts = 2
+    for attempt in range(attempts):
+        request = urllib.request.Request(url, data=body, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except TimeoutError as exc:
+            if attempt < attempts - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+                continue
+            raise RuntimeError(f"Prompt LLM request timed out after {timeout} seconds.") from exc
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code in _RETRYABLE_HTTP_STATUS and attempt < attempts - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+                continue
+            raise RuntimeError(f"Prompt LLM HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt < attempts - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+                continue
+            raise RuntimeError(f"Prompt LLM request failed: {exc.reason}") from exc
+    raise RuntimeError("Prompt LLM request failed after retry.")
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:
