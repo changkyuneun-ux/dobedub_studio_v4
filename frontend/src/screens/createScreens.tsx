@@ -1024,14 +1024,11 @@ export function Create2cScreen({
         </>
       }
       sidebarExtra={
+        // 2026-08-11: 사용자 요청 - IN_QUEUE/IN_PROGRESS/COMPLETED 단계 목록이 본문
+        // 중앙의 ".v3-progress-stages" 스테퍼(아래)와 완전히 중복 표시되고 있었다.
+        // 사이드바는 RUN 식별 정보만 남기고 단계 목록은 제거.
         <div className="v3-step-tracker">
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>RUN {currentTaskId ? `#${currentTaskId.slice(0, 8)}` : ""} · {selected?.label || selected?.name || selectedWorkflow}</div>
-          {(["queue", "progress", "completed"] as const).map((key) => (
-            <div key={key} className={`v3-run-stage-item ${stage === key ? "is-active" : stage === "completed" || (key === "queue" && stage !== "queue") ? "is-past" : ""}`}>
-              <span>{key === "queue" ? "IN_QUEUE" : key === "progress" ? "IN_PROGRESS" : "COMPLETED"}</span>
-              <span>{stage === key ? "현재" : stage === "completed" && key !== "completed" ? "지남" : key === "completed" ? "대기" : ""}</span>
-            </div>
-          ))}
         </div>
       }
       rightPanel={
