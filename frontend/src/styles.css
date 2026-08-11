@@ -4985,30 +4985,115 @@ button {
   color: var(--v3-text-label);
 }
 
-.v3-config-grid {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 15px 16px 0;
-}
-
-.v3-config-cell {
-  border: 1px solid var(--v3-border);
-  border-radius: 9px;
+/* 2026-08-11: 사용자 요청 - Wan Node Config를 (구버전 dark 테마의 죽은 .config-row
+   CSS가 쓰던 것과 같은 개념의) 슬라이더 + 설명 레이아웃으로 재구현. 값 범위
+   (min/max/step)와 설명(description), 선택형(options)은 이미 백엔드
+   workflow_parser.py가 실제 워크플로 노드에서 뽑아 configControls로 내려주고
+   있었지만(가짜 데이터 아님), 화면이 전부 plain <input>으로만 그려서 활용되지
+   않고 있었다. */
+.v3-config-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
+  padding: 4px 16px 16px;
 }
 
-.v3-config-cell input {
-  background: none;
-  border: none;
+.v3-config-row {
+  border-bottom: 1px solid var(--v3-border-inner);
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(180px, 0.9fr);
+  padding: 14px 0;
+}
+
+.v3-config-row:last-child {
+  border-bottom: none;
+}
+
+.v3-config-row-head {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+.v3-config-row-value {
   color: var(--v3-text-body);
-  font: inherit;
-  font-weight: 600;
-  padding: 0;
+  font-family: var(--v3-font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.v3-config-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--v3-border);
+  border-radius: 999px;
+  cursor: pointer;
+  height: 4px;
   width: 100%;
+}
+
+.v3-config-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--v3-accent);
+  border-radius: 50%;
+  cursor: pointer;
+  height: 15px;
+  width: 15px;
+}
+
+.v3-config-slider::-moz-range-thumb {
+  background: var(--v3-accent);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  height: 15px;
+  width: 15px;
+}
+
+.v3-config-range-labels {
+  color: var(--v3-text-label);
+  display: flex;
+  font-family: var(--v3-font-mono);
+  font-size: 10px;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.v3-config-select-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.v3-config-select {
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-border);
+  border-radius: 7px;
+  color: var(--v3-text-body);
+  flex: 1;
+  font: inherit;
+  min-height: 32px;
+  padding: 4px 8px;
+}
+
+.v3-config-select:focus {
+  border-color: var(--v3-accent);
+  outline: none;
+}
+
+.v3-config-tag {
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.v3-config-description {
+  color: var(--v3-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .v3-seed-block {

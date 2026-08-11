@@ -785,16 +785,60 @@ export function Create2eScreen({
             <button className="v3-text-link-button is-muted" type="button" onClick={onResetDefaults}>기본값 복원</button>
           </div>
         </div>
-        <div className="v3-config-grid">
-          {configControls.map((control) => (
-            <label className="v3-config-cell" key={control.key}>
-              <span className="v3-label">{control.label}</span>
-              <input
-                value={String(selectedSegment?.config[control.key] ?? control.default ?? "")}
-                onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
-              />
-            </label>
-          ))}
+        <div className="v3-config-list">
+          {configControls.map((control) => {
+            const rawValue = selectedSegment?.config[control.key] ?? control.default ?? "";
+            const isNumeric = (control.type === "int" || control.type === "float") && control.min != null && control.max != null;
+            const hasOptions = Boolean(control.options && control.options.length);
+            const step = control.step ?? (control.type === "int" ? 1 : 0.01);
+            return (
+              <div className="v3-config-row" key={control.key}>
+                <div>
+                  <div className="v3-config-row-head">
+                    <span className="v3-label">{control.label}</span>
+                    {isNumeric ? <span className="v3-config-row-value">{String(rawValue)}</span> : null}
+                  </div>
+                  {isNumeric ? (
+                    <>
+                      <input
+                        className="v3-config-slider"
+                        type="range"
+                        min={control.min ?? undefined}
+                        max={control.max ?? undefined}
+                        step={step}
+                        value={Number(rawValue) || 0}
+                        onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                      />
+                      <div className="v3-config-range-labels">
+                        <span>{control.min}-{control.max}</span>
+                      </div>
+                    </>
+                  ) : hasOptions ? (
+                    <div className="v3-config-select-row">
+                      <select
+                        className="v3-config-select"
+                        value={String(rawValue)}
+                        onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                      >
+                        {control.options?.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                      {/* control.param(예: video_format)은 ComfyUI SaveVideo 노드의 실제
+                          입력 필드명 - 이 값이 어느 노드로 들어가는지 알려주는 표식. */}
+                      <span className="v3-config-tag">ComfyUI</span>
+                    </div>
+                  ) : (
+                    <input
+                      className="v3-config-select"
+                      style={{ width: "100%" }}
+                      value={String(rawValue)}
+                      onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                    />
+                  )}
+                </div>
+                <p className="v3-config-description">{control.description || " "}</p>
+              </div>
+            );
+          })}
         </div>
         <div className="v3-seed-block">
           <span className="v3-label">SEED</span>

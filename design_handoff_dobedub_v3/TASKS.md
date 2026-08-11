@@ -190,7 +190,7 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] **C-07 `7b` 기능 리소스 매핑** — `GET /api/admin/permissions`가 roles·permissions·resources를 함께 반환. 조회 전용 화면. — *2026-08-10 점검: E-04에서 `Create7bScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-08 `7c` 사용자 상세** — `PUT /admin/users/{id}`, `POST …/reset-password`, `POST …/deactivate`, `user_permissions` 테이블 존재. — *E-04(금번 세션)에서 `Create3eScreen`/`Create7cScreen` 구현으로 반영, `resetAdminUserPassword`/`deactivateAdminUser`를 처음으로 UI에 연결.*
 - [x] **C-09 `7g` 403·401·오류** — 라우트 가드와 응답 처리는 이미 있음. 화면만 필요. — *E-05(커밋 `1eaf2b4`)에서 403을 정식 `AccessDeniedScreen`으로 구현해 임시 `AccessDeniedModal`을 대체. 401은 로그인 복귀, 서버 오류는 인라인 notice(README "별개 상태").*
-- [x] **C-10 `2e` 세그먼트 설정** — `GET /api/segment-defaults`, `/workflows/{id}/segment-defaults` 존재. — *E-02(`8ac0c7a`)에서 `Create2eScreen` 구현으로 반영.*
+- [x] **C-10 `2e` 세그먼트 설정** — `GET /api/segment-defaults`, `/workflows/{id}/segment-defaults` 존재. — *E-02(`8ac0c7a`)에서 `Create2eScreen` 구현으로 반영. 2026-08-11: Wan Node Config 입력을 plain `<input>`에서 슬라이더(min/max/step 있는 int·float)·드롭다운(options 있는 string, 예: videoFormat/videoCodec)·설명 텍스트로 재구현 — `workflow_parser.py`의 `configControls`(min/max/step/options/description)는 이미 실제 워크플로 노드 값에서 추출되고 있었지만 화면이 활용하지 않고 있었을 뿐, 백엔드 변경은 없음.*
 - [x] **C-11 `6c` `5b` 상태·Pod** — `/system/status`, `/runpod/connection`, `/admin/sandbox-pod` 존재. — *2026-08-10 점검: E-04에서 `Create6cScreen`(6c)·`Create5bScreen`(5b) 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-12 `6d` 메타데이터** — `/metadata/status`, `/models`, `/rebuild` 존재. — *2026-08-10 점검: E-04에서 `Create6dScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 
