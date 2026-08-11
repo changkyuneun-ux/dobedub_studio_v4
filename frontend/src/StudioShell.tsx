@@ -1236,7 +1236,11 @@ export function StudioShell({
     if ((route === "admin.users" || route === "admin.userDetail") && !adminUsers.length) {
       void loadAdminUsers();
     }
-    if ((route === "admin.catalogHierarchy" || route === "admin.catalogTerms" || route === "admin.negativeDefaults") && !promptCatalog && !promptBuilderLoading) {
+    if (
+      (route === "create.prompt" || route === "admin.catalogHierarchy" || route === "admin.catalogTerms" || route === "admin.negativeDefaults") &&
+      !promptCatalog &&
+      !promptBuilderLoading
+    ) {
       void loadPromptCatalog();
     }
     if (route === "admin.status") {

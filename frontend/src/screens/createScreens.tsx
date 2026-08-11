@@ -747,7 +747,7 @@ export function Create2bScreen({
                         />
                       )}
                     </div>
-                    <p className="v3-config-description">{control.description || " "}</p>
+                    <p className="v3-config-description" title={control.description || undefined}>{control.description || " "}</p>
                   </div>
                 );
               })}
