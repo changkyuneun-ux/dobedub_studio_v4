@@ -11,8 +11,8 @@
 //   access.login      — 6a 로그인
 //   access.manual     — 6b 사용자 매뉴얼 ("1 Access.dc.html" 소속)
 //   create.load       — 2a · S1 이미지 로드 (신규 구현, E-02)
-//   create.prompt     — 2b · S2 세그먼트 설정 · 프롬프트 구성 (신규 구현, E-02)
-//   create.segments   — 2e · S3 세그먼트 설정 · 노드 컨피그 & seed (신규 구현, E-02)
+//   create.prompt     — 2b+2e 병합 · S2 세그먼트 설정 · 프롬프트 + 노드 컨피그
+//                        (2026-08-11: 두 화면을 하나로 병합, 좌우 분할 레이아웃)
 //   create.confirm    — 2f · S4 실행 전 전체 구성 확인 & Run (신규 구현, E-02)
 //   create.progress   — 2c · S4 진행 상태 · 취소 요청 (신규 구현, E-02)
 //   create.result     — 2d · S5 결과 · Final 병합본과 구간 검수본 (신규 구현, E-02)
@@ -77,7 +77,6 @@ export type StudioRoute =
   | "access.manual"
   | "create.load"
   | "create.prompt"
-  | "create.segments"
   | "create.confirm"
   | "create.progress"
   | "create.result"
@@ -120,7 +119,6 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.manual": "/studio/access/manual",
   "create.load": "/studio/create/load",
   "create.prompt": "/studio/create/prompt",
-  "create.segments": "/studio/create/segments",
   "create.confirm": "/studio/create/confirm",
   "create.progress": "/studio/create/progress",
   "create.result": "/studio/create/result",

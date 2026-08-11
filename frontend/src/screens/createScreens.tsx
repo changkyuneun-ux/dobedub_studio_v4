@@ -254,20 +254,30 @@ export function Create2aScreen({
   );
 }
 
-// E-02 · 2b "S2 프롬프트 구성" — design_handoff_dobedub_v3/2 Create.dc.html의 두 번째
-// 화면. 카탈로그 트리 조회·용어 선택·규칙 위반/필수 누락 경고·Generate/Apply 흐름은
-// 전부 구버전 PromptBuilderModal이 이미 갖고 있던 로직(C-01 경고 그룹핑 포함)을
-// 그대로 재사용한다 - 새로 만든 것은 화면 구조와 스타일뿐이다.
+// E-02 · 2b+2e 병합 "S2 세그먼트 편집 · 프롬프트 + 노드 컨피그" —
+// design_handoff_dobedub_v3/2 Create.dc.html의 두 번째·세 번째 화면이었던 것을
+// 2026-08-11 사용자 요청으로 하나의 화면으로 합쳤다. 세그먼트가 여럿일 때 "SEG02
+// 프롬프트 작성 → SEG02 노드값 설정"처럼 화면을 오가며 앞으로/뒤로 이동이 잦아
+// 혼란스럽다는 지적 - 좌측 사이드바에서 세그먼트를 고르면 같은 화면 안에서
+// 프롬프트(왼쪽)·노드 컨피그(오른쪽)를 동시에 편집한다. 카탈로그 트리 조회·용어
+// 선택·규칙 위반/필수 누락 경고·Generate/Apply 흐름과 Wan Node Config 슬라이더는
+// 기존 로직을 그대로 재사용했고 새로 만든 것은 좌우 분할 레이아웃뿐이다.
 //
-// 설계 원본과 다르게 뺀 것:
+// 설계 원본과 다르게 뺀 것(2b 쪽):
 // - "직접 입력" 모드 칩 — 기존 로직에 그런 별도 모드가 없다(생성 없이 바로 Apply하면
 //   그게 직접 입력이다). 없는 상태를 만들어 붙이지 않았다.
 // - "비어있는 세그먼트에도 함께 적용" 체크박스 — 여러 세그먼트에 한 번에 적용하는
 //   기능이 백엔드/기존 로직 어디에도 없다. 임의로 만들지 않았다.
-// - 카탈로그 트리의 scope→group→category 3단 아코디언 — scope 탭 + category 목록
-//   2단으로 단순화했다. 그룹 단위 접고 펼치기는 이후 다듬을 항목.
-// - "라이브러리 재사용" — E-03에서 4c 화면이 생겨 review.reuse로 이동한다(과거엔
-//   구버전 PromptReuseModal을 임시로 띄웠음).
+// - "라이브러리 재사용" — E-03에서 4c 화면이 생겨 review.reuse로 이동한다.
+// 설계 원본과 다르게 뺀 것(2e 쪽):
+// - seed "직접 입력" — 코드베이스가 4314245("영상 생성 seed 서버측 자동화")
+//   커밋 이후로 seed를 항상 서버가 자동 생성하도록 확정했고, configControls에서도
+//   seed/Seed 키를 의도적으로 제외한다. 없는 수동 입력 경로를 화면에만 만들어
+//   붙이지 않았다 - 자동 생성이라는 사실만 보여준다.
+// - "SEG 01 대비 변경분" diff 표 — 기본값과 현재값을 비교하는 로직이 없다.
+// - 세그먼트별 키프레임 쌍 미리보기 카드 — 병합 전 2e 상단에 세그먼트마다 반복
+//   표시되던 카드다. 병합 화면에서는 굳이 반복할 필요가 없어 빼고, 2f(실행 전
+//   확인) 상단으로 옮겨 전체 세그먼트를 한 번에 축소 나열한다(Create2fScreen 참조).
 export function Create2bScreen({
   user,
   health,
@@ -297,6 +307,9 @@ export function Create2bScreen({
   onGenerate,
   onApply,
   onOpenPromptReuse,
+  onUpdateConfigValue,
+  onResetDefaults,
+  onCopyFirstSegmentConfig,
   onNext
 }: {
   user: User | null;
@@ -332,6 +345,9 @@ export function Create2bScreen({
     source?: string;
   }) => void;
   onOpenPromptReuse: () => void;
+  onUpdateConfigValue: (key: string, value: string, control?: ConfigControl) => void;
+  onResetDefaults: () => void;
+  onCopyFirstSegmentConfig: (targetIndex: number) => void;
   onNext: () => void;
 }) {
   const selectedSegment = segments.find((segment) => segment.index === selectedSegmentIndex) || segments[0];
@@ -366,8 +382,11 @@ export function Create2bScreen({
   const warningGroups = groupPromptWarningsBySeverity(warnings);
   const hasBlockingWarning = warningGroups.some((group) => group.severity === "error");
   const applyLabel = generated ? "Apply Generated Prompt" : "Apply Keyword / Scene Draft";
-  const configuredSegmentCount = segments.filter((segment) => segment.positivePrompt.trim()).length;
+  const configuredCount = segments.filter((segment) => segment.positivePrompt.trim()).length;
+  const allConfigured = configuredCount === segments.length && segments.length > 0;
   const nextSegment = segments.find((segment) => segment.index === selectedSegmentIndex + 1);
+  const configControls = (selectedSegment?.configControls || []).filter((control) => control.key !== "seed" && control.key !== "Seed");
+  const isFirstSegment = selectedSegment?.index === segments[0]?.index;
 
   return (
     <AppShell
@@ -375,12 +394,13 @@ export function Create2bScreen({
       area="generate"
       activeItem="workspace"
       onNavigate={(key) => shellNavigate(key, onGoTo)}
-      headerEyebrow={`STEP 2 / 4 · SEG ${String(selectedSegmentIndex).padStart(2, "0")} · 프롬프트`}
+      headerEyebrow={`STEP 2 / 4 · SEG ${String(selectedSegmentIndex).padStart(2, "0")} · 프롬프트 & 노드 컨피그`}
       headerTitle="세그먼트 설정"
       headerActions={
         <>
           <button className="v3-secondary-button" type="button" onClick={onOpenPromptReuse}>Prompt Reuse</button>
-          <span className="v3-header-hint">Run은 실행 전 확인 단계에서 · 설정 {configuredSegmentCount}/{segments.length}</span>
+          <span className="v3-header-hint">설정 {configuredCount}/{segments.length}</span>
+          <button className="v3-primary-button" type="button" disabled={!allConfigured} onClick={onNext}>실행 전 확인으로 →</button>
         </>
       }
       sidebarExtra={
@@ -395,7 +415,7 @@ export function Create2bScreen({
             >
               <div className="v3-segment-nav-head">
                 <span>SEG {String(segment.index).padStart(2, "0")}</span>
-                <span>{segment.positivePrompt.trim() ? "작성됨" : "비어있음"}</span>
+                <span>{segment.positivePrompt.trim() ? "설정 완료" : "설정 필요"}</span>
               </div>
               <div className="v3-segment-nav-meta">KF {segment.startImageIndex} → KF {segment.endImageIndex}</div>
             </button>
@@ -445,277 +465,11 @@ export function Create2bScreen({
           <div className="v3-inline-actions">
             <button className="v3-secondary-button v3-flex-button" type="button" onClick={onOpenPromptReuse}>라이브러리 재사용</button>
           </div>
-          <div className="v3-note-block">
-            <div className="v3-label">적용 후 이동</div>
-            <div className="v3-inline-actions">
-              {nextSegment ? (
-                <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onSelectSegment(nextSegment.index)}>
-                  SEG {String(nextSegment.index).padStart(2, "0")} 프롬프트 →
-                </button>
-              ) : null}
-              <button className="v3-secondary-button v3-flex-button" type="button" onClick={onNext}>노드 구성값 설정 →</button>
-            </div>
-            <p className="v3-muted-text">영상 생성은 세그먼트 단위가 아닙니다 · 모든 세그먼트 설정 후 실행 전 확인에서 한 번에 제출됩니다</p>
-          </div>
-        </>
-      }
-    >
-      <div className="v3-pill-row">
-        <button
-          type="button"
-          className={`v3-pill ${activePanel === "keywords" ? "is-active" : ""}`}
-          onClick={() => onPanelChange("keywords")}
-        >
-          Keyword Builder
-        </button>
-        <button
-          type="button"
-          className={`v3-pill ${activePanel === "systemPrompt" ? "is-active" : ""}`}
-          onClick={() => {
-            onPanelChange("systemPrompt");
-            if (!systemPrompt) {
-              onReloadSystemPrompt();
-            }
-          }}
-        >
-          System Prompt 편집
-        </button>
-        <span className="v3-pill-meta">selected {selectedTermIds.length}</span>
-      </div>
 
-      <div className="v3-note-row">
-        <span className="v3-label">이 단계</span>
-        <span><strong>프롬프트 생성</strong>은 텍스트만 만듭니다 · 영상 생성(GPU)은 STEP 3 실행 전 확인에서</span>
-      </div>
-
-      {warningGroups.length ? (
-        <div className="v3-warning-block">
-          {warningGroups.map((group) => (
-            <div className={`v3-warning-row severity-${group.severity}`} key={group.severity}>
-              {group.items.map((warning, index) => (
-                <div className="v3-warning-line" key={`${warning.code || group.severity}-${index}`}>
-                  <span className="v3-warning-bullet" />
-                  <span>{warning.message || warning.code}</span>
-                  <span className="v3-warning-tag">{group.severity === "error" ? "BLOCK · 적용 비활성" : "WARN · 진행 가능"}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {activePanel === "systemPrompt" ? (
-        <div className="v3-card">
-          <div className="v3-card-header">
-            <div className="v3-card-header-title">System Prompt</div>
-            <span className="v3-card-header-meta">{systemPrompt?.provider || "runpod_vllm"}</span>
-          </div>
-          <div className="v3-system-prompt-body">
-            <p className="v3-muted-text">{systemPrompt?.name || "Qwen WAN I2V Positive Prompt Composer"} · {systemPrompt?.code || "qwen_wan_i2v_positive"}</p>
-            <textarea
-              className="v3-system-prompt-textarea"
-              value={systemPromptText}
-              spellCheck={false}
-              onChange={(event) => onSystemPromptTextChange(event.target.value)}
-            />
-            <div className="v3-inline-actions">
-              <button className="v3-secondary-button" type="button" disabled={loading} onClick={onReloadSystemPrompt}>Reload</button>
-              <button className="v3-primary-button" type="button" disabled={loading || !systemPromptText.trim()} onClick={onSaveSystemPrompt}>Save System Prompt</button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="v3-card">
-            <div className="v3-card-header">
-              <div className="v3-scope-tabs">
-                {renderScopes.map((scope) => (
-                  <button
-                    key={scope.key}
-                    type="button"
-                    className={`v3-scope-tab ${scope.key === activeScopeKey ? "is-active" : ""}`}
-                    onClick={() => setActiveScopeKey(scope.key)}
-                  >
-                    {scope.label} · {scope.termCount}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="v3-catalog-body">
-              {!activeScope || !activeScope.groups.length ? (
-                <p className="v3-muted-text">등록된 key word가 없습니다. Admin Console에서 카테고리와 key word를 등록하세요.</p>
-              ) : (
-                <div className="v3-catalog-tree-scope">
-                  {activeScope.groups.map((group) => {
-                    const groupKey = promptGroupAccordionKey(activeScope.key, group.key);
-                    const groupExpanded = expandedCatalogKeys.has(groupKey);
-                    const groupTermCount = group.categories.reduce((sum, category) => sum + (category.terms || []).length, 0);
-                    const groupSelectedCount = group.categories.reduce(
-                      (sum, category) => sum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
-                      0
-                    );
-                    return (
-                      <div key={group.key} className="v3-catalog-tree-group">
-                        <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(groupKey)}>
-                          <div className="v3-segment-nav-head">
-                            <span>{group.label}</span>
-                            <span>{groupSelectedCount ? `${groupSelectedCount} selected · ` : ""}{groupTermCount} {groupExpanded ? "−" : "+"}</span>
-                          </div>
-                        </button>
-                        {groupExpanded ? (
-                          <div className="v3-catalog-tree-children">
-                            {group.categories.map((category) => {
-                              const categoryKey = promptCategoryAccordionKey(activeScope.key, group.key, category.code);
-                              const categoryExpanded = expandedCatalogKeys.has(categoryKey);
-                              const selectedInCategory = (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length;
-                              return (
-                                <div key={category.code} className="v3-catalog-tree-subcategory">
-                                  <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(categoryKey)}>
-                                    <div className="v3-segment-nav-head">
-                                      <span>{category.nameKo || category.nameEn || category.code}</span>
-                                      <span>{selectedInCategory ? `${selectedInCategory} · ` : ""}{category.selectionMode === "single" ? "Single" : "Multi"} {categoryExpanded ? "−" : "+"}</span>
-                                    </div>
-                                  </button>
-                                  {categoryExpanded ? (
-                                    <div className="v3-catalog-tree-children v3-catalog-tree-terms">
-                                      {(category.terms || []).map((term) => (
-                                        <button
-                                          key={term.id}
-                                          type="button"
-                                          className={`v3-term-chip v3-catalog-tree-term ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
-                                          onClick={() => onToggleTerm(term.id)}
-                                        >
-                                          {term.labelEn || term.labelKo || term.code}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="v3-catalog-category">
-                <div className="v3-catalog-category-head">
-                  <span className="v3-label">SCENE DETAIL · optional</span>
-                </div>
-                <textarea
-                  className="v3-scene-textarea"
-                  placeholder="예: input character turns slightly toward the camera with a calm expression"
-                  value={sceneDescription}
-                  rows={3}
-                  onChange={(event) => onSceneDescriptionChange(event.target.value)}
-                />
-              </div>
-            </div>
-            <div className="v3-catalog-actions">
-              <button className="v3-primary-button v3-flex-button" type="button" disabled={loading || !hasPositiveInput} onClick={onGenerate}>
-                {loading ? "GENERATING..." : "프롬프트 생성 · Qwen"}
-              </button>
-              <button
-                className="v3-secondary-button"
-                type="button"
-                disabled={loading || !selectedTermIds.length}
-                onClick={() => onClearSelection()}
-              >
-                선택 초기화
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </AppShell>
-  );
-}
-
-// E-02 · 2e "S3 세그먼트 설정 · 노드 컨피그 & seed" — design_handoff_dobedub_v3/
-// 2 Create.dc.html의 세 번째 화면. Wan Node Config는 기존 StudioShell의
-// updateConfigValue/resetSegmentConfigsToDefaults를 그대로 재사용한다.
-//
-// 설계 원본과 다르게 뺀 것:
-// - seed "직접 입력" — 코드베이스가 4314245("영상 생성 seed 서버측 자동화")
-//   커밋 이후로 seed를 항상 서버가 자동 생성하도록 확정했고, configControls에서도
-//   seed/Seed 키를 의도적으로 제외한다(구버전 화면도 동일). 없는 수동 입력 경로를
-//   화면에만 만들어 붙이지 않았다 - 자동 생성이라는 사실만 보여준다.
-// - "SEG 01 대비 변경분" diff 표 — 기본값과 현재값을 비교하는 로직이 없다. 대신
-//   현재 설정값을 그대로 나열한다.
-export function Create2eScreen({
-  user,
-  health,
-  onGoTo,
-  workflowName,
-  segments,
-  selectedSegmentIndex,
-  onSelectSegment,
-  keyframes,
-  onUpdateConfigValue,
-  onResetDefaults,
-  onCopyFirstSegmentConfig,
-  onEditPrompt,
-  onNext
-}: {
-  user: User | null;
-  health: HealthResponse | null;
-  onGoTo: (route: StudioRoute) => void;
-  workflowName: string;
-  segments: SegmentState[];
-  selectedSegmentIndex: number;
-  onSelectSegment: (index: number) => void;
-  keyframes: KeyframeState[];
-  onUpdateConfigValue: (key: string, value: string, control?: ConfigControl) => void;
-  onResetDefaults: () => void;
-  onCopyFirstSegmentConfig: (targetIndex: number) => void;
-  onEditPrompt: () => void;
-  onNext: () => void;
-}) {
-  const selectedSegment = segments.find((segment) => segment.index === selectedSegmentIndex) || segments[0];
-  const startKeyframe = keyframes.find((keyframe) => keyframe.index === selectedSegment?.startImageIndex);
-  const endKeyframe = keyframes.find((keyframe) => keyframe.index === selectedSegment?.endImageIndex);
-  const configControls = (selectedSegment?.configControls || []).filter((control) => control.key !== "seed" && control.key !== "Seed");
-  const configuredCount = segments.filter((segment) => segment.positivePrompt.trim()).length;
-  const allConfigured = configuredCount === segments.length && segments.length > 0;
-  const isFirstSegment = selectedSegment?.index === segments[0]?.index;
-
-  return (
-    <AppShell
-      user={user}
-      area="generate"
-      activeItem="workspace"
-      onNavigate={(key) => shellNavigate(key, onGoTo)}
-      headerEyebrow={`STEP 2 / 4 · SEG ${String(selectedSegmentIndex).padStart(2, "0")} · 노드 컨피그`}
-      headerTitle="세그먼트 설정"
-      headerActions={
-        <button className="v3-primary-button" type="button" disabled={!allConfigured} onClick={onNext}>
-          실행 전 확인으로 →
-        </button>
-      }
-      sidebarExtra={
-        <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>SEGMENTS · {workflowName || "-"} → {segments.length}</div>
-          {segments.map((segment) => (
-            <button
-              key={segment.index}
-              type="button"
-              className={`v3-segment-nav-item ${segment.index === selectedSegmentIndex ? "is-active" : ""}`}
-              onClick={() => onSelectSegment(segment.index)}
-            >
-              <div className="v3-segment-nav-head">
-                <span>SEG {String(segment.index).padStart(2, "0")}</span>
-                <span>{segment.positivePrompt.trim() ? "세팅 완료" : "설정 필요"}</span>
-              </div>
-              <div className="v3-segment-nav-meta">KF {segment.startImageIndex} → KF {segment.endImageIndex}</div>
-            </button>
-          ))}
-        </div>
-      }
-      rightPanel={
-        <>
-          <div className="v3-panel-title">설정 현황</div>
+          {/* 2026-08-11: 2e "설정 현황"을 같은 우측 패널에 세로로 이어붙였다(사용자
+              선택: 탭 대신 하나로 통합). "프롬프트 수정"/"노드 구성값 설정 →" 같은
+              화면 전환 버튼은 이제 같은 화면 안이라 불필요해 뺐다. */}
+          <div className="v3-panel-title" style={{ marginTop: 4 }}>설정 현황</div>
           <div className="v3-card">
             <div className="v3-card-header">
               <span className="v3-label">세그먼트 설정</span>
@@ -746,103 +500,263 @@ export function Create2eScreen({
             </div>
           </div>
           <div className="v3-inline-actions">
-            <button className="v3-secondary-button v3-flex-button" type="button" onClick={onEditPrompt}>프롬프트 수정</button>
+            {nextSegment ? (
+              <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onSelectSegment(nextSegment.index)}>
+                SEG {String(nextSegment.index).padStart(2, "0")}로 →
+              </button>
+            ) : null}
           </div>
           <p className="v3-muted-text">모든 세그먼트 설정이 끝나야 실행 전 확인이 열립니다 · 현재 {configuredCount}/{segments.length}</p>
         </>
       }
     >
-      <div className="v3-card">
-        <div className="v3-card-header" style={{ gap: 14 }}>
-          <div className="v3-kf-pair">
-            <div className="v3-kf-thumb">{startKeyframe?.previewUrl ? <ProtectedImage src={startKeyframe.previewUrl} alt="시작 키프레임" /> : <span>KF {selectedSegment?.startImageIndex}</span>}</div>
-            <span className="v3-kf-arrow">→</span>
-            <div className="v3-kf-thumb">{endKeyframe?.previewUrl ? <ProtectedImage src={endKeyframe.previewUrl} alt="끝 키프레임" /> : <span>KF {selectedSegment?.endImageIndex}</span>}</div>
-          </div>
-          <div className="v3-kf-meta">
-            <div className="v3-card-header-title">이미지</div>
-            <span className="v3-card-header-meta">슬롯 순서 고정</span>
-          </div>
-          <div className="v3-kf-prompt-status">
-            <span className="v3-label">프롬프트</span>
-            <strong className={selectedSegment?.positivePrompt.trim() ? "is-done-text" : "is-pending-text"}>
-              {selectedSegment?.positivePrompt.trim() ? "적용됨" : "미적용"}
-            </strong>
-          </div>
-        </div>
+      <div className="v3-pill-row">
+        <button
+          type="button"
+          className={`v3-pill ${activePanel === "keywords" ? "is-active" : ""}`}
+          onClick={() => onPanelChange("keywords")}
+        >
+          Keyword Builder
+        </button>
+        <button
+          type="button"
+          className={`v3-pill ${activePanel === "systemPrompt" ? "is-active" : ""}`}
+          onClick={() => {
+            onPanelChange("systemPrompt");
+            if (!systemPrompt) {
+              onReloadSystemPrompt();
+            }
+          }}
+        >
+          System Prompt 편집
+        </button>
+        <span className="v3-pill-meta">selected {selectedTermIds.length}</span>
       </div>
 
-      <div className="v3-card">
-        <div className="v3-card-header">
-          <div className="v3-card-header-title">
-            <span>Wan Node Config · SEG {String(selectedSegmentIndex).padStart(2, "0")}</span>
-            <span className="v3-card-header-meta">세그먼트별 개별 설정</span>
-          </div>
-          <div className="v3-inline-actions">
-            {!isFirstSegment ? (
-              <button className="v3-text-link-button" type="button" onClick={() => onCopyFirstSegmentConfig(selectedSegmentIndex)}>SEG 01 값 복사</button>
-            ) : null}
-            <button className="v3-text-link-button is-muted" type="button" onClick={onResetDefaults}>기본값 복원</button>
-          </div>
-        </div>
-        <div className="v3-config-list">
-          {configControls.map((control) => {
-            const rawValue = selectedSegment?.config[control.key] ?? control.default ?? "";
-            const isNumeric = (control.type === "int" || control.type === "float") && control.min != null && control.max != null;
-            const hasOptions = Boolean(control.options && control.options.length);
-            const step = control.step ?? (control.type === "int" ? 1 : 0.01);
-            return (
-              <div className="v3-config-row" key={control.key}>
-                <div>
-                  <div className="v3-config-row-head">
-                    <span className="v3-label">{control.label}</span>
-                    {isNumeric ? <span className="v3-config-row-value">{String(rawValue)}</span> : null}
-                  </div>
-                  {isNumeric ? (
-                    <>
-                      <input
-                        className="v3-config-slider"
-                        type="range"
-                        min={control.min ?? undefined}
-                        max={control.max ?? undefined}
-                        step={step}
-                        value={Number(rawValue) || 0}
-                        onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
-                      />
-                      <div className="v3-config-range-labels">
-                        <span>{control.min}-{control.max}</span>
-                      </div>
-                    </>
-                  ) : hasOptions ? (
-                    <div className="v3-config-select-row">
-                      <select
-                        className="v3-config-select"
-                        value={String(rawValue)}
-                        onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
-                      >
-                        {control.options?.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                      {/* control.param(예: video_format)은 ComfyUI SaveVideo 노드의 실제
-                          입력 필드명 - 이 값이 어느 노드로 들어가는지 알려주는 표식. */}
-                      <span className="v3-config-tag">ComfyUI</span>
-                    </div>
-                  ) : (
-                    <input
-                      className="v3-config-select"
-                      style={{ width: "100%" }}
-                      value={String(rawValue)}
-                      onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
-                    />
-                  )}
+      <div className="v3-note-row">
+        <span className="v3-label">이 단계</span>
+        <span><strong>프롬프트·노드 컨피그 구성</strong>만 합니다 · 영상 생성(GPU)은 STEP 3 실행 전 확인에서</span>
+      </div>
+
+      {warningGroups.length ? (
+        <div className="v3-warning-block">
+          {warningGroups.map((group) => (
+            <div className={`v3-warning-row severity-${group.severity}`} key={group.severity}>
+              {group.items.map((warning, index) => (
+                <div className="v3-warning-line" key={`${warning.code || group.severity}-${index}`}>
+                  <span className="v3-warning-bullet" />
+                  <span>{warning.message || warning.code}</span>
+                  <span className="v3-warning-tag">{group.severity === "error" ? "BLOCK · 적용 비활성" : "WARN · 진행 가능"}</span>
                 </div>
-                <p className="v3-config-description">{control.description || " "}</p>
-              </div>
-            );
-          })}
+              ))}
+            </div>
+          ))}
         </div>
-        <div className="v3-seed-block">
-          <span className="v3-label">SEED</span>
-          <span>세그먼트별로 서버가 실행 시점에 자동 생성합니다.</span>
+      ) : null}
+
+      {/* 2026-08-11: 사용자 요청 - 프롬프트(왼쪽)·노드 컨피그(오른쪽) 좌우 분할.
+          세그먼트 전환은 좌측 사이드바 클릭만으로 이 화면 안에서 끝난다. */}
+      <div className="v3-segment-editor-columns">
+        <div className="v3-segment-editor-column">
+          {activePanel === "systemPrompt" ? (
+            <div className="v3-card">
+              <div className="v3-card-header">
+                <div className="v3-card-header-title">System Prompt</div>
+                <span className="v3-card-header-meta">{systemPrompt?.provider || "runpod_vllm"}</span>
+              </div>
+              <div className="v3-system-prompt-body">
+                <p className="v3-muted-text">{systemPrompt?.name || "Qwen WAN I2V Positive Prompt Composer"} · {systemPrompt?.code || "qwen_wan_i2v_positive"}</p>
+                <textarea
+                  className="v3-system-prompt-textarea"
+                  value={systemPromptText}
+                  spellCheck={false}
+                  onChange={(event) => onSystemPromptTextChange(event.target.value)}
+                />
+                <div className="v3-inline-actions">
+                  <button className="v3-secondary-button" type="button" disabled={loading} onClick={onReloadSystemPrompt}>Reload</button>
+                  <button className="v3-primary-button" type="button" disabled={loading || !systemPromptText.trim()} onClick={onSaveSystemPrompt}>Save System Prompt</button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="v3-card">
+              <div className="v3-card-header">
+                <div className="v3-scope-tabs">
+                  {renderScopes.map((scope) => (
+                    <button
+                      key={scope.key}
+                      type="button"
+                      className={`v3-scope-tab ${scope.key === activeScopeKey ? "is-active" : ""}`}
+                      onClick={() => setActiveScopeKey(scope.key)}
+                    >
+                      {scope.label} · {scope.termCount}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="v3-catalog-body">
+                {!activeScope || !activeScope.groups.length ? (
+                  <p className="v3-muted-text">등록된 key word가 없습니다. Admin Console에서 카테고리와 key word를 등록하세요.</p>
+                ) : (
+                  <div className="v3-catalog-tree-scope">
+                    {activeScope.groups.map((group) => {
+                      const groupKey = promptGroupAccordionKey(activeScope.key, group.key);
+                      const groupExpanded = expandedCatalogKeys.has(groupKey);
+                      const groupTermCount = group.categories.reduce((sum, category) => sum + (category.terms || []).length, 0);
+                      const groupSelectedCount = group.categories.reduce(
+                        (sum, category) => sum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
+                        0
+                      );
+                      return (
+                        <div key={group.key} className="v3-catalog-tree-group">
+                          <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(groupKey)}>
+                            <div className="v3-segment-nav-head">
+                              <span>{group.label}</span>
+                              <span>{groupSelectedCount ? `${groupSelectedCount} selected · ` : ""}{groupTermCount} {groupExpanded ? "−" : "+"}</span>
+                            </div>
+                          </button>
+                          {groupExpanded ? (
+                            <div className="v3-catalog-tree-children">
+                              {group.categories.map((category) => {
+                                const categoryKey = promptCategoryAccordionKey(activeScope.key, group.key, category.code);
+                                const categoryExpanded = expandedCatalogKeys.has(categoryKey);
+                                const selectedInCategory = (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length;
+                                return (
+                                  <div key={category.code} className="v3-catalog-tree-subcategory">
+                                    <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(categoryKey)}>
+                                      <div className="v3-segment-nav-head">
+                                        <span>{category.nameKo || category.nameEn || category.code}</span>
+                                        <span>{selectedInCategory ? `${selectedInCategory} · ` : ""}{category.selectionMode === "single" ? "Single" : "Multi"} {categoryExpanded ? "−" : "+"}</span>
+                                      </div>
+                                    </button>
+                                    {categoryExpanded ? (
+                                      <div className="v3-catalog-tree-children v3-catalog-tree-terms">
+                                        {(category.terms || []).map((term) => (
+                                          <button
+                                            key={term.id}
+                                            type="button"
+                                            className={`v3-term-chip v3-catalog-tree-term ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
+                                            onClick={() => onToggleTerm(term.id)}
+                                          >
+                                            {term.labelEn || term.labelKo || term.code}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="v3-catalog-category">
+                  <div className="v3-catalog-category-head">
+                    <span className="v3-label">SCENE DETAIL · optional</span>
+                  </div>
+                  <textarea
+                    className="v3-scene-textarea"
+                    placeholder="예: input character turns slightly toward the camera with a calm expression"
+                    value={sceneDescription}
+                    rows={3}
+                    onChange={(event) => onSceneDescriptionChange(event.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="v3-catalog-actions">
+                <button className="v3-primary-button v3-flex-button" type="button" disabled={loading || !hasPositiveInput} onClick={onGenerate}>
+                  {loading ? "GENERATING..." : "프롬프트 생성 · Qwen"}
+                </button>
+                <button
+                  className="v3-secondary-button"
+                  type="button"
+                  disabled={loading || !selectedTermIds.length}
+                  onClick={() => onClearSelection()}
+                >
+                  선택 초기화
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="v3-segment-editor-column">
+          <div className="v3-card">
+            <div className="v3-card-header">
+              <div className="v3-card-header-title">
+                <span>Wan Node Config · SEG {String(selectedSegmentIndex).padStart(2, "0")}</span>
+                <span className="v3-card-header-meta">세그먼트별 개별 설정</span>
+              </div>
+              <div className="v3-inline-actions">
+                {!isFirstSegment ? (
+                  <button className="v3-text-link-button" type="button" onClick={() => onCopyFirstSegmentConfig(selectedSegmentIndex)}>SEG 01 값 복사</button>
+                ) : null}
+                <button className="v3-text-link-button is-muted" type="button" onClick={onResetDefaults}>기본값 복원</button>
+              </div>
+            </div>
+            <div className="v3-config-list">
+              {configControls.map((control) => {
+                const rawValue = selectedSegment?.config[control.key] ?? control.default ?? "";
+                const isNumeric = (control.type === "int" || control.type === "float") && control.min != null && control.max != null;
+                const hasOptions = Boolean(control.options && control.options.length);
+                const step = control.step ?? (control.type === "int" ? 1 : 0.01);
+                return (
+                  <div className="v3-config-row" key={control.key}>
+                    <div>
+                      <div className="v3-config-row-head">
+                        <span className="v3-label">{control.label}</span>
+                        {isNumeric ? <span className="v3-config-row-value">{String(rawValue)}</span> : null}
+                      </div>
+                      {isNumeric ? (
+                        <>
+                          <input
+                            className="v3-config-slider"
+                            type="range"
+                            min={control.min ?? undefined}
+                            max={control.max ?? undefined}
+                            step={step}
+                            value={Number(rawValue) || 0}
+                            onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                          />
+                          <div className="v3-config-range-labels">
+                            <span>{control.min}-{control.max}</span>
+                          </div>
+                        </>
+                      ) : hasOptions ? (
+                        <div className="v3-config-select-row">
+                          <select
+                            className="v3-config-select"
+                            value={String(rawValue)}
+                            onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                          >
+                            {control.options?.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                          {/* control.param(예: video_format)은 ComfyUI SaveVideo 노드의 실제
+                              입력 필드명 - 이 값이 어느 노드로 들어가는지 알려주는 표식. */}
+                          <span className="v3-config-tag">ComfyUI</span>
+                        </div>
+                      ) : (
+                        <input
+                          className="v3-config-select"
+                          style={{ width: "100%" }}
+                          value={String(rawValue)}
+                          onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
+                        />
+                      )}
+                    </div>
+                    <p className="v3-config-description">{control.description || " "}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="v3-seed-block">
+              <span className="v3-label">SEED</span>
+              <span>세그먼트별로 서버가 실행 시점에 자동 생성합니다.</span>
+            </div>
+          </div>
         </div>
       </div>
     </AppShell>
@@ -944,6 +858,42 @@ export function Create2fScreen({
         <div className="v3-summary-tile"><span className="v3-label">WORKFLOW</span><strong>{selected?.label || selected?.name || selectedWorkflow || "-"}</strong></div>
         <div className="v3-summary-tile"><span className="v3-label">KEYFRAMES</span><strong>{filledKeyframeCount} / {keyframes.length}</strong></div>
         <div className="v3-summary-tile"><span className="v3-label">SEGMENTS</span><strong>{segments.length}</strong></div>
+      </div>
+
+      {/* 2026-08-11: 2b+2e 병합으로 세그먼트별 시작→끝 키프레임 쌍 미리보기 카드가
+          세그먼트 편집 화면에서 빠졌다 - 병합 전에는 세그먼트마다 화면을 오가며
+          한 쌍씩 봤지만, 실행 전 확인은 전체 세그먼트를 한눈에 검토하는 단계라
+          여기 상단에 전 세그먼트를 축소된 썸네일로 한 번에 나열한다(사용자 선택:
+          "세그먼트별 시작→끝 쌍 축소 나열"). */}
+      <div className="v3-card">
+        <div className="v3-card-header">
+          <div className="v3-card-header-title">이미지 · 세그먼트별 시작 → 끝</div>
+          <span className="v3-card-header-meta">{segments.length}개 세그먼트</span>
+        </div>
+        <div className="v3-kf-pair-row">
+          {segments.map((segment) => {
+            const startKeyframe = keyframes.find((keyframe) => keyframe.index === segment.startImageIndex);
+            const endKeyframe = keyframes.find((keyframe) => keyframe.index === segment.endImageIndex);
+            const applied = segment.positivePrompt.trim();
+            return (
+              <div className="v3-kf-pair-row-item" key={segment.index}>
+                <div className="v3-kf-pair-row-head">
+                  <span className="v3-label">SEG {String(segment.index).padStart(2, "0")}</span>
+                  <span className={`v3-status-badge ${applied ? "is-ready" : "is-pending"}`}>{applied ? "적용됨" : "미적용"}</span>
+                </div>
+                <div className="v3-kf-pair v3-kf-pair-sm">
+                  <div className="v3-kf-thumb v3-kf-thumb-sm">
+                    {startKeyframe?.previewUrl ? <ProtectedImage src={startKeyframe.previewUrl} alt="시작 키프레임" /> : <span>KF {segment.startImageIndex}</span>}
+                  </div>
+                  <span className="v3-kf-arrow">→</span>
+                  <div className="v3-kf-thumb v3-kf-thumb-sm">
+                    {endKeyframe?.previewUrl ? <ProtectedImage src={endKeyframe.previewUrl} alt="끝 키프레임" /> : <span>KF {segment.endImageIndex}</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="v3-card">

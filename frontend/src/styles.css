@@ -4962,6 +4962,39 @@ button {
   text-align: right;
 }
 
+/* 2026-08-11: 2f 실행 전 확인 상단 - 세그먼트별 시작→끝 키프레임 쌍을 전부
+   축소해서 한 줄(줄바꿈 가능)로 나열하는 카드. 2e 병합으로 빠진 세그먼트별
+   미리보기 카드를 여기로 옮기며 반복 노출에 맞게 썸네일을 더 작게 줄였다. */
+.v3-kf-pair-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.v3-kf-pair-row-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.v3-kf-pair-row-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.v3-kf-pair-sm {
+  gap: 6px;
+}
+
+.v3-kf-thumb-sm {
+  font-size: 8px;
+  height: 48px;
+  width: 78px;
+}
+
 .is-done-text {
   color: var(--v3-accent-text);
 }
@@ -4997,11 +5030,15 @@ button {
   padding: 4px 16px 16px;
 }
 
+/* 2026-08-11: 2b+2e 병합(세그먼트 편집 좌우 분할)로 Node Config가 절반 폭 컬럼에
+   들어가게 되면서, 라벨/슬라이더와 설명을 좌우로 나누던 기존 2열 레이아웃이 좁아져
+   답답해 보였다. 세로로 쌓는 1열로 바꿔 폭이 좁아도 슬라이더와 설명 모두 여유있게
+   보이게 한다. */
 .v3-config-row {
   border-bottom: 1px solid var(--v3-border-inner);
-  display: grid;
-  gap: 20px;
-  grid-template-columns: minmax(0, 1.3fr) minmax(180px, 0.9fr);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 14px 0;
 }
 
@@ -5094,6 +5131,23 @@ button {
   color: var(--v3-text-secondary);
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* 2026-08-11: 사용자 요청 - 세그먼트마다 프롬프트(2b)↔노드 컨피그(2e) 화면을 오가는
+   왕복이 번거로워 한 화면에서 좌우로 나눠 동시에 편집하도록 병합. 왼쪽 = 프롬프트
+   빌더, 오른쪽 = Wan Node Config. */
+.v3-segment-editor-columns {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.v3-segment-editor-column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
 .v3-seed-block {

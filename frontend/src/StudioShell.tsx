@@ -76,7 +76,6 @@ import { useProtectedAssetUrl } from "./components/ProtectedAssets";
 import {
   Create2aScreen,
   Create2bScreen,
-  Create2eScreen,
   Create2fScreen,
   Create2cScreen,
   Create2dScreen
@@ -1746,22 +1745,9 @@ export function StudioShell({
         onGenerate={() => void generatePromptDraft()}
         onApply={applyPromptSceneToSegment}
         onOpenPromptReuse={() => void goToPromptReuseScreen()}
-        onNext={() => onNavigate("create.segments")}
-      />
-    ) : route === "create.segments" ? (
-      <Create2eScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        workflowName={selected?.label || selected?.name || selectedWorkflow}
-        segments={segments}
-        selectedSegmentIndex={selectedSegmentIndex}
-        onSelectSegment={setSelectedSegmentIndex}
-        keyframes={keyframes}
         onUpdateConfigValue={updateConfigValue}
         onResetDefaults={() => void resetSegmentConfigsToDefaults()}
         onCopyFirstSegmentConfig={copyFirstSegmentConfig}
-        onEditPrompt={() => onNavigate("create.prompt")}
         onNext={() => onNavigate("create.confirm")}
       />
     ) : route === "create.confirm" ? (
@@ -1775,7 +1761,7 @@ export function StudioShell({
         segments={segments}
         jobPayloadPreview={jobPayloadPreview}
         running={running}
-        onEditSegments={() => onNavigate("create.segments")}
+        onEditSegments={() => onNavigate("create.prompt")}
         onRun={() => {
           onNavigate("create.progress");
           void generateVideo();

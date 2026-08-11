@@ -190,7 +190,7 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] **C-07 `7b` 기능 리소스 매핑** — `GET /api/admin/permissions`가 roles·permissions·resources를 함께 반환. 조회 전용 화면. — *2026-08-10 점검: E-04에서 `Create7bScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-08 `7c` 사용자 상세** — `PUT /admin/users/{id}`, `POST …/reset-password`, `POST …/deactivate`, `user_permissions` 테이블 존재. — *E-04(금번 세션)에서 `Create3eScreen`/`Create7cScreen` 구현으로 반영, `resetAdminUserPassword`/`deactivateAdminUser`를 처음으로 UI에 연결.*
 - [x] **C-09 `7g` 403·401·오류** — 라우트 가드와 응답 처리는 이미 있음. 화면만 필요. — *E-05(커밋 `1eaf2b4`)에서 403을 정식 `AccessDeniedScreen`으로 구현해 임시 `AccessDeniedModal`을 대체. 401은 로그인 복귀, 서버 오류는 인라인 notice(README "별개 상태").*
-- [x] **C-10 `2e` 세그먼트 설정** — `GET /api/segment-defaults`, `/workflows/{id}/segment-defaults` 존재. — *E-02(`8ac0c7a`)에서 `Create2eScreen` 구현으로 반영. 2026-08-11: Wan Node Config 입력을 plain `<input>`에서 슬라이더(min/max/step 있는 int·float)·드롭다운(options 있는 string, 예: videoFormat/videoCodec)·설명 텍스트로 재구현 — `workflow_parser.py`의 `configControls`(min/max/step/options/description)는 이미 실제 워크플로 노드 값에서 추출되고 있었지만 화면이 활용하지 않고 있었을 뿐, 백엔드 변경은 없음.*
+- [x] **C-10 `2e` 세그먼트 설정** — `GET /api/segment-defaults`, `/workflows/{id}/segment-defaults` 존재. — *E-02(`8ac0c7a`)에서 `Create2eScreen` 구현으로 반영. 2026-08-11: Wan Node Config 입력을 plain `<input>`에서 슬라이더(min/max/step 있는 int·float)·드롭다운(options 있는 string, 예: videoFormat/videoCodec)·설명 텍스트로 재구현 — `workflow_parser.py`의 `configControls`(min/max/step/options/description)는 이미 실제 워크플로 노드 값에서 추출되고 있었지만 화면이 활용하지 않고 있었을 뿐, 백엔드 변경은 없음. 2026-08-11(같은 날 후속): 사용자 요청으로 `Create2eScreen`을 `Create2bScreen`에 병합·삭제 — 아래 E-02 `2e` 항목의 각주 참조.*
 - [x] **C-11 `6c` `5b` 상태·Pod** — `/system/status`, `/runpod/connection`, `/admin/sandbox-pod` 존재. — *2026-08-10 점검: E-04에서 `Create6cScreen`(6c)·`Create5bScreen`(5b) 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 - [x] **C-12 `6d` 메타데이터** — `/metadata/status`, `/models`, `/rebuild` 존재. — *2026-08-10 점검: E-04에서 `Create6dScreen` 구현으로 반영됨(E 절에는 체크돼 있었으나 이 C 절 항목은 갱신되지 않고 남아 있었음).*
 
@@ -243,11 +243,11 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] `router.ts`를 업무 흐름(S1~S5) 기준 라우트로 재설계(현재는 기능 기준: login/studio/history/status/metadata/manual/admin) — *`StudioRoute`를 `"flow.screen"` 리터럴 유니온으로 전면 재작성, 구버전 경로 호환은 `LEGACY_LAST_SEGMENT_ROUTE`로 유지.*
 
 ### E-02 · `2 Create` 흐름 (핵심 흐름) — P0 — **완료** (커밋 `8602b95`, `cc85438`, `8ac0c7a`, `851dac4`)
-순서: `2a`→`2b`→`2e`→`2f`→`2c`→`2d`
+순서: `2a`→`2b`(2e 병합됨, 아래 참조)→`2f`→`2c`→`2d`
 - [x] `2a` 이미지 로드 — 워크플로 선택 + 키프레임 업로드 — *커밋 `8602b95`.*
-- [x] `2b` 프롬프트 구성 — **C-01 경고 그룹핑 로직(심각도별 분류, BLOCK 시 Apply 비활성) 재사용, UI는 신규 토큰·레이아웃으로 재구현.** 경고는 좌측 본문 상단 스트립에 모으고 우측 패널로 분산하지 않음(README 지시) — *커밋 `cc85438`. 2026-08-11: 키워드 카탈로그가 그룹·서브카테고리 구분 없이 전부 펼쳐져 보이던 문제 수정 — `helpers/promptCatalog.ts`에 이미 있었지만 어디서도 쓰이지 않던 `promptGroupAccordionKey`/`promptCategoryAccordionKey`/`promptAccordionDefaultKeys`(빈 Set = 기본 전체 접힘)를 `Create2bScreen`에 연결해 그룹→서브카테고리 2단 아코디언(기본 접힘)으로 재구현.*
-- [x] `2e` 세그먼트 설정 (C-10) — *커밋 `8ac0c7a`.*
-- [x] `2f` 실행 전 확인 — 제출 payload 확인 후 Run — *커밋 `851dac4`.*
+- [x] `2b` 프롬프트 구성 — **C-01 경고 그룹핑 로직(심각도별 분류, BLOCK 시 Apply 비활성) 재사용, UI는 신규 토큰·레이아웃으로 재구현.** 경고는 좌측 본문 상단 스트립에 모으고 우측 패널로 분산하지 않음(README 지시) — *커밋 `cc85438`. 2026-08-11: 키워드 카탈로그가 그룹·서브카테고리 구분 없이 전부 펼쳐져 보이던 문제 수정 — `helpers/promptCatalog.ts`에 이미 있었지만 어디서도 쓰이지 않던 `promptGroupAccordionKey`/`promptCategoryAccordionKey`/`promptAccordionDefaultKeys`(빈 Set = 기본 전체 접힘)를 `Create2bScreen`에 연결해 그룹→서브카테고리 2단 아코디언(기본 접힘)으로 재구현. 2026-08-11(같은 날 후속): 사용자 요청 — 세그먼트가 여럿일 때 `2b`(프롬프트)↔`2e`(노드 컨피그) 화면 전환이 잦아 혼란스럽다는 지적으로 두 화면을 `Create2bScreen` 하나로 병합, 본문을 `.v3-segment-editor-columns`로 좌우 분할(왼쪽=프롬프트/키워드 카탈로그, 오른쪽=Wan Node Config). 좌측 사이드바에서 세그먼트를 선택하면 같은 화면 안에서 프롬프트·노드 컨피그를 동시에 편집. `Create2eScreen`은 삭제되고 `create.segments` 라우트도 제거(`router.ts`에서 `StudioRoute`/`ROUTE_PATH`), `create.prompt`가 두 화면의 역할을 모두 담당. 세그먼트별 키프레임 쌍 미리보기 카드는 `2f`(실행 전 확인) 상단으로 이동(아래 `2f` 각주 참조).*
+- [x] `2e` 세그먼트 설정 (C-10) — **2026-08-11: `2b`로 병합·폐지됨.** 위 `2b` 항목 각주 참조. — *커밋 `8ac0c7a`(최초 구현 커밋, 이후 병합으로 대체).*
+- [x] `2f` 실행 전 확인 — 제출 payload 확인 후 Run — *커밋 `851dac4`. 2026-08-11: `2b`+`2e` 병합으로 세그먼트별 키프레임 쌍 미리보기 카드가 세그먼트 편집 화면에서 빠지면서, 전체 세그먼트를 한눈에 검토할 수 있도록 `Create2fScreen` 상단(요약 타일 바로 아래)에 세그먼트별 시작→끝 키프레임 쌍을 축소 썸네일로 한 줄 나열하는 카드 추가(사용자 선택: "세그먼트별 시작→끝 쌍 축소 나열"). 각 쌍에 프롬프트 적용 여부 배지(적용됨/미적용) 동반.*
 - [x] `2c` 진행 — 상태 인포그래픽 + 로그 + 취소 요청(Cancelling) 상태(C-02) — *커밋 `851dac4`.*
 - [x] `2d` 결과 — Final 병합본과 구간 검수본 — *커밋 `851dac4`.*
 
