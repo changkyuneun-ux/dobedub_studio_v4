@@ -1227,6 +1227,15 @@ export function StudioShell({
       void loadCollections();
       void loadAssetsPage(1);
     }
+    // 2026-08-11: 사용자 요청 - 프롬프트 라이브러리(4c)가 사이드바 메뉴 등으로
+    // 직접 진입했을 때는 목록이 비어 있고 Search를 눌러야만 채워졌다. "라이브러리
+    // 재사용" 버튼(goToPromptReuseScreen)을 거쳐 들어올 때만 미리 검색해뒀기
+    // 때문 - 다른 review.* 라우트와 같은 패턴으로 라우트 진입 시 자동 로드한다.
+    // 이미 불러온 목록이 있으면(같은 화면에서 페이지 이동/재검색 중) 여기서
+    // 다시 덮어쓰지 않는다.
+    if (route === "review.reuse" && !promptReuseItems.length && !promptReuseLoading) {
+      void searchPromptReuse(promptReuseKeyword, 1);
+    }
     if (route === "admin.systemPrompt" && !promptSystemPrompt) {
       void loadPromptSystemPrompt();
     }
@@ -1257,7 +1266,7 @@ export function StudioShell({
       setMetadataWorkflowId(workflowId);
       void loadMetadata(workflowId);
     }
-  }, [route, selectedWorkflow, workflows.length, user, promptSystemPrompt, adminWorkflowItems.length, adminUsers.length, promptCatalog, promptBuilderLoading]);
+  }, [route, selectedWorkflow, workflows.length, user, promptSystemPrompt, adminWorkflowItems.length, adminUsers.length, promptCatalog, promptBuilderLoading, promptReuseItems.length, promptReuseLoading]);
 
   // E-02 · 2c → 2d: generateVideo()는 create.confirm(2f)의 onRun에서 호출되고
   // 완료(성공/실패/취소)까지 내부적으로 기다린다(pollJob). running이 false로

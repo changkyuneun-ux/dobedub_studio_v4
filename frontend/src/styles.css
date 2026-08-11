@@ -5221,6 +5221,19 @@ button {
   border-bottom: none;
 }
 
+/* 2026-08-11: 사용자 요청 - 프롬프트 셀은 한 줄 말줄임 대신 스크롤로 전체 내용을
+   볼 수 있어야 함. 고정 높이 박스 안에서 세로 스크롤. */
+.v3-reuse-prompt-cell {
+  color: var(--v3-text-body);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 64px;
+  overflow-y: auto;
+  padding-right: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .v3-review-seg-name {
   color: var(--v3-text-secondary);
   font-family: var(--v3-font-mono);

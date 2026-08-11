@@ -336,7 +336,13 @@ def reusable_task_prompts(
 ) -> dict:
     session = SessionLocal()
     try:
-        query = select(TaskPrompt).order_by(
+        query = select(TaskPrompt).options(
+            # 2026-08-11: 4c 프롬프트 재사용 목록에 "생성자" 컬럼 추가 요청 -
+            # task_prompts에는 생성자 정보가 없고 이 프롬프트를 만든 작업
+            # (workflow_tasks.user_id → users.name)에만 있다. N+1 쿼리를 피하려고
+            # _assets_by_id와 같은 방식으로 selectinload로 미리 조인해온다.
+            selectinload(TaskPrompt.task).selectinload(WorkflowTask.user)
+        ).order_by(
             # MySQL does not support the `NULLS LAST` clause emitted by
             # SQLAlchemy's nullslast(). Sorting the null marker first works
             # consistently on both SQLite and MySQL.
@@ -851,11 +857,14 @@ def _task_prompt_to_json(
 ) -> dict:
     input_ids = row.input_asset_ids or []
     output_ids = row.output_asset_ids or []
+    task_user = row.task.user if row.task else None
+    created_by = (task_user.name if task_user else None) or (row.task.user_id if row.task else None)
     return {
         "id": row.id,
         "taskId": row.task_id,
         "workflowId": row.workflow_id,
         "segmentIndex": row.segment_index,
+        "createdBy": created_by,
         "modelProfileId": row.model_profile_id,
         "modelName": row.model_name,
         "promptGenerationOutputId": row.prompt_generation_output_id,

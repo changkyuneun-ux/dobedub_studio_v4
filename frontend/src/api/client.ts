@@ -566,6 +566,7 @@ export type TaskPromptItem = {
   taskId: string;
   workflowId: string;
   segmentIndex: number;
+  createdBy?: string | null;
   modelProfileId?: string | null;
   modelName?: string | null;
   promptGenerationOutputId?: string | null;

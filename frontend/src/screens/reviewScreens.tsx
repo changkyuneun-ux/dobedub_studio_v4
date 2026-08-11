@@ -559,7 +559,11 @@ export function Create4cScreen({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
-  const gridColumns = "180px minmax(0,1fr) 160px 70px 150px 110px";
+  // 2026-08-11: 사용자 요청 - 정보 항목을 워크플로/시작·다음 이미지/포지티브·
+  // 네거티브 프롬프트/사유/코멘트/레이팅/생성자/모델명 9개로 재구성. "적용"은
+  // 한 번 컬럼을 없애고 행 클릭으로 대체했다가, 사용자 요청으로 다시 버튼
+  // 컬럼으로 복구했다.
+  const gridColumns = "108px 172px minmax(0,1.3fr) minmax(0,1fr) 108px 130px 54px 88px 108px 64px";
 
   return (
     <AppShell
@@ -587,9 +591,9 @@ export function Create4cScreen({
       }
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
-      <div className="v3-card">
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns }}>
-          <span>워크플로 · 세그먼트</span><span>프롬프트</span><span>사유</span><span>Rating</span><span>Task ID · Model</span><span style={{ textAlign: "right" }}>적용</span>
+      <div className="v3-card" style={{ overflowX: "auto" }}>
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 980 }}>
+          <span>워크플로</span><span>시작 → 다음 이미지</span><span>프롬프트 (Positive)</span><span>프롬프트 (Negative)</span><span>사유</span><span>코멘트</span><span>레이팅</span><span>생성자</span><span>모델명</span><span style={{ textAlign: "right" }}>적용</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {!loading && !items.length ? (
@@ -597,14 +601,29 @@ export function Create4cScreen({
         ) : null}
         {!loading && items.map((prompt) => {
           const reasons = reviewReasons(prompt);
+          const startAsset = (prompt.inputAssets || [])[0];
+          const endAsset = (prompt.inputAssets || [])[1];
           return (
-            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns }} key={prompt.id}>
-              <span className="v3-review-seg-name">{prompt.workflowId} · Segment {prompt.segmentIndex}</span>
-              <span
-                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                title={prompt.positivePrompt || "-"}
-              >
+            <div
+              className="v3-review-table-row"
+              style={{ gridTemplateColumns: gridColumns, minWidth: 980 }}
+              key={prompt.id}
+            >
+              <span className="v3-review-seg-name">{prompt.workflowId}<br /><span className="v3-muted-text">Segment {prompt.segmentIndex}</span></span>
+              <span className="v3-kf-pair v3-kf-pair-sm">
+                <span className="v3-kf-thumb v3-kf-thumb-sm">
+                  {startAsset?.assetId ? <ProtectedImage src={`/api/files/${startAsset.assetId}`} alt="시작 이미지" /> : <span>-</span>}
+                </span>
+                <span className="v3-kf-arrow">→</span>
+                <span className="v3-kf-thumb v3-kf-thumb-sm">
+                  {endAsset?.assetId ? <ProtectedImage src={`/api/files/${endAsset.assetId}`} alt="다음 이미지" /> : <span>-</span>}
+                </span>
+              </span>
+              <span className="v3-reuse-prompt-cell">
                 {prompt.positivePrompt || "-"}
+              </span>
+              <span className="v3-reuse-prompt-cell">
+                {prompt.negativePrompt || "-"}
               </span>
               <span>
                 {reasons.length ? (
@@ -616,12 +635,20 @@ export function Create4cScreen({
                   <span className="v3-muted-text">사유 없음</span>
                 )}
               </span>
+              <span
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={prompt.qualityComment || "-"}
+              >
+                {prompt.qualityComment || "-"}
+              </span>
               <span>
                 <span className="v3-status-badge is-ready">{prompt.qualityRating || "-"}</span>
               </span>
-              <span style={{ fontSize: 11.5 }}>
-                #{prompt.taskId.slice(0, 8)}<br />
-                <span className="v3-muted-text">{prompt.modelName || prompt.modelProfileId || "-"}</span>
+              <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prompt.createdBy || "-"}>
+                {prompt.createdBy || "-"}
+              </span>
+              <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prompt.modelName || prompt.modelProfileId || "-"}>
+                {prompt.modelName || prompt.modelProfileId || "-"}
               </span>
               <span style={{ textAlign: "right" }}>
                 <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>적용</button>
