@@ -25,6 +25,7 @@ import { shellNavigate } from "../helpers/navigation";
 import {
   useProtectedAssetUrl,
   ProtectedImage,
+  ProtectedVideoThumb,
   ProtectedAssetPreview
 } from "../components/ProtectedAssets";
 
@@ -813,6 +814,7 @@ export function Create5aScreen({
           const itemCollectionIds = new Set((item.collections || []).map((c) => c.id));
           const availableToAdd = collections.filter((c) => !itemCollectionIds.has(c.id));
           const isImage = (item.mimeType || "").startsWith("image/");
+          const isVideo = (item.mimeType || "").startsWith("video/");
           return (
             <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }} key={item.assetId}>
               <span>
@@ -849,14 +851,20 @@ export function Create5aScreen({
                 ) : null}
               </span>
               <span className="v3-review-seg-name" title={item.assetId}>{item.assetId.slice(0, 12)}</span>
-              <span>
+              <span className="v3-asset-preview-cell">
                 <button
                   type="button"
-                  className="v3-kf-thumb v3-kf-thumb-sm v3-asset-preview-trigger"
+                  className="v3-kf-thumb v3-kf-thumb-xs v3-asset-preview-trigger"
                   title="미리보기"
                   onClick={() => setPreviewItem(item)}
                 >
-                  {isImage ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.fileName} /> : <span>{(item.type || item.mimeType || "FILE").toUpperCase().slice(0, 4)}</span>}
+                  {isImage ? (
+                    <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.fileName} />
+                  ) : isVideo ? (
+                    <ProtectedVideoThumb src={`/api/files/${item.assetId}`} alt={item.fileName} />
+                  ) : (
+                    <span>{(item.type || item.mimeType || "FILE").toUpperCase().slice(0, 4)}</span>
+                  )}
                 </button>
               </span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.fileName}>

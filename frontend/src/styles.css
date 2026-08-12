@@ -4936,7 +4936,8 @@ button {
   width: 132px;
 }
 
-.v3-kf-thumb img {
+.v3-kf-thumb img,
+.v3-kf-thumb video {
   height: 100%;
   object-fit: cover;
   width: 100%;
@@ -5281,6 +5282,20 @@ button {
 
 .v3-asset-preview-trigger:hover {
   box-shadow: inset 0 0 0 2px var(--v3-accent);
+}
+
+/* 2026-08-12(후속): 열 너비(62px)에 비해 .v3-kf-thumb-sm(78x48)이 커서 다음
+   열을 침범해 보였다는 지적 - 크기를 절반(39x24)으로 줄이고, 셀 안에서
+   가운데 정렬한다. */
+.v3-kf-thumb-xs {
+  font-size: 6px;
+  height: 24px;
+  width: 39px;
+}
+
+.v3-asset-preview-cell {
+  display: flex;
+  justify-content: center;
 }
 
 .v3-modal-panel-media {
