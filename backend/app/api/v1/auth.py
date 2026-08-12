@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -8,45 +8,22 @@ from backend.app.core.security import CurrentUser, create_access_token, current_
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 from backend.app.services.admin_service import admin_login, admin_user_payload
-from backend.app.services.audit_log_service import record_audit_log
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login")
-# A-05: 접근 이력(로그인 시도)은 별도 테이블을 만들지 않고 A-04의 audit_logs에
-# action="login"으로 흡수한다. 성공/실패 모두 기록하되, 실패 시 비밀번호 등
-# 민감정보는 남기지 않는다(사유 메시지만 after_json에 저장).
-def login(payload: dict, request: Request, db: Session = Depends(get_db)):
-    submitted_id = str(payload.get("id") or "").strip() or None
-    ip = request.client.host if request.client else None
+# 2026-08-12: A-05가 로그인 시도를 audit_logs에 action="login"으로 남기던 것을
+# 사용자 요청으로 제거했다 - 감사 로그는 "어드민 정보 수정사항"만 남기기로
+# 범위를 좁혔고, 로그인 자체는 정보 변경이 아니다. 기존에 쌓여 있던 login
+# 레코드는 마이그레이션 20260812_0018로 별도 삭제했다.
+def login(payload: dict, db: Session = Depends(get_db)):
     try:
         result = admin_login(db, payload)
     except ValueError as exc:
-        record_audit_log(
-            db,
-            actor_id=submitted_id,
-            action="login",
-            target_type="user",
-            target_id=submitted_id,
-            before=None,
-            after={"success": False, "reason": str(exc)},
-            ip=ip,
-        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Login failed: {exc}") from exc
-    logged_in_id = str((result.get("user") or {}).get("id") or submitted_id or "")
-    record_audit_log(
-        db,
-        actor_id=logged_in_id or None,
-        action="login",
-        target_type="user",
-        target_id=logged_in_id or None,
-        before=None,
-        after={"success": True},
-        ip=ip,
-    )
     return result
 
 

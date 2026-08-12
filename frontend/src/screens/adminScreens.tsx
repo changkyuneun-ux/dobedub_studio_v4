@@ -1001,7 +1001,10 @@ export function Create7cScreen({
         </div>
       ) : null}
 
-      {selectedUser ? <AuditLogTable actorId={selectedUser.id} action="login" pageSize={5} title="접근 이력" /> : null}
+      {/* 2026-08-12: 사용자 요청으로 감사 로그가 "어드민 정보 수정사항"만 남기도록
+          범위를 좁히면서 action="login" 기록 자체가 중단됐다(auth.py). 여기 있던
+          "접근 이력"(AuditLogTable actorId=selectedUser.id action="login")은 더
+          이상 채워질 데이터가 없어 항상 빈 상태로만 보이게 되므로 섹션째 제거했다. */}
     </AppShell>
   );
 }

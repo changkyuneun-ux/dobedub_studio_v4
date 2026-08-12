@@ -137,6 +137,21 @@ export function AppShell({
           <div className="v3-sidebar-brand-name">DOBEDUB</div>
         </div>
 
+        {/* 2026-08-12: 사용자 요청 - 관리자 콘솔/스튜디오 전환 버튼이 사이드바
+            최하단(서비스 상태 아래)에 묻혀 있어 눈에 잘 안 띄었다. 로고 바로
+            아래·GENERATE/ADMIN 메뉴 라벨 바로 위로 옮겨 영역 전환이라는 중요한
+            동작을 더 눈에 띄게 한다. */}
+        {chrome && area === "generate" && canUseAdminConsole(user) ? (
+          <div className="v3-sidebar-switch-top">
+            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.roles")}>관리자 콘솔 →</button>
+          </div>
+        ) : null}
+        {chrome && area === "admin" ? (
+          <div className="v3-sidebar-switch-top">
+            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("create.load")}>← 스튜디오</button>
+          </div>
+        ) : null}
+
         <div className="v3-sidebar-group-label">{groupLabel}</div>
         <div className="v3-sidebar-nav">
           {visibleNavItems.map((item) => (
@@ -190,12 +205,6 @@ export function AppShell({
             <div className="v3-sidebar-status">
               <span className={`v3-status-dot is-${qwenStatus.toLowerCase()}`} aria-hidden="true" />Qwen · {qwenStatus}
             </div>
-            {area === "generate" && canUseAdminConsole(user) ? (
-              <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.roles")}>관리자 콘솔 →</button>
-            ) : null}
-            {area === "admin" ? (
-              <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("create.load")}>← 스튜디오</button>
-            ) : null}
             <div className="v3-sidebar-user">
               <span className="v3-sidebar-user-name">{user?.name || user?.id}<span className="v3-sidebar-user-role">{user?.role || ""}</span></span>
               <button className="v3-sidebar-logout" type="button" onClick={chrome.onLogout}>로그아웃</button>

@@ -3401,7 +3401,7 @@ button {
   color: var(--v3-text-label);
   font-family: var(--v3-font-mono);
   font-size: var(--v3-font-size-label);
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: var(--v3-label-letter-spacing);
   padding: 0 16px 8px;
 }
@@ -3410,11 +3410,15 @@ button {
   padding-top: 20px;
 }
 
+/* 2026-08-12: 사용자 요청 - 그룹 라벨(GENERATE/ADMIN/HELP)과 하위 메뉴 항목이
+   거의 같은 들여쓰기(16px vs 18px)라 계층이 잘 안 보였다. 항목 컨테이너 왼쪽
+   여백을 늘려 라벨보다 확실히 오른쪽에서 시작하게 한다(라벨 텍스트 시작
+   16px, 항목 텍스트 시작 약 30px). */
 .v3-sidebar-nav {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 0 8px;
+  padding: 0 8px 0 20px;
 }
 
 .v3-sidebar-nav-item {
@@ -3499,6 +3503,19 @@ button {
 .v3-status-dot.is-dry-run { background: var(--v3-warning); }
 .v3-status-dot.is-check,
 .v3-status-dot.is-mock { background: var(--v3-text-label); }
+
+/* 2026-08-12: 전환 버튼을 사이드바 상단(로고 아래)으로 옮긴 위치 전용 래퍼 -
+   기존 .v3-sidebar-switch는 하단 계정 블록의 flex column(gap 7px) 안에 있단
+   전제로 margin-top: 3px가 붙어 있었는데, 상단에서는 이 래퍼가 간격을 대신
+   책임진다. */
+.v3-sidebar-switch-top {
+  padding: 0 16px 16px;
+}
+
+.v3-sidebar-switch-top .v3-sidebar-switch {
+  margin-top: 0;
+  width: 100%;
+}
 
 .v3-sidebar-switch {
   background: var(--v3-accent-bg);
@@ -4806,6 +4823,29 @@ button {
 
 .v3-scene-textarea:focus,
 .v3-system-prompt-textarea:focus { border-color: var(--v3-accent); outline: none; }
+
+/* 2026-08-12: Scene Detail 안내(구버전 이관) - 권장 입력 순서는 muted-text보다
+   한 단계 눈에 띄게, 입력 예시는 기본 접힘 상태로 둔다. */
+.v3-scene-detail-order {
+  color: var(--v3-text-secondary);
+  font-size: 11px;
+  margin: 0;
+}
+
+.v3-scene-detail-example {
+  color: var(--v3-text-label);
+  font-size: 11px;
+}
+
+.v3-scene-detail-example summary {
+  color: var(--v3-accent-text);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.v3-scene-detail-example p {
+  margin: 6px 0 0;
+}
 
 .v3-catalog-actions {
   border-top: 1px solid var(--v3-border-inner);

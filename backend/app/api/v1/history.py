@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.security import CurrentUser, require_permission
-from backend.app.db.models import WorkflowTask
-from backend.app.db.session import get_db
 from backend.app.services import studio_api_service
-from backend.app.services.audit_log_service import record_audit_log
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -22,17 +18,15 @@ def history(page: int = 1, pageSize: int = 20, _: CurrentUser = Depends(require_
 
 
 @router.post("/{task_id}/delete")
+# 2026-08-12: A-04가 이 삭제를 audit_logs에 action="history.delete"로 남기던
+# 것을 사용자 요청으로 제거했다 - 감사 로그는 "어드민 정보 수정사항"만
+# 남기기로 범위를 좁혔고, 자기 작업 이력을 지우는 건 history:delete 권한만
+# 있으면 되는 일반 사용자 동작이라 관리자 정보 수정이 아니다. db 세션은 더
+# 이상 이 라우트에서 쓰이지 않아 파라미터에서 뺐다.
 def delete_history_item(
     task_id: str,
-    request: Request,
-    current_user: CurrentUser = Depends(require_permission("history:delete")),
-    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permission("history:delete")),
 ):
-    # A-04: 삭제 전에 최소한의 스냅샷을 남긴다 - studio_api_service.delete_history_item은
-    # 자체 세션(history_repository())으로 실제 삭제를 수행하므로, 여기서는 별도 세션(db)으로
-    # 삭제 직전 상태만 조회해 감사 로그의 before_json에 담는다.
-    task = db.get(WorkflowTask, task_id)
-    before = {"taskId": task_id, "status": task.status, "workflowId": task.workflow_id} if task else None
     try:
         result = studio_api_service.delete_history_item(task_id)
     except KeyError as exc:
@@ -43,14 +37,4 @@ def delete_history_item(
     # 별개로 API 직접 호출도 여기서 막는다(방어적 이중 확인).
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    record_audit_log(
-        db,
-        actor_id=current_user.id,
-        action="history.delete",
-        target_type="history_item",
-        target_id=task_id,
-        before=before,
-        after={"deleted": True},
-        ip=request.client.host if request.client else None,
-    )
     return result

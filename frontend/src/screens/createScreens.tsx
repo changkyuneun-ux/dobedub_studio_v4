@@ -657,13 +657,24 @@ export function Create2bScreen({
                   <div className="v3-catalog-category-head">
                     <span className="v3-label">SCENE DETAIL · optional</span>
                   </div>
+                  {/* 2026-08-12: 사용자 요청 - 구버전(main.tsx 3019~3037행)에 있던 용도
+                      설명·권장 입력 순서·예시 안내가 이 화면엔 빠져 있었다. 자유 텍스트
+                      필드라 형식을 지키지 않아도 되지만(Generate Prompt에 그대로 반영되는
+                      설명일 뿐), 처음 쓰는 사용자가 뭘 적어야 할지 감을 잡기 어려워
+                      구버전 안내 문구를 그대로 옮긴다. */}
+                  <p className="v3-muted-text">선택한 키워드만으로 부족한 장면 설명을 입력합니다. 이 값은 Generate Prompt 실행 시 Scene 설명에 반영됩니다.</p>
+                  <p className="v3-scene-detail-order">권장 순서: 대상/관계 → 주요 동작 → 보조 동작·상호작용 → 카메라 → 표현·분위기</p>
                   <textarea
                     className="v3-scene-textarea"
-                    placeholder="예: input character turns slightly toward the camera with a calm expression"
+                    placeholder={"대상/관계: 여성 1명, 남성 1명\n주요 동작: 여성은 고개를 들고 손으로 바닥을 짚는다\n보조 동작/상호작용: 남성은 옆에서 바라본다\n카메라: 측면 미디엄 샷, 아이레벨, 고정 카메라\n표현/분위기: 긴장된 표정, 자연스러운 실내 조명"}
                     value={sceneDescription}
-                    rows={3}
+                    rows={4}
                     onChange={(event) => onSceneDescriptionChange(event.target.value)}
                   />
+                  <details className="v3-scene-detail-example">
+                    <summary>입력 예시 보기</summary>
+                    <p>원본 이미지의 외형·의상·배경은 유지하고, 새로 움직일 대상·동작·카메라 변화 중심으로 입력하세요. 자연스러운 영문 프롬프트는 Generate Prompt로 생성합니다.</p>
+                  </details>
                 </div>
               </div>
               <div className="v3-catalog-actions">
