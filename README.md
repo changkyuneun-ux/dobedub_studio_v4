@@ -9,7 +9,7 @@ RunPod Serverless에서 실행되는 ComfyUI Export(API) 워크플로우를 사�
 권장 실행:
 
 ```bash
-cd comfyui-video-studio-app-v3
+cd comfyui-video-studio-app-v4
 python3 -m pip install -r backend/requirements.txt
 python3 scripts/run_local.py
 ```
