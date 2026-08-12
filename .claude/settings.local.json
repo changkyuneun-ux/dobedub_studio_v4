@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git fetch *)",
+      "Bash(git push *)",
+      "Bash(awk 'NR>=849 && NR<=960 && \\(/onSave/||/onResetPassword/||/onDeactivate/||/v3-inline-actions/||/v3-primary-button/||/v3-danger-button/\\)' screens/adminScreens.tsx)",
+      "Bash(python3 -c ' *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m ' *)",
+      "Bash(awk '/class PromptSystemPrompt\\\\\\(/{f=1} f&&/updated_at:/{print NR\": \"$0; exit}' backend/app/db/models.py)"
+    ]
+  }
+}

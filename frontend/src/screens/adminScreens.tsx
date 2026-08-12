@@ -30,7 +30,7 @@ import {
   adminPermissionLabel
 } from "../helpers/adminForms";
 import { recordText } from "../helpers/workflow";
-import { shellNavigateAdmin } from "../helpers/navigation";
+import { shellNavigate, shellNavigateAdmin } from "../helpers/navigation";
 
 // E-04 · 7a "시스템 프롬프트" — design_handoff_dobedub_v3/4 Admin.dc.html의
 // 프롬프트 카탈로그 그룹 화면. 로직은 신규가 아니다 - 2b(Create2bScreen)의
@@ -223,9 +223,9 @@ export function Create6cScreen({
   return (
     <AppShell
       user={user}
-      area="admin"
-      activeItem="adminStatus"
-      onNavigate={(key) => shellNavigateAdmin(key, onGoTo)}
+      area="generate"
+      activeItem=""
+      onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ADMIN · SYSTEM STATUS"
       headerTitle="System Status"
       headerActions={
@@ -402,9 +402,9 @@ export function Create6dScreen({
   return (
     <AppShell
       user={user}
-      area="admin"
-      activeItem="adminMetadata"
-      onNavigate={(key) => shellNavigateAdmin(key, onGoTo)}
+      area="generate"
+      activeItem=""
+      onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ADMIN · METADATA"
       headerTitle="Workflow Metadata"
       headerActions={

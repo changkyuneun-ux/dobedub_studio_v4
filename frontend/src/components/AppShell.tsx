@@ -63,19 +63,20 @@ const GENERATE_NAV_ITEMS: NavItem[] = [
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.
-// adminStatus(6c)·adminMetadata(6d)는 design_handoff에서는 이 6항목 사이드바가
-// 아니라 별도 상단 nav 소속이지만(README/Screen Map), AppShell이 area를
-// generate/admin 두 가지만 지원하는 현재 구조에서 시스템 상태·메타데이터 조회는
-// 성격상 관리 기능에 가까워 E-04에서 ADMIN 영역에 편입했다 - 화면 자체(6c/6d)의
-// 내용·권한은 design_handoff 그대로다.
+// 2026-08-12: adminStatus(6c)·adminMetadata(6d)는 design_handoff에서도 원래 이
+// 6항목 사이드바가 아니라 별도 상단 nav(HELP) 소속이었다(README/Screen Map).
+// AppShell이 area를 generate/admin 두 가지만 지원하던 시절엔 임시로 ADMIN 영역에
+// 편입했었지만, 그 결과 스튜디오 HELP 메뉴에서 System Status/Metadata를 눌러도
+// 화면이 통째로 ADMIN 콘솔 쉘(전체 ADMIN 메뉴 + "← 스튜디오" 전환 버튼)로 바뀌는
+// 혼란스러운 현상이 있었다(사용자 리포트) - 두 항목을 여기서 제거하고 Create6c/
+// 6dScreen을 area="generate"로 되돌려 design_handoff 원래 소속(HELP 그룹, 아래
+// helpItems)으로 되돌린다. 화면 자체의 내용·권한은 변경 없음.
 const ADMIN_NAV_ITEMS: NavItem[] = [
   { key: "adminRoles", label: "역할 & 권한", permission: "roles:read" },
   { key: "adminUsers", label: "사용자", permission: "users:read" },
   { key: "adminCatalog", label: "프롬프트 카탈로그", permission: "prompt-catalog:read" },
   { key: "adminWorkflows", label: "워크플로 정의", permission: "workflows:read" },
   { key: "adminSandbox", label: "Sandbox Pod", permission: "sandbox:read" },
-  { key: "adminStatus", label: "System Status", permission: "system:read" },
-  { key: "adminMetadata", label: "Metadata", permission: "metadata:read" },
   { key: "adminAuditLog", label: "감사 로그", permission: "roles:read" }
 ];
 

@@ -18,8 +18,6 @@ import {
 } from "../auth";
 import { AppShell } from "../components/AppShell";
 import {
-  serviceStatusLabel,
-  qwenStatusLabel,
   formatElapsed
 } from "../helpers/format";
 import {
@@ -87,9 +85,6 @@ export function Create2aScreen({
   const segmentCount = schema?.segmentCount || selected?.segmentCount || 0;
   const missingCount = Math.max(requiredKeyframeCount - filledKeyframeCount, 0);
   const canProceed = Boolean(selectedWorkflow) && missingCount === 0;
-  const system = health?.system || health?.legacy;
-  const comfyStatus = serviceStatusLabel(Boolean(system?.runpod?.configured), "", system?.dryRun ? "DRY-RUN" : undefined);
-  const qwenStatus = qwenStatusLabel(system?.promptLlm, "");
 
   return (
     <AppShell
@@ -128,18 +123,6 @@ export function Create2aScreen({
           <div className="v3-step">
             <span className="v3-step-index">4</span>
             <span>결과 조회</span>
-          </div>
-        </div>
-      }
-      sidebarFooter={
-        <div className="v3-service-status">
-          <div>
-            <span>ComfyUI</span>
-            <strong className={comfyStatus === "ONLINE" ? "is-online" : "is-offline"}>{comfyStatus}</strong>
-          </div>
-          <div>
-            <span>Qwen LLM</span>
-            <strong className={qwenStatus === "ONLINE" ? "is-online" : "is-offline"}>{qwenStatus}</strong>
           </div>
         </div>
       }
