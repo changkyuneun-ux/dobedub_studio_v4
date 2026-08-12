@@ -4,7 +4,6 @@ import {
   HistoryItem,
   AssetItem,
   CollectionSummary,
-  CollectionDetail,
   TaskPromptReviewFlags,
   TaskPromptItem
 } from "../api/client";
@@ -671,22 +670,26 @@ export function Create4cScreen({
   );
 }
 
-// E-03 · 5a "자산" — design_handoff_dobedub_v3/3 Review.dc.html의 자산 그리드
-// 화면. A-01(`GET /api/assets`)이 이제 실제로 존재해 이 화면을 만들 수 있게 됐다.
+// E-03 · 5a "Asset 관리" — design_handoff_dobedub_v3/3 Review.dc.html의 자산
+// 그리드(5a)와 컬렉션(5c) 두 화면이었던 것을 2026-08-11 사용자 요청으로 하나로
+// 합쳤다: "asset을 output 기준으로 관리, asset은 output에 input 이미지가
+// 종속되는 구조로 변경, asset과 collection을 Asset 관리로 통합, Asset 하위
+// 카테고리에 collection(미분류 포함)을 가지며 각 하위 카테고리는 목록기반
+// 정보구조로 구성"(첨부 목업 참조). 백엔드도 함께 바뀌었다 - `GET /api/assets`가
+// 이제 `assets` 테이블 전체가 아니라 `task_output_assets`에 연결된 출력 자산만
+// 최상위로 내려주고(`list_assets`, task_tracking_service.py), 같은 작업의
+// 입력 이미지는 각 출력 행 안에 `inputAssets`로 종속되어 함께 온다. 한 번도
+// 출력으로 이어지지 못한 입력 전용 업로드(중단된 작업의 키프레임 등)는 사용자
+// 결정에 따라 이 화면에서 제외한다(출력 자산 목록이 원래 대상이 아님).
 //
 // 설계 원본과 다르게 뺀 것 — 전부 대응 백엔드가 없어서 뺐다(가짜 데이터 금지 원칙):
-// - 컬렉션(5c, "가을 캠페인" 등 사이드바 그룹) — A-02(컬렉션 테이블/API) 자체가
-//   저장소에 전혀 없음. "컬렉션에 추가" 버튼, 컬렉션 사이드바 트리 전부 제외.
 // - 태그(#가을 #야외 등), 공개 범위(PRIVATE/SHARED 토글) — `assets` 테이블에 대응
-//   컬럼이 없음(`asset_type`·`size_bytes`·`metadata_json`·`created_at`뿐).
+//   컬럼이 없음.
 // - 저장 용량 진행 바("184/500 GB") — 총 한도 값을 내려주는 API가 없음.
-// - "업로드" 버튼(설계는 이 화면에서 바로 업로드) — 업로드는 `2a` 키프레임
-//   슬롯에서만 발생하는 것이 현재 흐름이라 여기 별도 업로드 진입점을 만들지 않음.
-// - 정렬 드롭다운("최근 업로드순" 외 옵션) — API가 `created_at desc` 고정 정렬만
-//   지원. 옵션이 하나뿐이라 드롭다운 자체를 생략.
-// 대신 있는 것 — 실제 `task_output_assets` 조인 결과인 taskId/outputRole/workflowId는
-// 있으면 보여주고, 없으면(업로드만 되고 어떤 Run 출력에도 안 쓰인 자산) "미연결"로
-// 표기한다.
+// - "업로드" 버튼 — 업로드는 `2a` 키프레임 슬롯에서만 발생하는 것이 현재 흐름.
+// - 정렬 드롭다운 — API가 `created_at desc` 고정 정렬만 지원.
+// 컬렉션 소속은 다대다로 유지(사용자 선택 - 자산 하나가 여러 컬렉션에 동시에 속할
+// 수 있음) — 그래서 "Collection" 열은 단일 선택 대신 칩 목록 + 추가/제거로 구현.
 export function Create5aScreen({
   user,
   health,
@@ -698,10 +701,14 @@ export function Create5aScreen({
   total,
   loading,
   notice,
-  typeFilter,
-  selectedAssetId,
-  onSelect,
-  onTypeFilterChange,
+  collections,
+  collectionFilter,
+  createName,
+  onCollectionFilterChange,
+  onCreateNameChange,
+  onCreateCollection,
+  onAddToCollection,
+  onRemoveFromCollection,
   onPageChange,
   onPageSizeChange,
   onDownload
@@ -716,21 +723,21 @@ export function Create5aScreen({
   total: number;
   loading: boolean;
   notice: string;
-  typeFilter: string;
-  selectedAssetId: string;
-  onSelect: (item: AssetItem) => void;
-  onTypeFilterChange: (type: string) => void;
+  collections: CollectionSummary[];
+  collectionFilter: number | "uncategorized" | "";
+  createName: string;
+  onCollectionFilterChange: (value: number | "uncategorized" | "") => void;
+  onCreateNameChange: (value: string) => void;
+  onCreateCollection: () => void;
+  onAddToCollection: (assetId: string, collectionId: number) => void;
+  onRemoveFromCollection: (assetId: string, collectionId: number) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: 20 | 50) => void;
   onDownload: (item: AssetItem) => void;
 }) {
-  // 서버가 내려준 이번 페이지 항목들의 실제 asset_type만 필터 후보로 쓴다 —
-  // 설계 mock의 "키프레임/세그먼트 영상/Final 영상" 같은 고정 분류가 실제 코드의
-  // asset_type 값과 정확히 일치한다는 보장이 없어, 있는 값만으로 필터를 구성한다.
-  const typesInPage = Array.from(new Set(items.map((item) => item.type).filter(Boolean)));
-  const selectedItem = items.find((item) => item.assetId === selectedAssetId) || items[0] || null;
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
+  const gridColumns = "168px 108px minmax(0,1fr) 96px 88px 62px 176px 68px";
 
   return (
     <AppShell
@@ -739,83 +746,121 @@ export function Create5aScreen({
       activeItem="assets"
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ASSETS"
-      headerTitle={`전체 ${total}개`}
+      headerTitle={`Asset 관리 · 전체 ${total}개`}
+      headerActions={
+        <>
+          <input
+            className="v3-search-input"
+            value={createName}
+            placeholder="새 컬렉션 이름"
+            onChange={(event) => onCreateNameChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && createName.trim()) {
+                onCreateCollection();
+              }
+            }}
+          />
+          <button className="v3-secondary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>＋ 컬렉션 만들기</button>
+        </>
+      }
       sidebarExtra={
         <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>종류</div>
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>Collection · {collections.length}</div>
           <button
             type="button"
-            className={`v3-segment-nav-item ${!typeFilter ? "is-active" : ""}`}
-            onClick={() => onTypeFilterChange("")}
+            className={`v3-segment-nav-item ${collectionFilter === "" ? "is-active" : ""}`}
+            onClick={() => onCollectionFilterChange("")}
           >
             <div className="v3-segment-nav-head"><span>전체</span></div>
           </button>
-          {typesInPage.map((type) => (
+          <button
+            type="button"
+            className={`v3-segment-nav-item ${collectionFilter === "uncategorized" ? "is-active" : ""}`}
+            onClick={() => onCollectionFilterChange("uncategorized")}
+          >
+            <div className="v3-segment-nav-head"><span>미분류</span></div>
+          </button>
+          {loading && !collections.length ? <p className="v3-muted-text" style={{ padding: "4px 10px" }}>불러오는 중입니다...</p> : null}
+          {collections.map((c) => (
             <button
-              key={type}
+              key={c.id}
               type="button"
-              className={`v3-segment-nav-item ${typeFilter === type ? "is-active" : ""}`}
-              onClick={() => onTypeFilterChange(type)}
+              className={`v3-segment-nav-item ${collectionFilter === c.id ? "is-active" : ""}`}
+              onClick={() => onCollectionFilterChange(c.id)}
             >
-              <div className="v3-segment-nav-head"><span>{type}</span></div>
+              <div className="v3-segment-nav-head"><span>{c.name}</span><span>{c.itemCount}</span></div>
             </button>
           ))}
         </div>
       }
-      sidebarFooter={
-        <div className="v3-muted-text">
-          <button className="v3-text-link-button" type="button" onClick={() => onGoTo("review.collections")}>컬렉션 보기 →</button>
-          <p style={{ margin: "6px 0 0" }}>한 페이지 {pageSize}건 · 태그·공개범위는 아직 지원하지 않습니다</p>
-        </div>
-      }
-      rightPanel={
-        selectedItem ? (
-          <>
-            <div className="v3-panel-title-row">
-              <div className="v3-panel-title">{selectedItem.fileName}</div>
-              <span className="v3-status-badge is-ready">{selectedItem.type || "-"}</span>
-            </div>
-            <div className="v3-summary-card">
-              <div className="v3-summary-row"><span>크기</span><strong>{(selectedItem.sizeBytes / 1024).toFixed(1)} KB</strong></div>
-              <div className="v3-summary-row"><span>MIME</span><strong>{selectedItem.mimeType || "-"}</strong></div>
-              <div className="v3-summary-row"><span>생성일</span><strong>{selectedItem.createdAt || "-"}</strong></div>
-              <div className="v3-summary-row"><span>연결된 Run</span><strong>{selectedItem.taskId ? `#${selectedItem.taskId.slice(0, 8)} · ${selectedItem.outputRole || "-"}` : "미연결"}</strong></div>
-              {selectedItem.workflowId ? <div className="v3-summary-row"><span>워크플로</span><strong>{selectedItem.workflowId}</strong></div> : null}
-            </div>
-            <div className="v3-inline-actions">
-              <button className="v3-primary-button v3-flex-button" type="button" onClick={() => onDownload(selectedItem)}>다운로드</button>
-              {selectedItem.taskId ? (
-                <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onGoTo("review.history")}>작업 이력에서 보기</button>
-              ) : null}
-            </div>
-          </>
-        ) : (
-          <p className="v3-muted-text">왼쪽 목록에서 자산을 선택하세요.</p>
-        )
-      }
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
-      <div className="v3-reuse-grid">
-        {loading ? <p className="v3-muted-text">불러오는 중입니다...</p> : null}
-        {!loading && !items.length ? <p className="v3-muted-text">표시할 자산이 없습니다.</p> : null}
-        {items.map((item) => {
-          const isSelected = item.assetId === selectedAssetId;
+      <div className="v3-card" style={{ overflowX: "auto" }}>
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }}>
+          <span>Collection</span><span>Asset ID</span><span>Asset 이름</span><span>생성일</span><span>생성자</span><span>미리보기</span><span>입력 이미지</span><span style={{ textAlign: "right" }}>다운로드</span>
+        </div>
+        {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
+        {!loading && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 자산이 없습니다.</p> : null}
+        {!loading && items.map((item) => {
+          const itemCollectionIds = new Set((item.collections || []).map((c) => c.id));
+          const availableToAdd = collections.filter((c) => !itemCollectionIds.has(c.id));
+          const isImage = (item.mimeType || "").startsWith("image/");
           return (
-            <div
-              key={item.assetId}
-              className={`v3-card v3-reuse-card ${isSelected ? "is-selected" : ""}`}
-              style={{ cursor: "pointer" }}
-              onClick={() => onSelect(item)}
-            >
-              <div className="v3-card-header">
-                <div className="v3-card-header-title">{item.type || "asset"}</div>
-                <span className="v3-status-badge is-ready">{(item.sizeBytes / 1024).toFixed(0)} KB</span>
-              </div>
-              <div className="v3-reuse-body">
-                <div style={{ fontWeight: 600, fontSize: 12.5, wordBreak: "break-all" }}>{item.fileName}</div>
-                <div className="v3-summary-row"><span>연결</span><strong>{item.taskId ? `#${item.taskId.slice(0, 8)} · ${item.outputRole || "-"}` : "미연결"}</strong></div>
-                <div className="v3-summary-row"><span>생성일</span><strong>{item.createdAt || "-"}</strong></div>
-              </div>
+            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }} key={item.assetId}>
+              <span>
+                <div className="v3-asset-collection-chips">
+                  {(item.collections || []).length ? (item.collections || []).map((c) => (
+                    <span className="v3-asset-collection-chip" key={c.id}>
+                      {c.name}
+                      <button
+                        type="button"
+                        className="v3-asset-collection-chip-remove"
+                        title={`${c.name}에서 빼기`}
+                        onClick={() => onRemoveFromCollection(item.assetId, c.id)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )) : <span className="v3-muted-text">미분류</span>}
+                </div>
+                {availableToAdd.length ? (
+                  <select
+                    className="v3-asset-collection-add"
+                    value=""
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (value) onAddToCollection(item.assetId, value);
+                      event.target.value = "";
+                    }}
+                  >
+                    <option value="">+ 컬렉션에 담기</option>
+                    {availableToAdd.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : null}
+              </span>
+              <span className="v3-review-seg-name" title={item.assetId}>{item.assetId.slice(0, 12)}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.fileName}>
+                {item.fileName}
+              </span>
+              <span style={{ fontSize: 11.5 }}>{item.createdAt || "-"}</span>
+              <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.createdBy || "-"}>
+                {item.createdBy || "-"}
+              </span>
+              <span className="v3-kf-thumb v3-kf-thumb-sm">
+                {isImage ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.fileName} /> : <span>{(item.type || item.mimeType || "FILE").toUpperCase().slice(0, 4)}</span>}
+              </span>
+              <span className="v3-asset-input-row">
+                {(item.inputAssets || []).length ? (item.inputAssets || []).map((input) => (
+                  <span className="v3-kf-thumb v3-kf-thumb-sm" key={input.assetId} title={input.fileName}>
+                    <ProtectedImage src={`/api/files/${input.assetId}`} alt={input.fileName} />
+                  </span>
+                )) : <span className="v3-muted-text">-</span>}
+              </span>
+              <span style={{ textAlign: "right" }}>
+                <button className="v3-text-link-button" type="button" onClick={() => onDownload(item)}>다운로드</button>
+              </span>
             </div>
           );
         })}
@@ -832,139 +877,6 @@ export function Create5aScreen({
           </select>
         </div>
       </div>
-    </AppShell>
-  );
-}
-
-// A-02 · 5c 자산 컬렉션 — design_handoff_dobedub_v3/3 Review.dc.html의 5c.
-// 사이드바에서 컬렉션을 고르거나 새로 만들고, 본문에 그 컬렉션에 담긴 자산을,
-// 우측 패널에서 최근 자산을 담는다.
-// 설계 원본과 다르게 뺀 것(더미 금지 - 대응 백엔드 컬럼/테이블 없음):
-// - 자산 태그, 공개 범위(PRIVATE/SHARED) 필터/뱃지 - 5a와 동일하게 assets 테이블에
-//   해당 컬럼이 없다.
-// - 검색·정렬(담은 순 등)·그리드/목록 전환 - 목록 정렬은 서버가 sort_order 순으로만
-//   내려주며 클라 정렬/검색 파라미터를 받지 않는다.
-// - 소유자 표기는 컬렉션의 createdBy(로그인 id)만 있고 표시명 매핑이 없어 id 그대로.
-export function Create5cScreen({
-  user,
-  onGoTo,
-  collections,
-  selectedCollectionId,
-  detail,
-  loading,
-  notice,
-  createName,
-  recentAssets,
-  onSelectCollection,
-  onCreateNameChange,
-  onCreateCollection,
-  onAddAsset,
-  onDownload
-}: {
-  user: User | null;
-  onGoTo: (route: StudioRoute) => void;
-  collections: CollectionSummary[];
-  selectedCollectionId: number | null;
-  detail: CollectionDetail | null;
-  loading: boolean;
-  notice: string;
-  createName: string;
-  recentAssets: AssetItem[];
-  onSelectCollection: (id: number) => void;
-  onCreateNameChange: (value: string) => void;
-  onCreateCollection: () => void;
-  onAddAsset: (assetId: string) => void;
-  onDownload: (item: AssetItem) => void;
-}) {
-  const selected = collections.find((c) => c.id === selectedCollectionId) || null;
-  const items = detail && detail.id === selectedCollectionId ? detail.items : [];
-  const itemAssetIds = new Set(items.map((item) => item.assetId));
-
-  return (
-    <AppShell
-      user={user}
-      area="generate"
-      activeItem="collections"
-      onNavigate={(key) => shellNavigate(key, onGoTo)}
-      headerEyebrow="ASSETS · 컬렉션"
-      headerTitle={selected ? selected.name : "컬렉션"}
-      headerActions={<button className="v3-secondary-button" type="button" onClick={() => onGoTo("review.assets")}>자산 목록으로</button>}
-      sidebarExtra={
-        <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>컬렉션 · {collections.length}</div>
-          {loading && !collections.length ? <p className="v3-muted-text" style={{ padding: "4px 10px" }}>불러오는 중입니다...</p> : null}
-          {!loading && !collections.length ? <p className="v3-muted-text" style={{ padding: "4px 10px" }}>컬렉션이 없습니다. 아래에서 만드세요.</p> : null}
-          {collections.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`v3-segment-nav-item ${selectedCollectionId === c.id ? "is-active" : ""}`}
-              onClick={() => onSelectCollection(c.id)}
-            >
-              <div className="v3-segment-nav-head"><span>{c.name}</span><span>{c.itemCount}</span></div>
-            </button>
-          ))}
-          <div className="v3-collection-create">
-            <input
-              value={createName}
-              placeholder="새 컬렉션 이름"
-              onChange={(event) => onCreateNameChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && createName.trim()) {
-                  onCreateCollection();
-                }
-              }}
-            />
-            <button className="v3-secondary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>＋ 컬렉션 만들기</button>
-          </div>
-        </div>
-      }
-      rightPanel={
-        selected ? (
-          <>
-            <div className="v3-panel-title">자산 추가</div>
-            <p className="v3-muted-text">최근 자산을 "{selected.name}"에 담습니다.</p>
-            {recentAssets.length ? recentAssets.map((asset) => {
-              const added = itemAssetIds.has(asset.assetId);
-              return (
-                <div className="v3-summary-card" key={asset.assetId}>
-                  <div style={{ fontWeight: 600, fontSize: 12, wordBreak: "break-all" }}>{asset.fileName}</div>
-                  <div className="v3-summary-row"><span>연결</span><strong>{asset.taskId ? `#${asset.taskId.slice(0, 8)}` : "미연결"}</strong></div>
-                  <button className="v3-secondary-button v3-flex-button" type="button" disabled={added} onClick={() => onAddAsset(asset.assetId)}>
-                    {added ? "담김" : "담기"}
-                  </button>
-                </div>
-              );
-            }) : <p className="v3-muted-text">담을 자산이 없습니다.</p>}
-          </>
-        ) : <p className="v3-muted-text">왼쪽에서 컬렉션을 선택하거나 새로 만드세요.</p>
-      }
-    >
-      {notice ? <p className="v3-inline-notice">{notice}</p> : null}
-      {loading && !detail ? (
-        <p className="v3-muted-text">불러오는 중입니다...</p>
-      ) : !selected ? (
-        <p className="v3-muted-text">컬렉션을 선택하거나 새로 만드세요.</p>
-      ) : !items.length ? (
-        <p className="v3-muted-text">이 컬렉션에 담긴 자산이 없습니다. 오른쪽 패널에서 자산을 담아보세요.</p>
-      ) : (
-        <div className="v3-reuse-grid">
-          {items.map((item) => (
-            <div className="v3-card v3-reuse-card" key={item.assetId}>
-              <div className="v3-card-header">
-                <div className="v3-card-header-title">{item.type || "asset"}</div>
-                <span className="v3-status-badge is-ready">#{item.sortOrder}</span>
-              </div>
-              <div className="v3-reuse-body">
-                <div style={{ fontWeight: 600, fontSize: 12.5, wordBreak: "break-all" }}>{item.fileName}</div>
-                <div className="v3-summary-row"><span>연결</span><strong>{item.taskId ? `#${item.taskId.slice(0, 8)} · ${item.outputRole || "-"}` : "미연결"}</strong></div>
-                <div className="v3-summary-row"><span>생성일</span><strong>{item.createdAt || "-"}</strong></div>
-                <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onDownload(item)}>다운로드</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </AppShell>
   );
 }

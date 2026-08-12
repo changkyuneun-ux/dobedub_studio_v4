@@ -56,9 +56,10 @@ const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "workspace", label: "Workspace" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
   { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse" },
-  { key: "assets", label: "Assets", permission: "history:read" },
-  // A-02: 5c 컬렉션. 자산과 같은 history:read로 노출.
-  { key: "collections", label: "Collections", permission: "history:read" }
+  // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "Asset 관리" 한
+  // 화면으로 통합 - 사이드바 메뉴도 Assets 하나로 줄었다(컬렉션은 그 화면
+  // 안의 필터로 이동).
+  { key: "assets", label: "Assets", permission: "history:read" }
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.

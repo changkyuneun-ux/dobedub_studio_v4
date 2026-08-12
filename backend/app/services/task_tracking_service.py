@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from backend.app.db.models import Asset, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
+from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
 
@@ -91,33 +91,54 @@ def list_assets(
     workflow_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    collection_id: int | None = None,
+    uncategorized: bool = False,
 ) -> list[dict]:
-    """A-01: `GET /api/assets` 목록. history와 동일하게 DB 전용으로 구현한다(D-03
-    선례 - 운영은 `PERSISTENCE_BACKEND=db`가 필수값이라 repository 추상화를 통하지
-    않아도 실사용 경로와 어긋나지 않음). `taskId`/`outputRole`은 `task_output_assets`
-    조인으로 채운다 - 업로드만 되고 아직 어떤 작업의 출력으로도 연결되지 않은 자산은
-    두 필드가 빈 값으로 남는다(입력 이미지 등)."""
+    """2026-08-11 재구성: "Asset 관리" 화면 통합 요청으로 자산 목록을 **출력(output)
+    기준**으로 바꿨다 - 예전에는 `assets` 테이블 전체(입력 이미지·출력 영상 구분 없이)를
+    평평하게 나열했지만, 이제는 `task_output_assets`에 연결된 자산만 최상위 행으로 삼고,
+    같은 작업(task_id)의 입력 이미지들은 그 출력 행에 `inputAssets`로 종속시킨다
+    (design_handoff 첨부 목업 - Asset_id/생성일/생성자/Input asset Images/Collection
+    분류 열 구조). 한 번도 출력으로 이어지지 못한 입력 전용 업로드(중단된 작업의
+    키프레임 등)는 사용자 결정에 따라 이 목록에서 제외한다 - 갈 곳이 없어지는 게
+    아니라 애초에 "출력 자산" 목록이 아니므로 대상이 아니다.
+    `collection_id`/`uncategorized`는 신규 필터: 컬렉션 하나를 지정하거나(다대다이므로
+    한 자산이 여러 컬렉션 필터에 동시에 걸릴 수 있음), 반대로 "미분류"(어느 컬렉션에도
+    없는 자산)만 볼 수 있다."""
     session = SessionLocal()
     try:
-        statement = select(Asset.id).order_by(Asset.created_at.desc(), Asset.id.desc())
-        conditions = _asset_filter_conditions(session, asset_type=asset_type, workflow_id=workflow_id, date_from=date_from, date_to=date_to)
+        statement = (
+            select(TaskOutputAsset.asset_id)
+            .join(Asset, Asset.id == TaskOutputAsset.asset_id)
+            .order_by(Asset.created_at.desc(), TaskOutputAsset.id.desc())
+        )
+        conditions = _asset_filter_conditions(
+            asset_type=asset_type,
+            workflow_id=workflow_id,
+            date_from=date_from,
+            date_to=date_to,
+            collection_id=collection_id,
+            uncategorized=uncategorized,
+        )
         if conditions:
             statement = statement.where(*conditions)
         if page is not None and page_size is not None:
             safe_page = max(1, int(page))
             safe_page_size = max(1, min(200, int(page_size)))
             statement = statement.offset((safe_page - 1) * safe_page_size).limit(safe_page_size)
-        asset_ids = list(session.scalars(statement))
+        # 동일 자산이 여러 작업의 출력으로 연결될 일은 없지만(assets.id는 생성
+        # 시점에 1건만 만들어짐), 방어적으로 중복은 첫 값만 남긴다.
+        asset_ids: list[str] = []
+        seen = set()
+        for asset_id in session.scalars(statement):
+            if asset_id in seen:
+                continue
+            seen.add(asset_id)
+            asset_ids.append(asset_id)
         if not asset_ids:
             return []
 
-        assets_by_id = {
-            asset.id: asset
-            for asset in session.scalars(select(Asset).where(Asset.id.in_(asset_ids))).all()
-        }
-        # A-01 완료 기준: 응답에 연결된 taskId·output_role 포함. 동일 자산이 여러
-        # 작업의 출력으로 연결될 일은 없지만(assets.id는 생성 시점에 1건만 만들어짐),
-        # 만약을 대비해 가장 최근 링크 하나만 취한다.
+        assets_by_id = _assets_by_id(session)
         links = session.scalars(
             select(TaskOutputAsset)
             .where(TaskOutputAsset.asset_id.in_(asset_ids))
@@ -129,15 +150,45 @@ def list_assets(
         task_ids = {link.task_id for link in link_by_asset.values()}
         tasks_by_id = {
             task.id: task
-            for task in (session.scalars(select(WorkflowTask).where(WorkflowTask.id.in_(task_ids))).all() if task_ids else [])
+            for task in (
+                session.scalars(
+                    select(WorkflowTask).options(selectinload(WorkflowTask.user)).where(WorkflowTask.id.in_(task_ids))
+                ).all()
+                if task_ids
+                else []
+            )
         }
+        # 종속 입력 이미지: 같은 task_id의 TaskInputAsset을 slot 순서로 모아둔다.
+        input_links = session.scalars(
+            select(TaskInputAsset)
+            .where(TaskInputAsset.task_id.in_(task_ids))
+            .order_by(TaskInputAsset.task_id, TaskInputAsset.slot_index.asc())
+        ).all() if task_ids else []
+        # _assets_by_id(session)는 이미 JSON으로 변환된 dict를 담고 있다(assets
+        # 테이블 전체, 아래 참조) - 입력 이미지 asset_id도 별도 조회 없이 바로
+        # 찾을 수 있고, 다시 _asset_to_json을 호출하지 않는다(이미 dict라 오류남).
+        inputs_by_task: dict[str, list[dict]] = {}
+        for link in input_links:
+            asset_json = assets_by_id.get(link.asset_id)
+            if not asset_json:
+                continue
+            inputs_by_task.setdefault(link.task_id, []).append(dict(asset_json))
+        # 이 자산이 속한 컬렉션들(다대다) - "Collection 분류" 칩 목록.
+        collection_items = session.execute(
+            select(CollectionItem.asset_id, Collection.id, Collection.name)
+            .join(Collection, Collection.id == CollectionItem.collection_id)
+            .where(CollectionItem.asset_id.in_(asset_ids))
+        ).all()
+        collections_by_asset: dict[str, list[dict]] = {}
+        for asset_id, cid, cname in collection_items:
+            collections_by_asset.setdefault(asset_id, []).append({"id": cid, "name": cname})
 
         items = []
         for asset_id in asset_ids:
-            asset = assets_by_id.get(asset_id)
-            if not asset:
+            asset_json = assets_by_id.get(asset_id)
+            if not asset_json:
                 continue
-            item = _asset_to_json(asset)
+            item = dict(asset_json)
             link = link_by_asset.get(asset_id)
             item["taskId"] = link.task_id if link else ""
             item["outputRole"] = link.output_role if link else ""
@@ -145,17 +196,39 @@ def list_assets(
             task = tasks_by_id.get(link.task_id) if link else None
             if task:
                 item["workflowId"] = task.workflow_id
+                item["createdBy"] = task.user.name if task.user else task.user_id
+            else:
+                item["createdBy"] = None
+            item["inputAssets"] = inputs_by_task.get(link.task_id, []) if link else []
+            item["collections"] = collections_by_asset.get(asset_id, [])
             items.append(item)
         return items
     finally:
         session.close()
 
 
-def assets_total(*, asset_type: str = "", workflow_id: str = "", date_from: str = "", date_to: str = "") -> int:
+def assets_total(
+    *,
+    asset_type: str = "",
+    workflow_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    collection_id: int | None = None,
+    uncategorized: bool = False,
+) -> int:
     session = SessionLocal()
     try:
-        conditions = _asset_filter_conditions(session, asset_type=asset_type, workflow_id=workflow_id, date_from=date_from, date_to=date_to)
-        statement = select(func.count()).select_from(Asset)
+        conditions = _asset_filter_conditions(
+            asset_type=asset_type,
+            workflow_id=workflow_id,
+            date_from=date_from,
+            date_to=date_to,
+            collection_id=collection_id,
+            uncategorized=uncategorized,
+        )
+        statement = select(func.count(func.distinct(TaskOutputAsset.asset_id))).select_from(TaskOutputAsset).join(
+            Asset, Asset.id == TaskOutputAsset.asset_id
+        )
         if conditions:
             statement = statement.where(*conditions)
         return int(session.scalar(statement) or 0)
@@ -164,13 +237,17 @@ def assets_total(*, asset_type: str = "", workflow_id: str = "", date_from: str 
 
 
 def _asset_filter_conditions(
-    session: Session,
     *,
     asset_type: str,
     workflow_id: str,
     date_from: str,
     date_to: str,
+    collection_id: int | None = None,
+    uncategorized: bool = False,
 ) -> list:
+    # 2026-08-11: list_assets/assets_total이 이제 TaskOutputAsset을 기준으로
+    # 조회하므로(위 참조) 여기 조건도 그 기준 테이블(및 조인된 Asset)을 대상으로
+    # 건다 - 예전엔 Asset 단독 쿼리였다.
     conditions = []
     if asset_type:
         conditions.append(Asset.asset_type == asset_type)
@@ -182,11 +259,19 @@ def _asset_filter_conditions(
         conditions.append(Asset.created_at <= parsed_to)
     if workflow_id:
         conditions.append(
-            Asset.id.in_(
-                select(TaskOutputAsset.asset_id)
-                .join(WorkflowTask, TaskOutputAsset.task_id == WorkflowTask.id)
-                .where(WorkflowTask.workflow_id == workflow_id)
+            TaskOutputAsset.task_id.in_(
+                select(WorkflowTask.id).where(WorkflowTask.workflow_id == workflow_id)
             )
+        )
+    if collection_id:
+        conditions.append(
+            TaskOutputAsset.asset_id.in_(
+                select(CollectionItem.asset_id).where(CollectionItem.collection_id == int(collection_id))
+            )
+        )
+    if uncategorized:
+        conditions.append(
+            ~select(CollectionItem.asset_id).where(CollectionItem.asset_id == TaskOutputAsset.asset_id).exists()
         )
     return conditions
 

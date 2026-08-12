@@ -83,8 +83,7 @@ import {
 import {
   Create3aScreen,
   Create4cScreen,
-  Create5aScreen,
-  Create5cScreen
+  Create5aScreen
 } from "./screens/reviewScreens";
 import {
   Create7aScreen,
@@ -112,7 +111,6 @@ import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "review.history": "history:read",
   "review.assets": "history:read",
-  "review.collections": "history:read",
   "admin.systemPrompt": "prompts:build",
   "admin.sandbox": "sandbox:read",
   "admin.roles": "roles:read",
@@ -141,7 +139,6 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "review.history": "Task History",
   "review.assets": "Assets",
-  "review.collections": "Collections",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
   "admin.roles": "역할 & 권한",
@@ -181,21 +178,19 @@ export function StudioShell({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryTaskId, setSelectedHistoryTaskId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<HistoryItem | null>(null);
-  // E-03(5a): 3a와 동일한 20/50 페이지네이션 패턴을 그대로 따른다.
+  // E-03(5a+5c 통합, 2026-08-11): "Asset 관리" - 3a와 동일한 20/50 페이지네이션
+  // 패턴은 유지하되, 목록 자체가 이제 출력 자산 기준이고 컬렉션 필터가 곧 사이드바
+  // 카테고리다. 예전엔 5a(자산 type 필터+선택 상세)와 5c(컬렉션 선택+상세)가 각자
+  // 상태를 들고 있었지만, 화면이 하나로 합쳐지며 "지금 보고 있는 컬렉션 필터"
+  // 하나로 정리됐다 - "" = 전체, "uncategorized" = 미분류, 숫자 = 그 컬렉션.
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [assetsPage, setAssetsPage] = useState(1);
   const [assetsPageSize, setAssetsPageSize] = useState<20 | 50>(20);
   const [assetsTotal, setAssetsTotal] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [assetsNotice, setAssetsNotice] = useState("");
-  const [assetsTypeFilter, setAssetsTypeFilter] = useState("");
-  const [selectedAssetId, setSelectedAssetId] = useState("");
-  // A-02 · 5c 컬렉션 상태.
+  const [assetsCollectionFilter, setAssetsCollectionFilter] = useState<number | "uncategorized" | "">("");
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
-  const [collectionDetail, setCollectionDetail] = useState<CollectionDetail | null>(null);
-  const [collectionsLoading, setCollectionsLoading] = useState(false);
-  const [collectionsNotice, setCollectionsNotice] = useState("");
   const [collectionCreateName, setCollectionCreateName] = useState("");
   // E-04(4a/4d): 구버전 AdminConsoleModal Workflows 탭의 상태를 그대로 옮겨왔다.
   // Create flow가 쓰는 `workflows`(WorkflowItem[], apiClient.workflows())와는 다른
@@ -339,21 +334,19 @@ export function StudioShell({
     }
   }
 
-  async function loadAssetsPage(page = assetsPage, pageSize = assetsPageSize, type = assetsTypeFilter) {
+  async function loadAssetsPage(page = assetsPage, pageSize = assetsPageSize, collectionFilter = assetsCollectionFilter) {
     setAssetsLoading(true);
     setAssetsNotice("");
     try {
-      const response = await apiClient.assets({ page, pageSize, type });
-      const items = response.items || [];
-      setAssets(items);
+      const response = await apiClient.assets({
+        page,
+        pageSize,
+        collectionId: typeof collectionFilter === "number" ? collectionFilter : undefined,
+        uncategorized: collectionFilter === "uncategorized"
+      });
+      setAssets(response.items || []);
       setAssetsPage(response.page || page);
       setAssetsTotal(response.total || 0);
-      setSelectedAssetId((current) => {
-        if (current && items.some((item) => item.assetId === current)) {
-          return current;
-        }
-        return items[0]?.assetId || "";
-      });
     } catch (error) {
       setAssetsNotice(error instanceof Error ? error.message : "자산 목록을 불러오지 못했습니다.");
     } finally {
@@ -361,44 +354,20 @@ export function StudioShell({
     }
   }
 
-  function changeAssetsTypeFilter(type: string) {
-    setAssetsTypeFilter(type);
-    void loadAssetsPage(1, assetsPageSize, type);
+  function changeAssetsCollectionFilter(filter: number | "uncategorized" | "") {
+    setAssetsCollectionFilter(filter);
+    void loadAssetsPage(1, assetsPageSize, filter);
   }
 
-  // A-02 · 5c 컬렉션 로더/핸들러.
-  async function loadCollections(selectId?: number) {
-    setCollectionsLoading(true);
-    setCollectionsNotice("");
+  // 2026-08-11(Asset 관리 통합): 컬렉션은 이제 사이드바 필터 겸 각 행의 칩으로만
+  // 쓰여 별도 "선택된 컬렉션 상세" 상태가 필요 없다 - 목록만 불러온다.
+  async function loadCollections() {
     try {
       const response = await apiClient.collections();
-      const items = response.items || [];
-      setCollections(items);
-      const nextId = selectId ?? selectedCollectionId ?? items[0]?.id ?? null;
-      setSelectedCollectionId(nextId);
-      if (nextId != null) {
-        await loadCollectionDetail(nextId);
-      } else {
-        setCollectionDetail(null);
-      }
+      setCollections(response.items || []);
     } catch (error) {
-      setCollectionsNotice(error instanceof Error ? error.message : "컬렉션을 불러오지 못했습니다.");
-    } finally {
-      setCollectionsLoading(false);
+      setAssetsNotice(error instanceof Error ? error.message : "컬렉션을 불러오지 못했습니다.");
     }
-  }
-
-  async function loadCollectionDetail(id: number) {
-    try {
-      setCollectionDetail(await apiClient.collection(id));
-    } catch (error) {
-      setCollectionsNotice(error instanceof Error ? error.message : "컬렉션 상세를 불러오지 못했습니다.");
-    }
-  }
-
-  function selectCollection(id: number) {
-    setSelectedCollectionId(id);
-    void loadCollectionDetail(id);
   }
 
   async function createCollection() {
@@ -406,36 +375,43 @@ export function StudioShell({
     if (!name) {
       return;
     }
-    setCollectionsNotice("");
+    setAssetsNotice("");
     try {
       const created = await apiClient.createCollection(name);
       setCollectionCreateName("");
-      await loadCollections(created.id);
-      setCollectionsNotice(`컬렉션 "${created.name}"을(를) 만들었습니다.`);
+      await loadCollections();
+      setAssetsNotice(`컬렉션 "${created.name}"을(를) 만들었습니다.`);
     } catch (error) {
-      setCollectionsNotice(error instanceof Error ? error.message : "컬렉션 생성에 실패했습니다.");
+      setAssetsNotice(error instanceof Error ? error.message : "컬렉션 생성에 실패했습니다.");
     }
   }
 
-  async function addAssetToCollection(assetId: string) {
-    if (selectedCollectionId == null) {
-      return;
-    }
-    setCollectionsNotice("");
+  // 2026-08-11(Asset 관리 통합): 자산 하나가 여러 컬렉션에 동시에 속할 수 있어
+  // (다대다 유지) 행마다 담기/빼기를 할 수 있다. 둘 다 컬렉션 itemCount와 현재
+  // 필터 결과(예: "미분류"에서 담으면 그 행이 목록에서 사라짐)를 함께 새로고침한다.
+  async function addAssetToCollectionRow(assetId: string, collectionId: number) {
+    setAssetsNotice("");
     try {
-      const detail = await apiClient.addCollectionItem(selectedCollectionId, assetId);
-      setCollectionDetail(detail);
-      // 목록의 itemCount도 갱신되도록 요약을 다시 불러온다(상세 선택은 유지).
-      const response = await apiClient.collections();
-      setCollections(response.items || []);
+      await apiClient.addCollectionItem(collectionId, assetId);
+      await Promise.all([loadCollections(), loadAssetsPage()]);
     } catch (error) {
-      setCollectionsNotice(error instanceof Error ? error.message : "자산을 담지 못했습니다.");
+      setAssetsNotice(error instanceof Error ? error.message : "자산을 담지 못했습니다.");
+    }
+  }
+
+  async function removeAssetFromCollectionRow(assetId: string, collectionId: number) {
+    setAssetsNotice("");
+    try {
+      await apiClient.removeCollectionItem(collectionId, assetId);
+      await Promise.all([loadCollections(), loadAssetsPage()]);
+    } catch (error) {
+      setAssetsNotice(error instanceof Error ? error.message : "자산을 빼지 못했습니다.");
     }
   }
 
   function changeAssetsPageSize(pageSize: 20 | 50) {
     setAssetsPageSize(pageSize);
-    void loadAssetsPage(1, pageSize, assetsTypeFilter);
+    void loadAssetsPage(1, pageSize, assetsCollectionFilter);
   }
 
   // B-01: 페이지 크기를 바꾸면 현재 페이지 번호 기준이 달라지므로 1페이지로
@@ -1220,12 +1196,10 @@ export function StudioShell({
       void loadHistoryPage(1);
     }
     if (route === "review.assets") {
+      // 2026-08-11(Asset 관리 통합): 사이드바 컬렉션 필터 목록도 함께 불러온다
+      // (예전엔 review.collections 라우트에서만 불렀음).
       void loadAssetsPage(1);
-    }
-    if (route === "review.collections") {
-      // 우측 "자산 추가" 패널이 쓸 최근 자산 목록도 함께 불러온다(assets 상태 재사용).
       void loadCollections();
-      void loadAssetsPage(1);
     }
     // 2026-08-11: 사용자 요청 - 프롬프트 라이브러리(4c)가 사이드바 메뉴 등으로
     // 직접 진입했을 때는 목록이 비어 있고 Search를 눌러야만 채워졌다. "라이브러리
@@ -1880,17 +1854,7 @@ export function StudioShell({
       <Create5aScreen
         user={user}
         health={health}
-        onGoTo={(nextRoute) => {
-          // 2026-08-11: review.runDetail 폐지 - 자산에 연결된 Run을 볼 때도
-          // review.history로 이동하고 그 Run을 선택 상태로 만든다.
-          if (nextRoute === "review.history" && selectedAssetId) {
-            const asset = assets.find((item) => item.assetId === selectedAssetId);
-            if (asset?.taskId) {
-              setSelectedHistoryTaskId(asset.taskId);
-            }
-          }
-          onNavigate(nextRoute);
-        }}
+        onGoTo={onNavigate}
         items={assets}
         page={assetsPage}
         pageCount={assetsPageCount}
@@ -1898,30 +1862,17 @@ export function StudioShell({
         total={assetsTotal}
         loading={assetsLoading}
         notice={assetsNotice}
-        typeFilter={assetsTypeFilter}
-        selectedAssetId={selectedAssetId}
-        onSelect={(item) => setSelectedAssetId(item.assetId)}
-        onTypeFilterChange={changeAssetsTypeFilter}
+        collections={collections}
+        collectionFilter={assetsCollectionFilter}
+        createName={collectionCreateName}
+        onCollectionFilterChange={changeAssetsCollectionFilter}
+        onCreateNameChange={setCollectionCreateName}
+        onCreateCollection={() => void createCollection()}
+        onAddToCollection={(assetId, collectionId) => void addAssetToCollectionRow(assetId, collectionId)}
+        onRemoveFromCollection={(assetId, collectionId) => void removeAssetFromCollectionRow(assetId, collectionId)}
         onPageChange={(page) => void loadAssetsPage(page)}
         onPageSizeChange={changeAssetsPageSize}
         onDownload={(item) => downloadProtectedAsset(item.downloadUrl, item.fileName).catch((downloadError) => setAssetsNotice(downloadError instanceof Error ? downloadError.message : "다운로드에 실패했습니다."))}
-      />
-    ) : route === "review.collections" ? (
-      <Create5cScreen
-        user={user}
-        onGoTo={onNavigate}
-        collections={collections}
-        selectedCollectionId={selectedCollectionId}
-        detail={collectionDetail}
-        loading={collectionsLoading}
-        notice={collectionsNotice}
-        createName={collectionCreateName}
-        recentAssets={assets}
-        onSelectCollection={selectCollection}
-        onCreateNameChange={setCollectionCreateName}
-        onCreateCollection={() => void createCollection()}
-        onAddAsset={(assetId) => void addAssetToCollection(assetId)}
-        onDownload={(item) => downloadProtectedAsset(item.downloadUrl, item.fileName).catch((downloadError) => setCollectionsNotice(downloadError instanceof Error ? downloadError.message : "다운로드에 실패했습니다."))}
       />
     ) : route === "admin.systemPrompt" ? (
       <Create7aScreen

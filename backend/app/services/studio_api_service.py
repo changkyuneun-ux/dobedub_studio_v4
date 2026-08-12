@@ -75,13 +75,22 @@ def paginated_assets(
     workflow_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    collection_id: int | None = None,
+    uncategorized: bool = False,
 ) -> dict:
     # A-01: history와 동일하게 DB 전용(D-03 선례). PERSISTENCE_BACKEND=json에서는
     # task_output_assets 조인 대상이 비어 있을 수 있으나, 운영 환경은 항상
     # PERSISTENCE_BACKEND=db이므로(docs/aws-ecs-deployment.md) 실사용 경로와는 무관.
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
-    filters = dict(asset_type=asset_type, workflow_id=workflow_id, date_from=date_from, date_to=date_to)
+    filters = dict(
+        asset_type=asset_type,
+        workflow_id=workflow_id,
+        date_from=date_from,
+        date_to=date_to,
+        collection_id=collection_id,
+        uncategorized=uncategorized,
+    )
     return {
         "items": list_assets(page, page_size, **filters),
         "page": page,

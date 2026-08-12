@@ -478,6 +478,12 @@ export type AuditLogResponse = {
 // 그 경우를 별도 처리해야 한다. 설계 mock(5a/5c)의 태그·공개범위(PRIVATE/SHARED)·
 // 컬렉션 필드는 백엔드에 대응 컬럼이 전혀 없어(A-02 미착수) 이 타입에 포함하지
 // 않는다 - 화면에서도 그리지 않는다.
+// 2026-08-11: "Asset 관리" 통합 - assets가 이제 output 기준으로 내려온다
+// (task_tracking_service.list_assets 참조). createdBy는 이 출력을 만든
+// 작업의 제출자, inputAssets는 같은 작업의 입력 이미지들(종속 관계),
+// collections는 이 자산이 담긴 컬렉션들(다대다이므로 여러 개일 수 있음).
+export type AssetCollectionRef = { id: number; name: string };
+
 export type AssetItem = {
   assetId: string;
   type: string;
@@ -493,6 +499,9 @@ export type AssetItem = {
   outputRole?: string;
   segmentIndex?: number | null;
   workflowId?: string;
+  createdBy?: string | null;
+  inputAssets?: AssetItem[];
+  collections?: AssetCollectionRef[];
 };
 
 export type AssetsResponse = {
@@ -728,12 +737,16 @@ export const apiClient = {
   // 안전망일 뿐이다.
   history: (page = 1, pageSize = 20) => requestJson<HistoryResponse>(`/api/history?page=${page}&pageSize=${pageSize}`),
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
-  assets: (params: { page?: number; pageSize?: number; type?: string; workflowId?: string } = {}) => {
+  // 2026-08-11: Asset 관리 통합 - collectionId/uncategorized 필터 추가(사이드바
+  // 컬렉션 선택에 대응).
+  assets: (params: { page?: number; pageSize?: number; type?: string; workflowId?: string; collectionId?: number; uncategorized?: boolean } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     query.set("pageSize", String(params.pageSize || 20));
     if (params.type) query.set("type", params.type);
     if (params.workflowId) query.set("workflowId", params.workflowId);
+    if (params.collectionId) query.set("collectionId", String(params.collectionId));
+    if (params.uncategorized) query.set("uncategorized", "true");
     return requestJson<AssetsResponse>(`/api/assets?${query.toString()}`);
   },
   // A-02(5c): 자산 컬렉션. 모두 history:read로 보호.
@@ -743,6 +756,9 @@ export const apiClient = {
   collection: (id: number) => requestJson<CollectionDetail>(`/api/collections/${id}`),
   addCollectionItem: (id: number, assetId: string) =>
     requestJson<CollectionDetail>(`/api/collections/${id}/items`, { method: "POST", body: JSON.stringify({ assetId }) }),
+  // 2026-08-11: Asset 관리 통합 - 컬렉션 칩에서 자산을 뺄 때 사용.
+  removeCollectionItem: (id: number, assetId: string) =>
+    requestJson<CollectionDetail>(`/api/collections/${id}/items/${encodeURIComponent(assetId)}`, { method: "DELETE" }),
   promptCatalog: () => requestJson<PromptCatalogResponse>("/api/prompts/catalog"),
   promptSystemPrompt: () => requestJson<PromptSystemPromptResponse>("/api/prompts/system-prompt"),
   // B-08: 시스템 지시문 버전 이력.

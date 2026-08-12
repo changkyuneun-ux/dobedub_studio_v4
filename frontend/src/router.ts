@@ -26,10 +26,11 @@
 //                       화면이던 review.runDetail(3f/3c Run 상세)을 폐지하고 그
 //                       내용을 이 화면 우측 패널 아코디언으로 흡수했다(사용자 요청).
 //   review.reuse      — 4c 프롬프트 재사용 (신규 구현, E-03)
-//   review.assets     — 5a 자산 목록 (신규 구현, E-03)
-//   review.collections — 5c 자산 컬렉션 (A-02 백엔드 구현 후 추가). 컬렉션 생성·
-//                       목록·상세·자산 담기. 설계의 태그·공개범위는 대응 백엔드가
-//                       없어 제외(가짜 데이터 금지).
+//   review.assets     — 5a+5c "Asset 관리" (신규 구현, E-03. 2026-08-11: 원래
+//                       별개 화면이던 5a 자산 목록·5c 컬렉션을 사용자 요청으로
+//                       통합 - 자산은 output 기준으로 관리되고 input 이미지는
+//                       그 출력에 종속, 컬렉션은 사이드바 필터 겸 각 자산 행의
+//                       칩으로 표시. `review.collections` 라우트는 폐지됨.
 //   admin.systemPrompt — 7a 시스템 프롬프트 (신규 구현, E-04). "프롬프트 카탈로그"
 //                       Admin 사이드바 그룹 소속.
 //   admin.sandbox      — 5b Sandbox Pod (신규 구현, E-04). "Sandbox Pod" Admin
@@ -83,7 +84,6 @@ export type StudioRoute =
   | "review.history"
   | "review.reuse"
   | "review.assets"
-  | "review.collections"
   | "admin.systemPrompt"
   | "admin.sandbox"
   | "admin.roles"
@@ -125,7 +125,6 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "review.history": "/studio/review/history",
   "review.reuse": "/studio/review/reuse",
   "review.assets": "/studio/review/assets",
-  "review.collections": "/studio/review/collections",
   "admin.systemPrompt": "/studio/admin/system-prompt",
   "admin.sandbox": "/studio/admin/sandbox",
   "admin.roles": "/studio/admin/roles",

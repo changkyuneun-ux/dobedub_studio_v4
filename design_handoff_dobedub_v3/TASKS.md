@@ -44,9 +44,9 @@
 ### A-01 · 자산 목록 API — P1 — **완료** (API + 5a 화면. 5c는 A-02 대기로 범위 밖)
 현재 `backend/app/api/v1/assets.py`에는 `POST /uploads`와 `GET /files/{asset_id}`만 있습니다. 화면 `5a` `5c`가 요구하는 목록 조회가 없습니다. `assets` 테이블은 이미 `asset_type` `size_bytes` `metadata_json` `created_at`을 갖고 있어 **마이그레이션 불필요**합니다.
 
-- [x] `GET /api/assets` 추가 — 쿼리 `type` `workflowId` `from` `to` `page` `pageSize`, 권한 `history:read` — *history(D-03)와 동일하게 DB 전용으로 구현(`task_tracking_service.list_assets`/`assets_total`). 운영은 항상 `PERSISTENCE_BACKEND=db`라 repository 추상화를 통하지 않아도 실사용과 어긋나지 않음. `from`은 파이썬 예약어라 쿼리 파라미터명은 `from` 그대로 두고 `Query(alias="from")`로 받음.*
-- [x] 응답에 연결된 taskId와 output_role(final/segment)을 포함 (`task_output_assets` 조인) — *`asset_id`당 최신 `TaskOutputAsset` 링크 1건을 조인. 아직 어떤 작업 출력에도 연결되지 않은 자산(업로드만 된 입력 이미지 등)은 `taskId`/`outputRole`이 빈 값으로 내려감 — `Create5aScreen`이 이 경우 "미연결"로 표기.*
-- [x] 프론트 자산 화면 구현 — *`Create5aScreen`(5a) 구현. 설계의 컬렉션·태그·공개범위(PRIVATE/SHARED)·저장용량 바는 대응 백엔드가 전혀 없어(A-02 미착수, `assets` 테이블에 해당 컬럼 없음) 화면에서 제외 — 코드 주석에 사유 명시.*
+- [x] `GET /api/assets` 추가 — 쿼리 `type` `workflowId` `from` `to` `page` `pageSize`, 권한 `history:read` — *history(D-03)와 동일하게 DB 전용으로 구현(`task_tracking_service.list_assets`/`assets_total`). 운영은 항상 `PERSISTENCE_BACKEND=db`라 repository 추상화를 통하지 않아도 실사용과 어긋나지 않음. `from`은 파이썬 예약어라 쿼리 파라미터명은 `from` 그대로 두고 `Query(alias="from")`로 받음. 2026-08-11: 사용자 요청으로 목록 기준을 `Asset` 테이블에서 `TaskOutputAsset`(출력)로 교체 — 이제 화면에 뜨는 행은 항상 어떤 작업의 출력물이고, 그 출력에 쓰인 입력 이미지는 각 행의 `inputAssets`로 종속돼 내려간다. 쿼리에 `collectionId`/`uncategorized` 필터 추가.*
+- [x] 응답에 연결된 taskId와 output_role(final/segment)을 포함 (`task_output_assets` 조인) — *`asset_id`당 최신 `TaskOutputAsset` 링크 1건을 조인. 아직 어떤 작업 출력에도 연결되지 않은 자산(업로드만 된 입력 이미지 등)은 `taskId`/`outputRole`이 빈 값으로 내려감 — `Create5aScreen`이 이 경우 "미연결"로 표기. 2026-08-11: 목록 기준이 출력 중심으로 바뀌며 이런 "출력에 한 번도 연결 안 된 입력 전용 업로드"는 아예 목록에서 제외하기로 결정(사용자 확인) — 더 이상 "미연결" 표기 케이스가 없음.*
+- [x] 프론트 자산 화면 구현 — *`Create5aScreen`(5a) 구현. 설계의 컬렉션·태그·공개범위(PRIVATE/SHARED)·저장용량 바는 대응 백엔드가 전혀 없어(A-02 미착수, `assets` 테이블에 해당 컬럼 없음) 화면에서 제외 — 코드 주석에 사유 명시. 2026-08-11: A-02 완료 후 사용자 요청으로 5c(컬렉션)와 통합 — 아래 A-02·E-03 각주 참조.*
 
 완료 기준 — 자산 화면이 작업을 거치지 않고 직접 목록을 그린다. — *백엔드 TestClient로 필터(`type`/`workflowId`)·페이지네이션·조인 결과 확인, 프론트는 `tsc -b`/`vite build` 클린 확인. 실 데이터 화면 스크린샷 검증은 미실시.*
 
@@ -55,7 +55,7 @@
 
 - [x] 마이그레이션 `20260811_0015`: `collections`(id, name, created_by, created_at), `collection_items`((collection_id, asset_id) 복합 PK, sort_order). created_by는 audit_logs와 같은 이유로 users.id FK 없음, 삭제 시 CASCADE.
 - [x] `GET/POST /api/collections`, `GET /api/collections/{id}`, `POST /api/collections/{id}/items` — 모두 history:read로 보호(assets와 동일 근거). RESOURCE_CATALOG에 MENU(5c)+API 등록. TestClient E2E로 201/404/400 검증.
-- [x] 화면 `5c` 구현 — `Create5cScreen`. 사이드바=컬렉션 목록+생성, 본문=선택 컬렉션 항목 그리드, 우측=최근 자산 담기. GENERATE 사이드바에 "Collections" 항목 추가, 5a에서 "컬렉션 보기" 링크. **설계의 태그·공개범위(PRIVATE/SHARED)·검색/정렬은 대응 백엔드가 없어 제외**(5a와 동일 원칙, 코드 주석에 사유 명시). 이로써 유일하게 남아 있던 미구현 화면(5c)이 해소됨.
+- [x] 화면 `5c` 구현 — `Create5cScreen`. 사이드바=컬렉션 목록+생성, 본문=선택 컬렉션 항목 그리드, 우측=최근 자산 담기. GENERATE 사이드바에 "Collections" 항목 추가, 5a에서 "컬렉션 보기" 링크. **설계의 태그·공개범위(PRIVATE/SHARED)·검색/정렬은 대응 백엔드가 없어 제외**(5a와 동일 원칙, 코드 주석에 사유 명시). 이로써 유일하게 남아 있던 미구현 화면(5c)이 해소됨. — *2026-08-11: 사용자 요청으로 `Create5cScreen`을 폐지하고 5a로 통합("Asset 관리" 단일 화면). 컬렉션은 이제 별도 화면이 아니라 (a) 좌측 사이드바 필터(전체/미분류/컬렉션별)와 (b) 각 자산 행의 칩(추가 `<select>` + 개별 제거 `×`)으로 표시. 자산-컬렉션은 기존 다대다(M:N) 구조를 그대로 유지(사용자가 "여러 컬렉션 동시 소속" 옵션 선택). 컬렉션에서 자산을 빼는 API가 없어 `DELETE /api/collections/{id}/items/{assetId}`(`collection_service.remove_collection_item`) 신규 추가. GENERATE 사이드바 "Collections" 항목 제거, "Assets" 하나로 통합. `review.collections` 라우트 폐지.*
 
 ### A-03 · 작업 알림 — P2 — **1안으로 결정(2026-08-11) · 완료**
 알림 저장·읽음 처리 구조가 없습니다. 두 안 중 택일이 필요합니다.
@@ -255,8 +255,8 @@ DB 스코프는 POSITIVE 계열과 NEGATIVE 계열 둘뿐이고, 시스템 지�
 - [x] `3a` 작업 이력 — **B-01 페이지네이션 로직(20/50, 총 건수·범위 표시) 재사용**, 삭제(C-03) 포함 — *커밋 `9e6e7f8`. 2026-08-11: 목록 위치를 Prompt Library 위로 이동, 컬럼을 No/Timestamp/Worker/Positive Prompt/Negative Prompt/Status/삭제로 교체, 우측 패널을 Overview(항상 펼침)+Assets/Node Config/Prompt Review 아코디언으로 재구성(사용자 요청).*
 - [x] `3f`/`3c` Run 상세 — **B-02 평가 로직(task_prompts/prompt_feedback 역할 분리) 재사용**(C-04) — *`Create3RunDetailScreen`으로 완료/실패 화면 통합 구현, 평가 카드는 `V3PromptReviewGroup`으로 분리. 2026-08-11: 사용자 요청으로 독립 화면을 폐지하고 `3a` 우측 패널 아코디언으로 흡수(`V3PromptReviewGroup`은 그대로 재사용) — `Create3RunDetailScreen`은 삭제됨, `review.runDetail` 라우트 제거.*
 - [x] `4c` 프롬프트 재사용 (C-05) — *`Create4cScreen` 구현. 아직 커밋 전(다음 커밋에 포함 예정).*
-- [x] `5a` 자산 — A-01(자산 목록 API) 선행 필요, API 완성 후 착수 — *A-01 API·화면 모두 완료(`Create5aScreen`). 아직 커밋 전.*
-- [x] `5c` 컬렉션 — *A-02 백엔드(마이그레이션 0015·컬렉션 API) 구현 후 `Create5cScreen`으로 완료(2026-08-11). 태그·공개범위는 백엔드 부재로 제외. A-02 항목 참조.*
+- [x] `5a` 자산 — A-01(자산 목록 API) 선행 필요, API 완성 후 착수 — *A-01 API·화면 모두 완료(`Create5aScreen`). 2026-08-11: 5c와 통합되며 출력 기준 목록+컬렉션 필터·칩을 갖춘 "Asset 관리" 단일 화면이 됨 — 아래 각주 및 A-01/A-02 항목 참조.*
+- [x] `5c` 컬렉션 — *A-02 백엔드(마이그레이션 0015·컬렉션 API) 구현 후 `Create5cScreen`으로 완료(2026-08-11). 태그·공개범위는 백엔드 부재로 제외. A-02 항목 참조. — *2026-08-11(같은 날 후속): 사용자 요청으로 `Create5cScreen` 폐지, `5a`(`Create5aScreen`)로 통합 — "Asset 하위 카테고리에 collection을 갖는" 단일 목록 구조로 재구성. 상세는 A-02 각주 참조. 이 통합으로 옛 5a의 "작업 이력에서 보기"(선택 자산 → 연결 Run으로 이동) 기능은 상세 패널 자체가 없어지며 빠짐 — 동일 Run은 Task History(3a) 검색으로 여전히 찾을 수 있음.*
 
 ### E-04 · `4 Admin` 흐름 — P1 — **완료**
 구버전 `AdminConsoleModal`(탭형 단일 모달, main.tsx)이 users/roles/catalog/workflows/sandbox를 이미 다 구현해 두었고, `StatusModal`(6c)·`MetadataModal`(6d)·`SystemPromptEditor`(7a 원형)도 각각 독립 라우트/패널로 존재했다. E-04는 이 로직들을 유지한 채 화면만 `AppShell` 기반 v3 화면으로 하나씩 옮기는 작업이다 — 새 API를 만들 필요가 거의 없다(4b 제외).

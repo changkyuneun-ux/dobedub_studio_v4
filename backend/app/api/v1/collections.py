@@ -40,3 +40,12 @@ def add_collection_item(collection_id: int, payload: dict, _: CurrentUser = Depe
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# 2026-08-11: Asset 관리 화면 통합 - 컬렉션 칩에서 자산을 뺄 수 있어야 해서 추가.
+@router.delete("/collections/{collection_id}/items/{asset_id}")
+def remove_collection_item(collection_id: int, asset_id: str, _: CurrentUser = Depends(require_permission("history:read"))):
+    try:
+        return collection_service.remove_collection_item(collection_id, asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

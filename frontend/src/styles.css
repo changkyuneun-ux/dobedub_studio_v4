@@ -5221,6 +5221,55 @@ button {
   border-bottom: none;
 }
 
+/* 2026-08-11: Asset 관리(5a+5c 통합) - 자산 하나가 여러 컬렉션에 동시에 속할 수
+   있어(다대다 유지 결정) "Collection" 열은 단일 뱃지가 아니라 칩 목록 +
+   추가/제거로 구현한다. */
+.v3-asset-collection-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.v3-asset-collection-chip {
+  align-items: center;
+  background: var(--v3-bg-table);
+  border-radius: 999px;
+  color: var(--v3-text-body);
+  display: inline-flex;
+  font-size: 10.5px;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+}
+
+.v3-asset-collection-chip-remove {
+  background: none;
+  border: none;
+  color: var(--v3-text-label);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+
+.v3-asset-collection-add {
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-border);
+  border-radius: 6px;
+  color: var(--v3-text-label);
+  font-size: 10.5px;
+  margin-top: 4px;
+  padding: 2px 4px;
+  width: 100%;
+}
+
+/* 2026-08-11: 출력 자산 행에 종속된 입력 이미지들(여러 장일 수 있음) - 줄바꿈
+   가능한 썸네일 행. */
+.v3-asset-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* 2026-08-11: 사용자 요청 - 프롬프트 셀은 한 줄 말줄임 대신 스크롤로 전체 내용을
    볼 수 있어야 함. 고정 높이 박스 안에서 세로 스크롤. */
 .v3-reuse-prompt-cell {

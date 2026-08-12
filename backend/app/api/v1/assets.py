@@ -19,10 +19,14 @@ def list_assets(
     to: str = "",
     page: int = 1,
     pageSize: int = 20,
+    collectionId: int = 0,
+    uncategorized: bool = False,
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     # A-01: 화면 5a/5c(E-03)가 작업을 거치지 않고 직접 목록을 그릴 수 있도록 함.
     # `from`은 Python 예약어라 쿼리 파라미터 이름은 그대로 두고 함수 인자만 `from_`로 받는다.
+    # 2026-08-11: Asset 관리 화면 통합 - collectionId(특정 컬렉션만)/uncategorized
+    # (어느 컬렉션에도 없는 자산만) 필터 추가.
     return studio_api_service.paginated_assets(
         page,
         pageSize,
@@ -30,6 +34,8 @@ def list_assets(
         workflow_id=workflowId,
         date_from=from_,
         date_to=to,
+        collection_id=collectionId or None,
+        uncategorized=uncategorized,
     )
 
 

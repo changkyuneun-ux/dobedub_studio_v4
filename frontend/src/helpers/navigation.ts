@@ -12,8 +12,6 @@ export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void)
     onGoTo("review.reuse");
   } else if (key === "assets") {
     onGoTo("review.assets");
-  } else if (key === "collections") {
-    onGoTo("review.collections");
   }
 }
 

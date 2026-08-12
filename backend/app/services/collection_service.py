@@ -93,6 +93,27 @@ def add_collection_item(collection_id: int, asset_id: str) -> dict:
         session.close()
 
 
+def remove_collection_item(collection_id: int, asset_id: str) -> dict:
+    """2026-08-11: Asset 관리 화면 통합 - 자산이 여러 컬렉션에 동시에 속할 수
+    있는 다대다 구조를 유지하기로 하면서, 컬렉션 칩에 개별 제거 버튼을 붙이려면
+    "빼기" API가 필요해졌다(이전엔 add만 있었음). 컬렉션·자산 자체가 없으면
+    KeyError, 애초에 담겨 있지 않았으면 조용히 넘어가고 최신 상세를 돌려준다."""
+    session = SessionLocal()
+    try:
+        collection = session.get(Collection, collection_id)
+        if collection is None:
+            raise KeyError(f"Collection not found: {collection_id}")
+        if session.get(Asset, asset_id) is None:
+            raise KeyError(f"Asset not found: {asset_id}")
+        existing = session.get(CollectionItem, (collection_id, asset_id))
+        if existing is not None:
+            session.delete(existing)
+            session.commit()
+        return _collection_detail(session, collection)
+    finally:
+        session.close()
+
+
 def get_collection(collection_id: int) -> dict:
     session = SessionLocal()
     try:
