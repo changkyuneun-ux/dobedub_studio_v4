@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   HealthResponse,
   WorkflowItem,
@@ -363,6 +363,15 @@ export function Create2bScreen({
   // promptAccordionDefaultKeys(빈 Set = 기본 전체 접힘)를 그대로 연결해 그룹→
   // 서브카테고리 2단 아코디언으로 만든다(용어 칩은 서브카테고리를 펼쳐야 보임).
   const [expandedCatalogKeys, setExpandedCatalogKeys] = useState<Set<string>>(promptAccordionDefaultKeys());
+  // 2026-08-12: 사용자 신고 - 그룹/서브카테고리 펼침 상태(expandedCatalogKeys)가
+  // 세그먼트를 옮기거나 Positive/Negative 탭을 바꿔도 초기화되지 않고 그대로
+  // 남아있었다. 화면 첫 진입 시에는 빈 Set(전부 접힘)으로 시작하지만, 한 번 펼친
+  // 항목은 이후 다른 세그먼트/스코프에서도 계속 펼쳐진 채로 보여 "기본이 펼침"처럼
+  // 느껴질 수 있었다 - 세그먼트 또는 스코프가 바뀔 때마다 다시 전부 접힘으로
+  // 초기화한다.
+  useEffect(() => {
+    setExpandedCatalogKeys(promptAccordionDefaultKeys());
+  }, [selectedSegmentIndex, activeScopeKey]);
   const toggleCatalogAccordion = (key: string) => setExpandedCatalogKeys((current) => {
     const next = new Set(current);
     if (next.has(key)) {
@@ -720,7 +729,11 @@ export function Create2bScreen({
                   <div className="v3-config-row" key={control.key}>
                     <div>
                       <div className="v3-config-row-head">
-                        <span className="v3-label">{control.label}</span>
+                        {/* 2026-08-12: 사용자 요청 - 슬라이더/입력 아래 항상 보이던 설명
+                            문장(v3-config-description)을 비활성화했다. 값 의미가 완전히
+                            없어지지 않도록 라벨에 title 툴팁으로만 남겨(마우스 오버 시 확인),
+                            평소 화면은 더 간결하게 유지한다. */}
+                        <span className="v3-label" title={control.description || undefined}>{control.label}</span>
                         {isNumeric ? <span className="v3-config-row-value">{String(rawValue)}</span> : null}
                       </div>
                       {isNumeric ? (
@@ -760,7 +773,6 @@ export function Create2bScreen({
                         />
                       )}
                     </div>
-                    <p className="v3-config-description" title={control.description || undefined}>{control.description || " "}</p>
                   </div>
                 );
               })}

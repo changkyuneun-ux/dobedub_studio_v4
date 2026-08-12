@@ -246,34 +246,44 @@ def _sampling_params(settings: Settings) -> dict:
 # RuntimeError를 던졌고, prompts.py가 RuntimeError를 그대로 502로 변환해 사용자에게
 # 전달했다(재시도 없음) - _generate_with_parse_retry의 재시도는 "정상 응답을 받았지만
 # JSON 파싱에 실패한" 경우에만 동작해 이 상황을 커버하지 못했다. 여기서 502/503/504와
-# 연결 계열 오류(URLError)에 한해 짧은 대기 후 1회 재시도한다 - 실제 오류(401/403/400
+# 연결 계열 오류(URLError)에 한해 짧은 대기 후 재시도한다 - 실제 오류(401/403/400
 # 등 설정 문제)는 재시도해도 계속 실패할 뿐이므로 재시도 대상에서 제외.
+#
+# 2026-08-12: 사용자 재신고 - 위 1회 재시도(3초 대기)로도 여전히 여러 번 수동
+# 재시도가 필요했다. RunPod 서버리스 콜드 스타트가 3초보다 오래 걸리는 경우가
+# 흔해(보통 10초 이상) 한 번의 짧은 대기로는 부족했던 것 - 502/503/504·URLError
+# 재시도 횟수를 2회→4회로 늘리고, 대기 시간도 3초 고정에서 3→5→8초로 점증시켜
+# 콜드 스타트 구간을 더 넉넉히 흡수하도록 확장했다. TimeoutError는 이미 전체
+# timeout(초) 하나를 다 써버린 뒤라 재시도 때마다 그만큼 대기가 누적되므로,
+# 총 대기 시간이 지나치게 길어지지 않도록 기존처럼 1회만 재시도한다.
 _RETRYABLE_HTTP_STATUS = {502, 503, 504}
-_TRANSIENT_RETRY_BACKOFF_SECONDS = 3
+_TRANSIENT_RETRY_BACKOFF_SECONDS = (3, 5, 8)
+_TRANSIENT_RETRY_ATTEMPTS = len(_TRANSIENT_RETRY_BACKOFF_SECONDS) + 1
+_TIMEOUT_RETRY_ATTEMPTS = 2
 
 
 def _json_request(url: str, headers: dict[str, str], payload: dict, timeout: int) -> dict:
     body = json.dumps(payload).encode("utf-8")
-    attempts = 2
+    attempts = max(_TRANSIENT_RETRY_ATTEMPTS, _TIMEOUT_RETRY_ATTEMPTS)
     for attempt in range(attempts):
         request = urllib.request.Request(url, data=body, method="POST", headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except TimeoutError as exc:
-            if attempt < attempts - 1:
-                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+            if attempt < _TIMEOUT_RETRY_ATTEMPTS - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS[0])
                 continue
             raise RuntimeError(f"Prompt LLM request timed out after {timeout} seconds.") from exc
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            if exc.code in _RETRYABLE_HTTP_STATUS and attempt < attempts - 1:
-                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+            if exc.code in _RETRYABLE_HTTP_STATUS and attempt < _TRANSIENT_RETRY_ATTEMPTS - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS[attempt])
                 continue
             raise RuntimeError(f"Prompt LLM HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
-            if attempt < attempts - 1:
-                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+            if attempt < _TRANSIENT_RETRY_ATTEMPTS - 1:
+                time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS[attempt])
                 continue
             raise RuntimeError(f"Prompt LLM request failed: {exc.reason}") from exc
     raise RuntimeError("Prompt LLM request failed after retry.")

@@ -921,7 +921,8 @@ def build_scene_json(session: Session, payload: dict) -> dict:
         if negative_text:
             negative_parts.append(negative_text)
 
-    warnings = [*validation_warnings, *relation_warnings, *relation_validation_warnings]
+    # 2026-08-12: 중복 경고 제거 - 아래 _dedupe_warnings 정의부 주석 참조.
+    warnings = _dedupe_warnings([*validation_warnings, *relation_warnings, *relation_validation_warnings])
     for rule in session.scalars(select(PromptRule).where(PromptRule.is_active.is_(True))).all():
         if not _rule_applies(rule.condition_json, constraints):
             continue
@@ -1547,6 +1548,27 @@ def _dedupe(values: list[str]) -> list[str]:
         if cleaned and key not in seen:
             seen.add(key)
             result.append(cleaned)
+    return result
+
+
+# 2026-08-12: 사용자 신고 - 2b 화면에 "SUBJECT_TYPE is required for a complete
+# prompt scene." 같은 경고가 두 번씩 겹쳐 표시됨. 원인: build_scene_json이
+# _validate_and_normalize_terms를 관계(rule) 적용 전/후 두 번 호출하는데(관계가
+# 필수 서브카테고리를 채워줄 수도 있어 재검증이 필요함), 관계로도 채워지지 않는
+# 누락은 두 번의 호출 모두에서 독립적으로 같은 "required_category_missing" 경고를
+# 만들어 최종 warnings 리스트에 그대로 중복 누적됐다. 경고 자체를 한 번만 만들도록
+# 호출 구조를 바꾸는 대신(재검증 로직이 얽혀 있어 위험도가 높음), 최종 합산 단계에서
+# (code, message) 기준으로 중복만 제거한다 - 순서는 유지되고 서로 다른 경고는
+# 그대로 보존된다.
+def _dedupe_warnings(warnings: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+    for warning in warnings:
+        key = (warning.get("code"), warning.get("message"))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(warning)
     return result
 
 
