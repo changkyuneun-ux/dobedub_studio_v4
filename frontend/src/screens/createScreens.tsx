@@ -31,6 +31,7 @@ import {
   promptCatalogCategories,
   selectedPromptKeywordsByScope,
   promptCatalogRenderScopes,
+  promptScopeAccordionKey,
   promptGroupAccordionKey,
   promptCategoryAccordionKey,
   promptAccordionDefaultKeys
@@ -355,23 +356,27 @@ export function Create2bScreen({
   const selectedSegment = segments.find((segment) => segment.index === selectedSegmentIndex) || segments[0];
   const categories = promptCatalogCategories(catalog);
   const renderScopes = promptCatalogRenderScopes(categories);
-  const [activeScopeKey, setActiveScopeKey] = useState<"positive" | "negative">("positive");
-  const activeScope = renderScopes.find((scope) => scope.key === activeScopeKey) || renderScopes[0];
   // 2026-08-11: 사용자 요청 - 키워드 카탈로그가 그룹·서브카테고리 구분 없이 전부
   // 펼쳐진 채로 보이던 문제. helpers/promptCatalog.ts에 이미 있었지만 어디서도
   // 쓰이지 않던 promptGroupAccordionKey/promptCategoryAccordionKey/
   // promptAccordionDefaultKeys(빈 Set = 기본 전체 접힘)를 그대로 연결해 그룹→
   // 서브카테고리 2단 아코디언으로 만든다(용어 칩은 서브카테고리를 펼쳐야 보임).
+  //
+  // 2026-08-12(같은 날 후속): 사용자 재신고 - "포지티브/네거티브도 접혀야 한다".
+  // 이전엔 Positive/Negative를 탭(activeScopeKey로 하나만 렌더)으로 구현해
+  // 선택된 쪽의 그룹 9개가 탭을 누르자마자 항상 그대로 펼쳐져 보였다 - 어드민
+  // 카탈로그 계층 화면(scope→group→subcategory 3단 전부 아코디언)과 다른
+  // 패턴이었던 것. 이미 정의만 있고 어디서도 안 쓰이던 promptScopeAccordionKey를
+  // 연결해 Positive/Negative 자체도 scope 레벨 아코디언으로 바꾸고(기본 접힘),
+  // 두 scope를 탭 전환 없이 동시에 나열해 어드민 화면과 동일한 3단 구조로
+  // 맞췄다. 이 변경으로 activeScopeKey/activeScope 상태는 더 이상 필요 없어
+  // 제거했다(어느 scope를 펼칠지는 expandedCatalogKeys 하나로 충분).
   const [expandedCatalogKeys, setExpandedCatalogKeys] = useState<Set<string>>(promptAccordionDefaultKeys());
-  // 2026-08-12: 사용자 신고 - 그룹/서브카테고리 펼침 상태(expandedCatalogKeys)가
-  // 세그먼트를 옮기거나 Positive/Negative 탭을 바꿔도 초기화되지 않고 그대로
-  // 남아있었다. 화면 첫 진입 시에는 빈 Set(전부 접힘)으로 시작하지만, 한 번 펼친
-  // 항목은 이후 다른 세그먼트/스코프에서도 계속 펼쳐진 채로 보여 "기본이 펼침"처럼
-  // 느껴질 수 있었다 - 세그먼트 또는 스코프가 바뀔 때마다 다시 전부 접힘으로
-  // 초기화한다.
+  // 세그먼트를 옮기면 펼침 상태를 전부 접힘으로 초기화한다 - 한 번 펼친 항목이
+  // 다른 세그먼트에서도 계속 펼쳐진 채로 남아있던 문제 방지.
   useEffect(() => {
     setExpandedCatalogKeys(promptAccordionDefaultKeys());
-  }, [selectedSegmentIndex, activeScopeKey]);
+  }, [selectedSegmentIndex]);
   const toggleCatalogAccordion = (key: string) => setExpandedCatalogKeys((current) => {
     const next = new Set(current);
     if (next.has(key)) {
@@ -592,72 +597,92 @@ export function Create2bScreen({
           ) : (
             <div className="v3-card">
               <div className="v3-card-header">
-                <div className="v3-scope-tabs">
-                  {renderScopes.map((scope) => (
-                    <button
-                      key={scope.key}
-                      type="button"
-                      className={`v3-scope-tab ${scope.key === activeScopeKey ? "is-active" : ""}`}
-                      onClick={() => setActiveScopeKey(scope.key)}
-                    >
-                      {scope.label} · {scope.termCount}
-                    </button>
-                  ))}
-                </div>
+                <span className="v3-label">PROMPT CATALOG</span>
               </div>
               <div className="v3-catalog-body">
-                {!activeScope || !activeScope.groups.length ? (
+                {!renderScopes.length ? (
                   <p className="v3-muted-text">등록된 key word가 없습니다. Admin Console에서 카테고리와 key word를 등록하세요.</p>
                 ) : (
                   <div className="v3-catalog-tree-scope">
-                    {activeScope.groups.map((group) => {
-                      const groupKey = promptGroupAccordionKey(activeScope.key, group.key);
-                      const groupExpanded = expandedCatalogKeys.has(groupKey);
-                      const groupTermCount = group.categories.reduce((sum, category) => sum + (category.terms || []).length, 0);
-                      const groupSelectedCount = group.categories.reduce(
-                        (sum, category) => sum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
+                    {renderScopes.map((scope) => {
+                      // 2026-08-12: 사용자 요청 - Positive/Negative 자체도 어드민
+                      // 카탈로그 계층 화면과 같은 scope 레벨 아코디언(기본 접힘)으로.
+                      const scopeKey = promptScopeAccordionKey(scope.key);
+                      const scopeExpanded = expandedCatalogKeys.has(scopeKey);
+                      const scopeSelectedCount = scope.groups.reduce(
+                        (sum, group) => sum + group.categories.reduce(
+                          (groupSum, category) => groupSum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
+                          0
+                        ),
                         0
                       );
                       return (
-                        <div key={group.key} className="v3-catalog-tree-group">
-                          <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(groupKey)}>
+                        <div key={scope.key} className="v3-catalog-tree-scope-item">
+                          <button type="button" className="v3-segment-nav-item v3-catalog-tree-scope" onClick={() => toggleCatalogAccordion(scopeKey)}>
                             <div className="v3-segment-nav-head">
-                              <span>{group.label}</span>
-                              <span>{groupSelectedCount ? `${groupSelectedCount} selected · ` : ""}{groupTermCount} {groupExpanded ? "−" : "+"}</span>
+                              <span>{scope.label} · {scope.termCount}</span>
+                              <span>{scopeSelectedCount ? `${scopeSelectedCount} selected · ` : ""}{scope.groups.length} {scopeExpanded ? "−" : "+"}</span>
                             </div>
                           </button>
-                          {groupExpanded ? (
-                            <div className="v3-catalog-tree-children">
-                              {group.categories.map((category) => {
-                                const categoryKey = promptCategoryAccordionKey(activeScope.key, group.key, category.code);
-                                const categoryExpanded = expandedCatalogKeys.has(categoryKey);
-                                const selectedInCategory = (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length;
-                                return (
-                                  <div key={category.code} className="v3-catalog-tree-subcategory">
-                                    <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(categoryKey)}>
-                                      <div className="v3-segment-nav-head">
-                                        <span>{category.nameKo || category.nameEn || category.code}</span>
-                                        <span>{selectedInCategory ? `${selectedInCategory} · ` : ""}{category.selectionMode === "single" ? "Single" : "Multi"} {categoryExpanded ? "−" : "+"}</span>
-                                      </div>
-                                    </button>
-                                    {categoryExpanded ? (
-                                      <div className="v3-catalog-tree-children v3-catalog-tree-terms">
-                                        {(category.terms || []).map((term) => (
-                                          <button
-                                            key={term.id}
-                                            type="button"
-                                            className={`v3-term-chip v3-catalog-tree-term ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
-                                            onClick={() => onToggleTerm(term.id)}
-                                          >
-                                            {term.labelEn || term.labelKo || term.code}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          {scopeExpanded ? (
+                            !scope.groups.length ? (
+                              <p className="v3-muted-text" style={{ padding: "6px 10px" }}>등록된 key word가 없습니다. Admin Console에서 카테고리와 key word를 등록하세요.</p>
+                            ) : (
+                              <div className="v3-catalog-tree-children">
+                                {scope.groups.map((group) => {
+                                  const groupKey = promptGroupAccordionKey(scope.key, group.key);
+                                  const groupExpanded = expandedCatalogKeys.has(groupKey);
+                                  const groupTermCount = group.categories.reduce((sum, category) => sum + (category.terms || []).length, 0);
+                                  const groupSelectedCount = group.categories.reduce(
+                                    (sum, category) => sum + (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length,
+                                    0
+                                  );
+                                  return (
+                                    <div key={group.key} className="v3-catalog-tree-group">
+                                      <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(groupKey)}>
+                                        <div className="v3-segment-nav-head">
+                                          <span>{group.label}</span>
+                                          <span>{groupSelectedCount ? `${groupSelectedCount} selected · ` : ""}{groupTermCount} {groupExpanded ? "−" : "+"}</span>
+                                        </div>
+                                      </button>
+                                      {groupExpanded ? (
+                                        <div className="v3-catalog-tree-children">
+                                          {group.categories.map((category) => {
+                                            const categoryKey = promptCategoryAccordionKey(scope.key, group.key, category.code);
+                                            const categoryExpanded = expandedCatalogKeys.has(categoryKey);
+                                            const selectedInCategory = (category.terms || []).filter((term) => selectedTermIds.includes(term.id)).length;
+                                            return (
+                                              <div key={category.code} className="v3-catalog-tree-subcategory">
+                                                <button type="button" className="v3-segment-nav-item" onClick={() => toggleCatalogAccordion(categoryKey)}>
+                                                  <div className="v3-segment-nav-head">
+                                                    <span>{category.nameKo || category.nameEn || category.code}</span>
+                                                    <span>{selectedInCategory ? `${selectedInCategory} · ` : ""}{category.selectionMode === "single" ? "Single" : "Multi"} {categoryExpanded ? "−" : "+"}</span>
+                                                  </div>
+                                                </button>
+                                                {categoryExpanded ? (
+                                                  <div className="v3-catalog-tree-children v3-catalog-tree-terms">
+                                                    {(category.terms || []).map((term) => (
+                                                      <button
+                                                        key={term.id}
+                                                        type="button"
+                                                        className={`v3-term-chip v3-catalog-tree-term ${selectedTermIds.includes(term.id) ? "is-selected" : ""}`}
+                                                        onClick={() => onToggleTerm(term.id)}
+                                                      >
+                                                        {term.labelEn || term.labelKo || term.code}
+                                                      </button>
+                                                    ))}
+                                                  </div>
+                                                ) : null}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )
                           ) : null}
                         </div>
                       );
