@@ -46,7 +46,7 @@
 
 - [x] `GET /api/assets` 추가 — 쿼리 `type` `workflowId` `from` `to` `page` `pageSize`, 권한 `history:read` — *history(D-03)와 동일하게 DB 전용으로 구현(`task_tracking_service.list_assets`/`assets_total`). 운영은 항상 `PERSISTENCE_BACKEND=db`라 repository 추상화를 통하지 않아도 실사용과 어긋나지 않음. `from`은 파이썬 예약어라 쿼리 파라미터명은 `from` 그대로 두고 `Query(alias="from")`로 받음. 2026-08-11: 사용자 요청으로 목록 기준을 `Asset` 테이블에서 `TaskOutputAsset`(출력)로 교체 — 이제 화면에 뜨는 행은 항상 어떤 작업의 출력물이고, 그 출력에 쓰인 입력 이미지는 각 행의 `inputAssets`로 종속돼 내려간다. 쿼리에 `collectionId`/`uncategorized` 필터 추가.*
 - [x] 응답에 연결된 taskId와 output_role(final/segment)을 포함 (`task_output_assets` 조인) — *`asset_id`당 최신 `TaskOutputAsset` 링크 1건을 조인. 아직 어떤 작업 출력에도 연결되지 않은 자산(업로드만 된 입력 이미지 등)은 `taskId`/`outputRole`이 빈 값으로 내려감 — `Create5aScreen`이 이 경우 "미연결"로 표기. 2026-08-11: 목록 기준이 출력 중심으로 바뀌며 이런 "출력에 한 번도 연결 안 된 입력 전용 업로드"는 아예 목록에서 제외하기로 결정(사용자 확인) — 더 이상 "미연결" 표기 케이스가 없음.*
-- [x] 프론트 자산 화면 구현 — *`Create5aScreen`(5a) 구현. 설계의 컬렉션·태그·공개범위(PRIVATE/SHARED)·저장용량 바는 대응 백엔드가 전혀 없어(A-02 미착수, `assets` 테이블에 해당 컬럼 없음) 화면에서 제외 — 코드 주석에 사유 명시. 2026-08-11: A-02 완료 후 사용자 요청으로 5c(컬렉션)와 통합 — 아래 A-02·E-03 각주 참조.*
+- [x] 프론트 자산 화면 구현 — *`Create5aScreen`(5a) 구현. 설계의 컬렉션·태그·공개범위(PRIVATE/SHARED)·저장용량 바는 대응 백엔드가 전혀 없어(A-02 미착수, `assets` 테이블에 해당 컬럼 없음) 화면에서 제외 — 코드 주석에 사유 명시. 2026-08-11: A-02 완료 후 사용자 요청으로 5c(컬렉션)와 통합 — 아래 A-02·E-03 각주 참조. 2026-08-12: "미리보기" 열이 정적 썸네일/배지만 보여줄 뿐 클릭해도 아무 동작이 없다는 지적 — 썸네일을 버튼으로 바꿔 클릭 시 확대 모달(`ProtectedAssetPreview`, 영상은 controls 있는 `<video>`)을 열도록 구현. 같은 요청으로 열 위치도 Asset ID 바로 다음(Collection·Asset 이름·생성일·생성자보다 앞)으로 옮김.*
 
 완료 기준 — 자산 화면이 작업을 거치지 않고 직접 목록을 그린다. — *백엔드 TestClient로 필터(`type`/`workflowId`)·페이지네이션·조인 결과 확인, 프론트는 `tsc -b`/`vite build` 클린 확인. 실 데이터 화면 스크린샷 검증은 미실시.*
 

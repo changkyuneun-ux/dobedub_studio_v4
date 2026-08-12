@@ -24,7 +24,8 @@ import {
 import { shellNavigate } from "../helpers/navigation";
 import {
   useProtectedAssetUrl,
-  ProtectedImage
+  ProtectedImage,
+  ProtectedAssetPreview
 } from "../components/ProtectedAssets";
 
 
@@ -737,7 +738,14 @@ export function Create5aScreen({
 }) {
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
-  const gridColumns = "168px 108px minmax(0,1fr) 96px 88px 62px 176px 68px";
+  // 2026-08-12: "미리보기" 버튼이 기능 없이 정적 썸네일/배지만 보여주고 있었다는
+  // 지적 + 위치를 앞으로 옮겨달라는 요청 - Asset ID 바로 다음(Collection·Asset
+  // 이름·생성일·생성자보다 앞)으로 옮기고, 클릭하면 큰 미리보기 모달을 연다
+  // (이미지는 확대 이미지, 영상 출력은 controls 있는 <video>로 재생 - 목록
+  // 썸네일에서는 <img>가 영상을 못 그려 배지만 보이던 문제도 여기서 해소됨).
+  const gridColumns = "168px 108px 62px minmax(0,1fr) 96px 88px 176px 68px";
+  const [previewItem, setPreviewItem] = useState<AssetItem | null>(null);
+  const previewIsImage = previewItem ? (previewItem.mimeType || "").startsWith("image/") : false;
 
   return (
     <AppShell
@@ -797,7 +805,7 @@ export function Create5aScreen({
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       <div className="v3-card" style={{ overflowX: "auto" }}>
         <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }}>
-          <span>Collection</span><span>Asset ID</span><span>Asset 이름</span><span>생성일</span><span>생성자</span><span>미리보기</span><span>입력 이미지</span><span style={{ textAlign: "right" }}>다운로드</span>
+          <span>Collection</span><span>Asset ID</span><span>미리보기</span><span>Asset 이름</span><span>생성일</span><span>생성자</span><span>입력 이미지</span><span style={{ textAlign: "right" }}>다운로드</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {!loading && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 자산이 없습니다.</p> : null}
@@ -841,15 +849,22 @@ export function Create5aScreen({
                 ) : null}
               </span>
               <span className="v3-review-seg-name" title={item.assetId}>{item.assetId.slice(0, 12)}</span>
+              <span>
+                <button
+                  type="button"
+                  className="v3-kf-thumb v3-kf-thumb-sm v3-asset-preview-trigger"
+                  title="미리보기"
+                  onClick={() => setPreviewItem(item)}
+                >
+                  {isImage ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.fileName} /> : <span>{(item.type || item.mimeType || "FILE").toUpperCase().slice(0, 4)}</span>}
+                </button>
+              </span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.fileName}>
                 {item.fileName}
               </span>
               <span style={{ fontSize: 11.5 }}>{item.createdAt || "-"}</span>
               <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.createdBy || "-"}>
                 {item.createdBy || "-"}
-              </span>
-              <span className="v3-kf-thumb v3-kf-thumb-sm">
-                {isImage ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.fileName} /> : <span>{(item.type || item.mimeType || "FILE").toUpperCase().slice(0, 4)}</span>}
               </span>
               <span className="v3-asset-input-row">
                 {(item.inputAssets || []).length ? (item.inputAssets || []).map((input) => (
@@ -877,6 +892,22 @@ export function Create5aScreen({
           </select>
         </div>
       </div>
+      {previewItem ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3AssetPreviewTitle" onClick={() => setPreviewItem(null)}>
+          <div className="v3-modal-panel v3-modal-panel-media" onClick={(event) => event.stopPropagation()}>
+            <div className="v3-modal-media-head">
+              <h2 id="v3AssetPreviewTitle" className="v3-modal-title" title={previewItem.assetId}>{previewItem.fileName}</h2>
+              <button className="v3-icon-button" type="button" onClick={() => setPreviewItem(null)} aria-label="닫기">×</button>
+            </div>
+            <div className="v3-modal-media-body">
+              <ProtectedAssetPreview src={`/api/files/${previewItem.assetId}`} isVideo={!previewIsImage} alt={previewItem.fileName} />
+            </div>
+            <div className="v3-modal-media-actions">
+              <button className="v3-secondary-button" type="button" onClick={() => onDownload(previewItem)}>다운로드</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

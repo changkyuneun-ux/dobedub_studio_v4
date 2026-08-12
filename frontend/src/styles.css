@@ -5270,6 +5270,64 @@ button {
   gap: 4px;
 }
 
+/* 2026-08-12: "미리보기" 열이 기능 없는 정적 썸네일이었던 문제 - 썸네일을
+   <button>으로 바꿔 클릭 시 확대 모달을 연다. .v3-kf-thumb는 원래 <span> 대상
+   이라 버튼 기본 테두리/패딩을 지워야 한다. */
+.v3-asset-preview-trigger {
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.v3-asset-preview-trigger:hover {
+  box-shadow: inset 0 0 0 2px var(--v3-accent);
+}
+
+.v3-modal-panel-media {
+  max-height: 86vh;
+  width: min(720px, 90vw);
+}
+
+.v3-modal-media-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.v3-modal-media-body {
+  align-items: center;
+  background: repeating-linear-gradient(135deg, #fbfcfb 0 7px, #f2f4f3 7px 14px);
+  border-radius: 10px;
+  display: flex;
+  justify-content: center;
+  max-height: 60vh;
+  overflow: hidden;
+}
+
+.v3-modal-media-body img,
+.v3-modal-media-body video {
+  max-height: 60vh;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.v3-modal-media-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.v3-icon-button {
+  background: none;
+  border: none;
+  color: var(--v3-text-label);
+  cursor: pointer;
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
 /* 2026-08-11: 사용자 요청 - 프롬프트 셀은 한 줄 말줄임 대신 스크롤로 전체 내용을
    볼 수 있어야 함. 고정 높이 박스 안에서 세로 스크롤. */
 .v3-reuse-prompt-cell {
