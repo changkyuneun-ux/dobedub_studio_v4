@@ -110,6 +110,8 @@ export function Create2aScreen({
       }
       sidebarExtra={
         <div className="v3-step-tracker">
+          {/* 2026-08-12: 사용자 요청 - sidebarExtra 표준화, 라벨 없던 화면에 추가 */}
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>PROGRESS · 1/4</div>
           <div className="v3-step is-active">
             <span className="v3-step-index">1</span>
             <span>이미지 로드</span>
@@ -843,6 +845,8 @@ export function Create2fScreen({
       }
       sidebarExtra={
         <div className="v3-step-tracker">
+          {/* 2026-08-12: 사용자 요청 - sidebarExtra 표준화, 라벨 없던 화면에 추가 */}
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>PROGRESS · 3/4</div>
           <div className="v3-step is-done"><span className="v3-step-index">✓</span><span>이미지 로드</span></div>
           <div className="v3-step is-done"><span className="v3-step-index">✓</span><span>세그먼트 설정</span></div>
           <div className="v3-step is-active"><span className="v3-step-index">3</span><span>실행 전 확인</span></div>

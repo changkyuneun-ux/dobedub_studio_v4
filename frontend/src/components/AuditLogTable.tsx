@@ -91,10 +91,13 @@ export function AuditLogTable({
   const pageEnd = Math.min(total, page * pageSize);
   // 2026-08-12: 원래 "작업" 칸이 minmax(0,1fr)로 남는 공간을 다 먹어서, 원본
   // action 문자열이 길 때 "상세"(80px, JSON 보기) 칸이 지나치게 좁아 JSON이
-  // 가로 스크롤까지 생겼다. 이제 작업은 위 한글 라벨로 짧아졌으니 고정폭으로
-  // 줄이고, 남는 공간은 "상세" 쪽으로 넘긴다(시각도 지역 시간 포맷이 두 줄로
-  // 안 잘리게 살짝 넓힘).
-  const gridColumns = "170px 110px 100px 160px minmax(280px,1fr)";
+  // 가로 스크롤까지 생겼다. 작업은 위 한글 라벨로 짧아졌으니 고정폭으로 줄임
+  // (시각도 지역 시간 포맷이 두 줄로 안 잘리게 살짝 넓힘). 처음엔 "상세"를
+  // minmax(280px,1fr)로 과하게 넓혔더니 이번엔 "대상"(targetType·targetId,
+  // 예: "history_item · task_20260805_112339_f5def9")이 160px 고정에
+  // 갇혀 줄바꿈됐다 - "대상"을 유동폭으로, "상세"는 접힌 상태 "▶ 보기"
+  // 텍스트만 필요하니 고정 160px로 되돌린다(펼쳤을 때 JSON도 무리 없는 폭).
+  const gridColumns = "170px 110px 100px minmax(220px,1fr) 160px";
 
   return (
     <div className="v3-card">

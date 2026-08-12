@@ -3459,11 +3459,19 @@ button {
   padding: 2px 5px;
 }
 
+/* 2026-08-12: 사용자 요청 - 화면마다 다른 sidebarExtra(탭·필터·트리 등 화면별
+   보조 메뉴)가 라벨이 없는 경우 주 메뉴(GENERATE/ADMIN 목록) 바로 아래 아무
+   경계 없이 붙어 보여, 마치 주 메뉴의 연장인 것처럼 오인됐다. 라벨 유무와
+   무관하게 항상 구분선+여백을 둬서 "이 아래는 현재 화면 전용 보조 메뉴"라는
+   게 시각적으로 항상 드러나게 한다. */
 .v3-sidebar-extra {
+  border-top: 1px solid var(--v3-border-inner);
   display: flex;
   flex-direction: column;
+  margin-top: 10px;
   min-height: 0;
   overflow: auto;
+  padding-top: 12px;
 }
 
 .v3-sidebar-footer {
@@ -4769,19 +4777,24 @@ button {
    몇 px 차이로만 구분되던 문제를 고쳤다. 레벨별 크기·굵기·색을 단계적으로
    낮춰 위계를 눈으로 바로 읽히게 하고, 들여쓰기 div를 트리 가이드 선으로
    바꿔 부모-자식 관계를 명시한다. */
+/* 2026-08-12: 사용자 요청 - 트리 최상위(scope)가 13px/700이라 다른 화면들의
+   1단계 sidebarExtra 항목(.v3-segment-nav-head 기본값 12px/600 - Assets 컬렉션,
+   Task History 필터, Workflows 목록 등)보다 커 보였다. 최상위를 그 기본값과
+   맞추고, 아래 두 단계를 그보다 점진적으로 작게 유지해 트리 내부의 상대적
+   위계(스코프>그룹>서브카테고리)는 그대로 살린다. */
 .v3-catalog-tree-scope .v3-segment-nav-head {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .v3-catalog-tree-group .v3-segment-nav-head {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
 }
 
 .v3-catalog-tree-subcategory .v3-segment-nav-head {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 500;
 }
 

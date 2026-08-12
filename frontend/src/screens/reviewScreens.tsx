@@ -155,7 +155,7 @@ export function Create3aScreen({
       headerTitle="작업 이력"
       sidebarExtra={
         <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>필터 · 현재 페이지 {history.length}건</div>
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {history.length}</div>
           {([
             ["all", "전체", history.length],
             ["completed", "완료", completedCount],
@@ -774,7 +774,7 @@ export function Create5aScreen({
       }
       sidebarExtra={
         <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>Collection · {collections.length}</div>
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>COLLECTION · {collections.length}</div>
           <button
             type="button"
             className={`v3-segment-nav-item ${collectionFilter === "" ? "is-active" : ""}`}
