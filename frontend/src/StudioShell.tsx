@@ -129,6 +129,7 @@ type ConfirmationRequest = {
   description: string;
   confirmLabel: string;
   tone?: "danger" | "primary";
+  warning?: string;
   onConfirm: () => Promise<void>;
 };
 
@@ -405,6 +406,39 @@ export function StudioShell({
     } catch (error) {
       setAssetsNotice(error instanceof Error ? error.message : "컬렉션 생성에 실패했습니다.");
     }
+  }
+
+  function requestDeleteCollection(collection: CollectionSummary) {
+    if (collection.itemCount > 0) {
+      requestConfirmation({
+        title: "컬렉션 삭제 불가",
+        description: `"${collection.name}"에 분류된 자산이 ${collection.itemCount}개 있습니다. 자산을 다른 컬렉션으로 옮기거나 분류를 해제한 후 삭제할 수 있습니다.`,
+        confirmLabel: "확인",
+        warning: "삭제하려는 컬렉션의 자산 분류는 자동으로 변경되지 않습니다.",
+        onConfirm: async () => undefined
+      });
+      return;
+    }
+    requestConfirmation({
+      title: "컬렉션을 삭제할까요?",
+      description: `"${collection.name}" 컬렉션을 삭제합니다. 비어 있는 컬렉션만 삭제할 수 있으며, 삭제한 컬렉션은 복구할 수 없습니다.`,
+      confirmLabel: "삭제",
+      tone: "danger",
+      warning: "분류된 자산이 있는 경우 삭제가 차단됩니다.",
+      onConfirm: async () => {
+        setAssetsNotice("");
+        try {
+          await apiClient.deleteCollection(collection.id);
+          if (assetsCollectionFilter === collection.id) {
+            setAssetsCollectionFilter("");
+          }
+          await Promise.all([loadCollections(), loadAssetsPage(1, assetsPageSize, assetsCollectionFilter === collection.id ? "" : assetsCollectionFilter)]);
+          setAssetsNotice(`컬렉션 "${collection.name}"을(를) 삭제했습니다.`);
+        } catch (error) {
+          setAssetsNotice(error instanceof Error ? error.message : "컬렉션을 삭제하지 못했습니다.");
+        }
+      }
+    });
   }
 
   // 2026-08-11(Asset 관리 통합): 자산 하나가 여러 컬렉션에 동시에 속할 수 있어
@@ -1982,6 +2016,7 @@ export function StudioShell({
         onCollectionFilterChange={changeAssetsCollectionFilter}
         onCreateNameChange={setCollectionCreateName}
         onCreateCollection={() => void createCollection()}
+        onDeleteCollection={requestDeleteCollection}
         onAddToCollection={(assetId, collectionId) => void addAssetToCollectionRow(assetId, collectionId)}
         onRemoveFromCollection={(assetId, collectionId) => void removeAssetFromCollectionRow(assetId, collectionId)}
         onPageChange={(page) => void loadAssetsPage(page)}
@@ -2177,7 +2212,7 @@ export function StudioShell({
           <p className="v3-modal-body-text">{confirmationRequest.description}</p>
           <div className="v3-warning-strip" style={{ margin: 0 }}>
             <span className="v3-warning-dot" />
-            <span>비활성화된 항목은 새 프롬프트 선택에 표시되지 않습니다.</span>
+            <span>{confirmationRequest.warning || "비활성화된 항목은 새 프롬프트 선택에 표시되지 않습니다."}</span>
           </div>
           <div className="v3-inline-actions">
             <button className="v3-secondary-button v3-flex-button" type="button" disabled={confirmationSubmitting} onClick={() => setConfirmationRequest(null)}>취소</button>

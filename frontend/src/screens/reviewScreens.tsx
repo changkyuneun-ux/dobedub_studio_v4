@@ -724,6 +724,7 @@ export function Create5aScreen({
   onCollectionFilterChange,
   onCreateNameChange,
   onCreateCollection,
+  onDeleteCollection,
   onAddToCollection,
   onRemoveFromCollection,
   onPageChange,
@@ -746,6 +747,7 @@ export function Create5aScreen({
   onCollectionFilterChange: (value: number | "uncategorized" | "") => void;
   onCreateNameChange: (value: string) => void;
   onCreateCollection: () => void;
+  onDeleteCollection: (collection: CollectionSummary) => void;
   onAddToCollection: (assetId: string, collectionId: number) => void;
   onRemoveFromCollection: (assetId: string, collectionId: number) => void;
   onPageChange: (page: number) => void;
@@ -826,6 +828,21 @@ export function Create5aScreen({
             }}
           />
           <button className="v3-primary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>컬렉션 만들기</button>
+        </div>
+        <div className="v3-collection-management-list" aria-label="등록된 컬렉션">
+          {collections.length ? collections.map((collection) => (
+            <div className="v3-collection-management-item" key={collection.id}>
+              <span>{collection.name}</span>
+              <small>{collection.itemCount}개 자산</small>
+              <button
+                type="button"
+                className="v3-collection-delete-button"
+                onClick={() => onDeleteCollection(collection)}
+              >
+                삭제
+              </button>
+            </div>
+          )) : <p className="v3-muted-text">등록된 컬렉션이 없습니다.</p>}
         </div>
       </section>
       <div className="v3-card" style={{ overflowX: "auto" }}>

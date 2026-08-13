@@ -5534,6 +5534,54 @@ button {
   white-space: nowrap;
 }
 
+.v3-collection-management-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.v3-collection-management-list .v3-muted-text {
+  margin: 0;
+}
+
+.v3-collection-management-item {
+  align-items: center;
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-accent-border);
+  border-radius: 7px;
+  display: inline-flex;
+  gap: 7px;
+  padding: 5px 6px 5px 9px;
+}
+
+.v3-collection-management-item span {
+  color: var(--v3-text-body);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.v3-collection-management-item small {
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: 9.5px;
+}
+
+.v3-collection-delete-button {
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-danger-border);
+  border-radius: 5px;
+  color: var(--v3-danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 6px;
+}
+
+.v3-collection-delete-button:hover {
+  background: var(--v3-danger-bg);
+}
+
 @media (max-width: 680px) {
   .v3-collection-management-form {
     grid-template-columns: 1fr;

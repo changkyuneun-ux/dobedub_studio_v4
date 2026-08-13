@@ -792,6 +792,8 @@ export const apiClient = {
   collections: () => requestJson<CollectionsResponse>("/api/collections"),
   createCollection: (name: string) =>
     requestJson<CollectionSummary>("/api/collections", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteCollection: (id: number) =>
+    requestJson<void>(`/api/collections/${id}`, { method: "DELETE" }),
   collection: (id: number) => requestJson<CollectionDetail>(`/api/collections/${id}`),
   addCollectionItem: (id: number, assetId: string) =>
     requestJson<CollectionDetail>(`/api/collections/${id}/items`, { method: "POST", body: JSON.stringify({ assetId }) }),

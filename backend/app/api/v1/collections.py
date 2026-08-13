@@ -24,6 +24,16 @@ def create_collection(payload: dict, current_user: CurrentUser = Depends(require
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/collections/{collection_id}", status_code=204)
+def delete_collection(collection_id: int, _: CurrentUser = Depends(require_permission("history:read"))):
+    try:
+        collection_service.delete_collection(collection_id)
+    except collection_service.CollectionNotEmptyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/collections/{collection_id}")
 def get_collection(collection_id: int, _: CurrentUser = Depends(require_permission("history:read"))):
     try:

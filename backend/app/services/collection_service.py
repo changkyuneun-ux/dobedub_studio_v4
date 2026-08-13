@@ -9,6 +9,15 @@ from backend.app.db.session import SessionLocal
 from backend.app.services.task_tracking_service import _asset_to_json, _format_datetime
 
 
+class CollectionNotEmptyError(ValueError):
+    """분류된 자산이 남아 있는 컬렉션은 삭제하지 않는다."""
+
+    def __init__(self, name: str, item_count: int):
+        self.name = name
+        self.item_count = item_count
+        super().__init__(f'컬렉션 "{name}"에 분류된 자산이 {item_count}개 있습니다. 자산 분류를 변경한 후 삭제하세요.')
+
+
 def _collection_payload(collection: Collection, item_count: int) -> dict:
     return {
         "id": collection.id,
@@ -53,6 +62,31 @@ def create_collection(name: str, created_by: str | None = None) -> dict:
         session.commit()
         session.refresh(collection)
         return _collection_payload(collection, 0)
+    finally:
+        session.close()
+
+
+def delete_collection(collection_id: int) -> None:
+    """비어 있는 컬렉션만 삭제한다.
+
+    컬렉션 삭제가 자산 또는 분류 연결을 연쇄 삭제하는 경로가 되지 않도록, 연결된
+    자산이 하나라도 있으면 서버에서 409으로 차단한다.
+    """
+    session = SessionLocal()
+    try:
+        collection = session.get(Collection, collection_id)
+        if collection is None:
+            raise KeyError(f"Collection not found: {collection_id}")
+        item_count = int(
+            session.scalar(
+                select(func.count()).select_from(CollectionItem).where(CollectionItem.collection_id == collection_id)
+            )
+            or 0
+        )
+        if item_count:
+            raise CollectionNotEmptyError(collection.name, item_count)
+        session.delete(collection)
+        session.commit()
     finally:
         session.close()
 
