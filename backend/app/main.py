@@ -28,6 +28,7 @@ from backend.app.api.v1.system import router as system_router
 from backend.app.api.v1.workflows import router as workflows_router
 from backend.app.core.config import get_settings
 from backend.app.db.session import engine
+from backend.app.services.prompt_builder_service import monitor_active_prompt_generations
 from backend.app.services.studio_api_service import ensure_storage_dirs, monitor_active_jobs
 from backend.app.services.workflow_storage_service import bootstrap_workflow_store
 
@@ -76,6 +77,9 @@ async def _lifecycle(_: FastAPI):
                 result = await asyncio.to_thread(monitor_active_jobs)
                 if result["failures"]:
                     LOGGER.warning("Task monitor could not refresh tasks: %s", result["failures"])
+                prompt_result = await asyncio.to_thread(monitor_active_prompt_generations)
+                if prompt_result["failures"]:
+                    LOGGER.warning("Prompt monitor could not refresh requests: %s", prompt_result["failures"])
             except Exception:
                 LOGGER.exception("Task monitor cycle failed")
             await asyncio.sleep(settings.task_monitor_interval_seconds)

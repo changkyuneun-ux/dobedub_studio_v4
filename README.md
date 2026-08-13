@@ -209,7 +209,7 @@ RUNPOD_SANDBOX_POD_TIMEOUT=20
 
 프롬프트 생성(`2b` 화면의 `프롬프트 생성 · Qwen`)은 기본값 `PROMPT_LLM_PROVIDER=mock`일 때 로컬 deterministic mock으로 동작합니다. 실제 RunPod vLLM endpoint를 사용하려면 영상 생성용 RunPod endpoint와 별도로 prompt 전용 endpoint를 설정합니다.
 
-RunPod Serverless native `/runsync` 방식:
+RunPod Serverless native 비동기 `/run` + `/status/{jobId}` 방식:
 
 ```bash
 PROMPT_LLM_PROVIDER=runpod_vllm
@@ -221,6 +221,12 @@ PROMPT_LLM_RUNPOD_INPUT_MODE=prompt
 PROMPT_LLM_TEMPERATURE=0.2
 PROMPT_LLM_MAX_TOKENS=900
 PROMPT_LLM_TIMEOUT=90
+# For native RunPod Serverless endpoints, durable async mode submits /run and
+# polls /status/{jobId}; it is resilient to worker cold starts.
+PROMPT_LLM_RUNPOD_EXECUTION_MODE=async
+PROMPT_LLM_SUBMIT_TIMEOUT=20
+PROMPT_LLM_COLD_START_TIMEOUT=900
+PROMPT_LLM_POLL_INTERVAL=3
 PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30
 ```
 
@@ -228,9 +234,7 @@ PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30
 
 RunPod vLLM quick start가 `{"input":{"prompt":"..."}}` 형태를 안내하므로 `PROMPT_LLM_RUNPOD_INPUT_MODE=prompt`가 기본값입니다. handler가 `messages`를 받도록 구성된 경우에만 `PROMPT_LLM_RUNPOD_INPUT_MODE=messages`로 바꿉니다.
 
-RunPod Serverless Qwen 워커의 콜드 스타트 구간에서 502/503/504가 반환되면 앱은 `PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS` 순서로 같은 요청을 재시도합니다. 기본값은 총 95초를 기다리므로, 일시적인 워커 기동 실패를 사용자가 수동으로 다시 요청할 필요가 없습니다. 400/401/403처럼 설정을 수정해야 하는 오류는 재시도하지 않습니다.
-
-콜드스타트로 인한 502/503/504는 `prompt_llm_client.py`가 최대 4회(백오프 3·5·8초)까지 자동 재시도합니다.
+Native RunPod endpoint는 요청을 `/run`으로 즉시 제출한 뒤 DB에 RunPod Job ID를 보존하고, 서버 모니터가 `/status/{jobId}`를 조회합니다. `PROMPT_LLM_COLD_START_TIMEOUT`(기본 900초) 안에서는 콜드 스타트를 실패로 처리하지 않습니다. 브라우저 새로고침이나 Prompt Builder 종료도 서버의 상태 추적을 멈추지 않습니다. `PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS`는 `sync` 호환 모드 또는 OpenAI-compatible endpoint의 일시 오류 재시도에만 사용됩니다.
 
 vLLM OpenAI-compatible 방식:
 

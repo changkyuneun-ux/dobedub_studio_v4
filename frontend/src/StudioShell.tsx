@@ -20,6 +20,7 @@ import {
   SystemPromptVersion,
   PromptSceneResponse,
   PromptGenerateResponse,
+  PromptGenerationStatusResponse,
   HistoryItem,
   AssetItem,
   CollectionSummary,
@@ -880,14 +881,59 @@ export function StudioShell({
         termIds: sceneForGeneration.usedTermIds,
         language: "ko"
       });
-      setPromptGenerated(generated);
-      setPromptBuilderNotice(`${promptScene ? "" : "Scene JSON 자동 생성 후 "}Prompt generation 완료 (${generated.provider}).`);
+      const completed = await waitForPromptGeneration(generated);
+      setPromptGenerated(completed);
+      setPromptBuilderNotice(`${promptScene ? "" : "Scene JSON 자동 생성 후 "}Prompt generation 완료 (${completed.provider}).`);
     } catch (error) {
       setPromptGenerated(null);
       setPromptBuilderNotice(error instanceof Error ? error.message : "Prompt generation에 실패했습니다.");
     } finally {
       setPromptBuilderLoading(false);
     }
+  }
+
+  async function waitForPromptGeneration(
+    response: PromptGenerateResponse | PromptGenerationStatusResponse
+  ): Promise<PromptGenerateResponse> {
+    if (isCompletedPromptGeneration(response)) {
+      return response;
+    }
+    let current = response;
+    const deadline = Date.now() + 15 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const status = String(current.status || "IN_QUEUE").toUpperCase();
+      if (["FAILED", "CANCELLED", "TIMED_OUT"].includes(status)) {
+        throw new Error(current.failureMessage || `Qwen prompt generation ${status}.`);
+      }
+      setPromptBuilderNotice(promptGenerationStatusNotice(status));
+      await new Promise((resolve) => window.setTimeout(resolve, Math.max(1000, Number(current.pollIntervalSeconds || 3) * 1000)));
+      current = await apiClient.promptGenerationStatus(current.requestId);
+      if (isCompletedPromptGeneration(current)) {
+        return current;
+      }
+    }
+    throw new Error("Qwen prompt generation is still pending. It will continue on the server; please reopen Prompt Builder shortly.");
+  }
+
+  function isCompletedPromptGeneration(
+    response: PromptGenerateResponse | PromptGenerationStatusResponse
+  ): response is PromptGenerateResponse {
+    return (
+      String((response as PromptGenerationStatusResponse).status || "COMPLETED").toUpperCase() === "COMPLETED" &&
+      typeof (response as PromptGenerateResponse).positivePrompt === "string" &&
+      typeof (response as PromptGenerateResponse).negativePrompt === "string" &&
+      Boolean((response as PromptGenerateResponse).outputId)
+    );
+  }
+
+  function promptGenerationStatusNotice(status: string): string {
+    if (["IN_QUEUE", "QUEUED", "SUBMITTED", "SUBMITTING"].includes(status)) {
+      return "Qwen 워커를 준비하고 있습니다. 콜드 스타트 시 최대 15분까지 상태를 확인합니다.";
+    }
+    if (status === "IN_PROGRESS" || status === "RUNNING") {
+      return "Qwen이 프롬프트를 생성하고 있습니다.";
+    }
+    return `Qwen 요청 상태: ${status}`;
   }
 
   function togglePromptTerm(termId: number) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from backend.app.services.prompt_builder_service import (
     deactivate_prompt_category,
     deactivate_prompt_term,
     generate_prompt,
+    get_prompt_generation_status,
     prompt_catalog,
     save_prompt_feedback,
     scene_json_v1_schema,
@@ -351,15 +353,28 @@ def scene(payload: dict, _: CurrentUser = Depends(require_permission("prompts:bu
 
 
 @router.post("/generate")
-def generate(payload: dict, _: CurrentUser = Depends(require_permission("prompts:build")), db: Session = Depends(get_db)):
+def generate(payload: dict, current_user: CurrentUser = Depends(require_permission("prompts:build")), db: Session = Depends(get_db)):
     try:
-        return generate_prompt(db, payload)
+        result = generate_prompt(db, payload, created_by=current_user.id)
+        if str(result.get("status") or "").upper() not in {"", "COMPLETED", "SUCCEEDED", "SUCCESS"}:
+            return JSONResponse(status_code=202, content=result)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Prompt generation failed: {exc}") from exc
+
+
+@router.get("/generate/{request_id}")
+def prompt_generation_status(request_id: str, _: CurrentUser = Depends(require_permission("prompts:build")), db: Session = Depends(get_db)):
+    try:
+        return get_prompt_generation_status(db, request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Prompt generation status failed: {exc}") from exc
 
 
 @router.post("/feedback", status_code=201)

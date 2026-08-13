@@ -54,6 +54,10 @@ class Settings:
     prompt_llm_max_tokens: int = 900
     prompt_llm_timeout: int = 45
     prompt_llm_cold_start_retry_delays_seconds: tuple[int, ...] = (5, 10, 20, 30, 30)
+    prompt_llm_runpod_execution_mode: str = "async"
+    prompt_llm_submit_timeout: int = 20
+    prompt_llm_cold_start_timeout: int = 900
+    prompt_llm_poll_interval: int = 3
     auth_jwt_secret: str = "dobedub-studio-local-dev-secret"
     auth_token_ttl_minutes: int = 480
     task_monitor_interval_seconds: int = 5
@@ -86,6 +90,21 @@ def get_settings() -> Settings:
     prompt_llm_cold_start_retry_delays_seconds = _prompt_llm_retry_delays(
         os.environ.get("PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS", "5,10,20,30,30")
     )
+    prompt_llm_runpod_execution_mode = os.environ.get("PROMPT_LLM_RUNPOD_EXECUTION_MODE", "async").strip().lower() or "async"
+    if prompt_llm_runpod_execution_mode not in {"async", "sync"}:
+        prompt_llm_runpod_execution_mode = "async"
+    try:
+        prompt_llm_submit_timeout = min(120, max(5, int(os.environ.get("PROMPT_LLM_SUBMIT_TIMEOUT", "20"))))
+    except ValueError:
+        prompt_llm_submit_timeout = 20
+    try:
+        prompt_llm_cold_start_timeout = min(3600, max(60, int(os.environ.get("PROMPT_LLM_COLD_START_TIMEOUT", "900"))))
+    except ValueError:
+        prompt_llm_cold_start_timeout = 900
+    try:
+        prompt_llm_poll_interval = min(30, max(1, int(os.environ.get("PROMPT_LLM_POLL_INTERVAL", "3"))))
+    except ValueError:
+        prompt_llm_poll_interval = 3
     try:
         prompt_llm_temperature = float(os.environ.get("PROMPT_LLM_TEMPERATURE", "0.2"))
     except ValueError:
@@ -140,6 +159,10 @@ def get_settings() -> Settings:
         prompt_llm_max_tokens=prompt_llm_max_tokens,
         prompt_llm_timeout=prompt_llm_timeout,
         prompt_llm_cold_start_retry_delays_seconds=prompt_llm_cold_start_retry_delays_seconds,
+        prompt_llm_runpod_execution_mode=prompt_llm_runpod_execution_mode,
+        prompt_llm_submit_timeout=prompt_llm_submit_timeout,
+        prompt_llm_cold_start_timeout=prompt_llm_cold_start_timeout,
+        prompt_llm_poll_interval=prompt_llm_poll_interval,
         auth_jwt_secret=os.environ.get("AUTH_JWT_SECRET", "dobedub-studio-local-dev-secret"),
         auth_token_ttl_minutes=auth_token_ttl_minutes,
         task_monitor_interval_seconds=task_monitor_interval_seconds,

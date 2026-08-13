@@ -30,7 +30,15 @@ from backend.app.db.models import (
     PromptTermRendering,
     WorkflowTask,
 )
-from backend.app.services.prompt_llm_client import generate_with_prompt_llm
+from backend.app.services.prompt_llm_client import (
+    RUNPOD_TERMINAL_STATES,
+    cancel_runpod_vllm_job,
+    generate_with_prompt_llm,
+    get_runpod_vllm_job_status,
+    parse_runpod_vllm_job_result,
+    submit_runpod_vllm_job,
+    uses_async_runpod_vllm,
+)
 from backend.app.services.prompt_system_prompt_service import active_prompt_system_prompt_text
 
 
@@ -1415,7 +1423,7 @@ def _schema_error(message: str) -> dict:
     return {"code": "scene_schema_invalid", "message": message, "severity": "error"}
 
 
-def generate_prompt(session: Session, payload: dict) -> dict:
+def generate_prompt(session: Session, payload: dict, *, created_by: str | None = None) -> dict:
     settings = get_settings()
     provider = (payload.get("provider") or settings.prompt_llm_provider or "mock").strip().lower()
     scene = payload.get("scene")
@@ -1431,6 +1439,18 @@ def generate_prompt(session: Session, payload: dict) -> dict:
     # 대응된다.
     selected_term_ids = [int(value) for value in payload.get("termIds") or payload.get("usedTermIds") or [] if str(value).isdigit()]
     language = payload.get("language") or "ko"
+
+    if uses_async_runpod_vllm(settings, provider):
+        return _submit_async_runpod_prompt_generation(
+            session,
+            payload=payload,
+            scene=scene,
+            constraints=constraints,
+            selected_term_ids=selected_term_ids,
+            language=language,
+            provider=provider,
+            created_by=created_by,
+        )
 
     raw_generation = {"scene": scene, "constraints": constraints, "provider": provider}
     if provider == "mock":
@@ -1462,7 +1482,7 @@ def generate_prompt(session: Session, payload: dict) -> dict:
         constraints_json=constraints,
         selected_term_ids=selected_term_ids,
         status="generated",
-        created_by=None,
+        created_by=created_by,
     )
     session.add(request)
     output = PromptGenerationOutput(
@@ -1492,6 +1512,184 @@ def generate_prompt(session: Session, payload: dict) -> dict:
         "usedTermIds": selected_term_ids,
         "warnings": output.warnings_json,
     }
+
+
+def get_prompt_generation_status(session: Session, request_id: str) -> dict:
+    request = session.get(PromptGenerationRequest, request_id)
+    if not request:
+        raise ValueError("Prompt generation request was not found.")
+    output = session.scalar(
+        select(PromptGenerationOutput)
+        .where(PromptGenerationOutput.request_id == request.id)
+        .order_by(PromptGenerationOutput.created_at.desc())
+    )
+    return _prompt_generation_payload(request, output)
+
+
+def monitor_active_prompt_generations() -> dict:
+    """Refresh queued Qwen jobs independently of browser/API request lifetime."""
+    from backend.app.db.session import SessionLocal
+
+    settings = get_settings()
+    # RunPod endpoint / worker implementations can report the same waiting
+    # period as IN_QUEUE, QUEUED, or SUBMITTED. Keep every non-terminal form
+    # eligible for the background monitor instead of leaving a request stale.
+    active_statuses = {"SUBMITTING", "SUBMITTED", "IN_QUEUE", "QUEUED", "IN_PROGRESS", "RUNNING"}
+    refreshed = 0
+    failures: list[str] = []
+    with SessionLocal() as session:
+        requests = session.scalars(
+            select(PromptGenerationRequest).where(
+                PromptGenerationRequest.external_job_id.is_not(None),
+                PromptGenerationRequest.status.in_(active_statuses),
+            )
+        ).all()
+        for request in requests:
+            try:
+                _refresh_async_runpod_prompt_generation(session, request, settings)
+                refreshed += 1
+            except Exception as exc:
+                # A temporary RunPod status failure must not erase a valid queued job.
+                failures.append(f"{request.id}: {exc}")
+        session.commit()
+    return {"checked": len(requests), "refreshed": refreshed, "failures": failures}
+
+
+def _submit_async_runpod_prompt_generation(
+    session: Session,
+    *,
+    payload: dict,
+    scene: dict,
+    constraints: dict,
+    selected_term_ids: list[int],
+    language: str,
+    provider: str,
+    created_by: str | None,
+) -> dict:
+    settings = get_settings()
+    request = PromptGenerationRequest(
+        id=f"prompt_req_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}",
+        workflow_id=payload.get("workflowId"),
+        segment_index=payload.get("segmentIndex"),
+        language=language,
+        scene_json=scene,
+        constraints_json=constraints,
+        selected_term_ids=selected_term_ids,
+        status="SUBMITTING",
+        created_by=created_by,
+    )
+    session.add(request)
+    session.commit()
+
+    try:
+        submission = submit_runpod_vllm_job(
+            settings,
+            scene=scene,
+            constraints=constraints,
+            language=language,
+            system_prompt=active_prompt_system_prompt_text(session),
+        )
+        request.external_job_id = str(submission["id"])
+        request.status = str(submission.get("status") or "IN_QUEUE").upper()
+        request.failure_message = None
+        session.commit()
+    except Exception as exc:
+        request.status = "FAILED"
+        request.failure_message = str(exc)
+        session.commit()
+        raise RuntimeError(f"Qwen prompt request could not be submitted: {exc}") from exc
+    return _prompt_generation_payload(request, None, submit_response=submission)
+
+
+def _refresh_async_runpod_prompt_generation(session: Session, request: PromptGenerationRequest, settings) -> None:
+    if not request.external_job_id:
+        return
+    age_seconds = max(0, (datetime.utcnow() - request.created_at).total_seconds())
+    if age_seconds > settings.prompt_llm_cold_start_timeout:
+        try:
+            cancel_runpod_vllm_job(settings, request.external_job_id)
+        except Exception:
+            pass
+        request.status = "TIMED_OUT"
+        request.failure_message = f"Qwen prompt generation exceeded {settings.prompt_llm_cold_start_timeout} seconds."
+        return
+
+    status_response = get_runpod_vllm_job_status(settings, request.external_job_id)
+    status = str(status_response.get("status") or "UNKNOWN").upper()
+    request.status = status
+    if status not in RUNPOD_TERMINAL_STATES:
+        return
+    if status not in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
+        request.failure_message = str(status_response.get("error") or status_response.get("message") or f"RunPod job finished with {status}.")
+        return
+
+    existing_output = session.scalar(
+        select(PromptGenerationOutput).where(PromptGenerationOutput.request_id == request.id)
+    )
+    if existing_output:
+        request.status = "COMPLETED"
+        return
+    try:
+        result = parse_runpod_vllm_job_result(status_response, scene=request.scene_json or {})
+    except Exception as exc:
+        request.status = "FAILED"
+        request.failure_message = f"Qwen returned an invalid prompt response: {exc}"
+        return
+    output = PromptGenerationOutput(
+        id=f"prompt_out_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}",
+        request_id=request.id,
+        provider="runpod_vllm",
+        positive_prompt=result.positive_prompt,
+        negative_prompt=result.negative_prompt,
+        used_term_ids=request.selected_term_ids or [],
+        added_term_ids=[],
+        warnings_json=result.warnings,
+        raw_json={
+            "scene": request.scene_json,
+            "constraints": request.constraints_json,
+            "provider": "runpod_vllm",
+            "llmResponse": result.raw_response,
+            "systemPromptCode": "qwen_wan_i2v_positive",
+        },
+    )
+    session.add(output)
+    request.status = "COMPLETED"
+    request.failure_message = None
+
+
+def _prompt_generation_payload(
+    request: PromptGenerationRequest,
+    output: PromptGenerationOutput | None,
+    *,
+    submit_response: dict | None = None,
+) -> dict:
+    status = str(request.status or "UNKNOWN").upper()
+    payload = {
+        "requestId": request.id,
+        "outputId": output.id if output else None,
+        "provider": output.provider if output else "runpod_vllm",
+        "workflowId": request.workflow_id,
+        "segmentIndex": request.segment_index,
+        "language": request.language,
+        "scene": request.scene_json or {},
+        "constraints": request.constraints_json or {},
+        "usedTermIds": request.selected_term_ids or [],
+        "status": status,
+        "externalJobId": request.external_job_id,
+        "failureMessage": request.failure_message,
+        "pollIntervalSeconds": get_settings().prompt_llm_poll_interval,
+    }
+    if submit_response:
+        payload["runpodSubmit"] = submit_response
+    if output:
+        payload.update(
+            {
+                "positivePrompt": output.positive_prompt,
+                "negativePrompt": output.negative_prompt,
+                "warnings": output.warnings_json or [],
+            }
+        )
+    return payload
 
 
 def save_prompt_feedback(session: Session, payload: dict) -> dict:

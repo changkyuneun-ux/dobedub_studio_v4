@@ -574,6 +574,8 @@ class PromptGenerationRequest(Base):
     constraints_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     selected_term_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="draft", index=True)
+    external_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
 

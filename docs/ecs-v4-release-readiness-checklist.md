@@ -64,7 +64,7 @@
 | Runtime data | `STUDIO_DATA_DIR=/data/outputs/dobedub-studio`, `OUTPUTS_DIR=/data/outputs/dobedub-studio/outputs` |
 | Workflow persistence | `WORKFLOW_SEED_DIR=/app/workflows`, `WORKFLOWS_DIR=/data/outputs/dobedub-studio/workflows`, `METADATA_DIR=/data/outputs/dobedub-studio/metadata` |
 | RunPod | `RUNPOD_DRY_RUN=0`, API keys는 Secret, configured endpoints 유지 |
-| Prompt LLM | `PROMPT_LLM_PROVIDER=runpod_vllm`, key는 Secret, `PROMPT_LLM_TIMEOUT=240`, cold-start retry schedule은 `5,10,20,30,30` 권장 |
+| Prompt LLM | `PROMPT_LLM_PROVIDER=runpod_vllm`, key는 Secret, native endpoint는 `PROMPT_LLM_RUNPOD_EXECUTION_MODE=async`, `PROMPT_LLM_SUBMIT_TIMEOUT=20`, `PROMPT_LLM_COLD_START_TIMEOUT=900`, `PROMPT_LLM_POLL_INTERVAL=3` 권장 |
 | Monitoring | `TASK_MONITOR_INTERVAL_SECONDS=5` |
 | Authentication | `AUTH_JWT_SECRET`은 Secret, `AUTH_TRUST_PROXY_HEADERS`는 미설정 |
 

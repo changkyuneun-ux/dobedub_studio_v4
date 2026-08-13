@@ -534,9 +534,57 @@ def main() -> None:
             def read(self):
                 return b'{"status":"COMPLETED","output":"{\\"choices\\":[{\\"tokens\\":[\\"Final JSON:\\\\n{\\\\\\"positivePrompt\\\\\\":\\\\\\"runpod cinematic prompt\\\\\\",\\\\\\"negativePrompt\\\\\\":\\\\\\"runpod negative prompt\\\\\\",\\\\\\"warnings\\\\\\":[]}\\"]}] }"}'
 
+        class FakeAsyncRunpodResponse:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body
+
         os.environ["PROMPT_LLM_PROVIDER"] = "runpod_vllm"
         os.environ["PROMPT_LLM_API_KEY"] = "test_prompt_llm_key"
         os.environ["PROMPT_LLM_ENDPOINT_ID"] = "test_prompt_llm_endpoint"
+        os.environ["PROMPT_LLM_RUNPOD_EXECUTION_MODE"] = "async"
+        async_submit_response = FakeAsyncRunpodResponse(b'{"id":"prompt_job_001","status":"IN_QUEUE"}')
+        async_complete_response = FakeAsyncRunpodResponse(
+            b'{"id":"prompt_job_001","status":"COMPLETED","output":"{\\"positivePrompt\\":\\"async cinematic prompt\\",\\"negativePrompt\\":\\"async negative prompt\\",\\"warnings\\":[]}"}'
+        )
+        with patch(
+            "backend.app.services.prompt_llm_client.urllib.request.urlopen",
+            side_effect=[async_submit_response, async_complete_response],
+        ) as async_urlopen:
+            async_generate_response = client.post("/api/prompts/generate", json={
+                "workflowId": "1-images.json",
+                "segmentIndex": 1,
+                "language": "ko",
+                "termIds": term_ids,
+                "scene": scene["scene"],
+                "constraints": scene["constraints"],
+            })
+            assert async_generate_response.status_code == 202, async_generate_response.text
+            async_request = async_generate_response.json()
+            assert async_request["status"] == "IN_QUEUE"
+            assert async_request["externalJobId"] == "prompt_job_001"
+            from backend.app.services.prompt_builder_service import monitor_active_prompt_generations
+
+            monitor_active_prompt_generations()
+            async_status_response = client.get(f"/api/prompts/generate/{async_request['requestId']}")
+        assert async_status_response.status_code == 200, async_status_response.text
+        assert async_status_response.json()["status"] == "COMPLETED"
+        assert async_status_response.json()["positivePrompt"] == "async cinematic prompt."
+        assert async_urlopen.call_args_list[0][0][0].full_url.endswith("/test_prompt_llm_endpoint/run")
+        assert async_urlopen.call_args_list[1][0][0].full_url.endswith("/test_prompt_llm_endpoint/status/prompt_job_001")
+
+        os.environ["PROMPT_LLM_PROVIDER"] = "runpod_vllm"
+        os.environ["PROMPT_LLM_API_KEY"] = "test_prompt_llm_key"
+        os.environ["PROMPT_LLM_ENDPOINT_ID"] = "test_prompt_llm_endpoint"
+        os.environ["PROMPT_LLM_RUNPOD_EXECUTION_MODE"] = "sync"
         with patch("backend.app.services.prompt_llm_client.urllib.request.urlopen", return_value=FakeRunpodResponse()) as fake_urlopen:
             runpod_generate_response = client.post("/api/prompts/generate", json={
                 "workflowId": "1-images.json",
@@ -628,6 +676,7 @@ def main() -> None:
         os.environ["PROMPT_LLM_PROVIDER"] = "mock"
         assert placeholder_generate_response.status_code == 502, placeholder_generate_response.text
         assert "invalid response after one retry" in placeholder_generate_response.text
+        os.environ.pop("PROMPT_LLM_RUNPOD_EXECUTION_MODE", None)
 
         invalid_generate_response = client.post("/api/prompts/generate", json={
             "workflowId": "1-images.json",

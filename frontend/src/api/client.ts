@@ -394,6 +394,25 @@ export type PromptGenerateResponse = {
   warnings?: Array<{ code?: string; message?: string; severity?: string }>;
 };
 
+export type PromptGenerationStatusResponse = {
+  requestId: string;
+  outputId?: string | null;
+  provider: string;
+  workflowId?: string;
+  segmentIndex?: number;
+  language?: string;
+  scene: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  usedTermIds: number[];
+  status: string;
+  externalJobId?: string | null;
+  failureMessage?: string | null;
+  pollIntervalSeconds?: number;
+  positivePrompt?: string;
+  negativePrompt?: string;
+  warnings?: Array<{ code?: string; message?: string; severity?: string }>;
+};
+
 export type InputImage = {
   index?: number;
   assetId?: string;
@@ -838,10 +857,12 @@ export const apiClient = {
     provider?: string;
     language?: string;
   }) =>
-    requestJson<PromptGenerateResponse>("/api/prompts/generate", {
+    requestJson<PromptGenerateResponse | PromptGenerationStatusResponse>("/api/prompts/generate", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  promptGenerationStatus: (requestId: string) =>
+    requestJson<PromptGenerationStatusResponse>(`/api/prompts/generate/${encodeURIComponent(requestId)}`),
   savePromptFeedback: (payload: {
     outputId: string;
     taskId: string;

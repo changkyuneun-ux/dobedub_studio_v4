@@ -24,6 +24,9 @@ class PromptLLMResponseError(RuntimeError):
     """A completed LLM job did not contain a valid prompt JSON payload."""
 
 
+RUNPOD_TERMINAL_STATES = {"COMPLETED", "SUCCEEDED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
+
+
 def prompt_llm_status(settings: Settings) -> dict:
     provider = (settings.prompt_llm_provider or "mock").strip().lower()
     api_key = _prompt_llm_api_key(settings)
@@ -38,6 +41,10 @@ def prompt_llm_status(settings: Settings) -> dict:
         "runpodInputMode": settings.prompt_llm_runpod_input_mode,
         "timeout": settings.prompt_llm_timeout,
         "coldStartRetryDelaysSeconds": list(settings.prompt_llm_cold_start_retry_delays_seconds),
+        "runpodExecutionMode": settings.prompt_llm_runpod_execution_mode,
+        "submitTimeout": settings.prompt_llm_submit_timeout,
+        "coldStartTimeout": settings.prompt_llm_cold_start_timeout,
+        "pollInterval": settings.prompt_llm_poll_interval,
         "apiKeyConfigured": provider == "mock" or is_real_secret(api_key, "your_prompt_llm_api_key"),
     }
 
@@ -56,6 +63,71 @@ def generate_with_prompt_llm(
     if provider in {"openai_compatible", "vllm_openai"}:
         return _openai_compatible_generate(settings, scene=scene, constraints=constraints, language=language, system_prompt=system_prompt)
     raise ValueError(f"Prompt LLM provider '{provider}' is not supported. Use mock, runpod_vllm, or openai_compatible.")
+
+
+def uses_async_runpod_vllm(settings: Settings, provider: str) -> bool:
+    """Return whether native RunPod requests use durable `/run` polling."""
+    endpoint_url = _prompt_llm_endpoint_url(settings)
+    return (
+        provider.strip().lower() == "runpod_vllm"
+        and "/openai/" not in endpoint_url
+        and settings.prompt_llm_runpod_execution_mode == "async"
+    )
+
+
+def submit_runpod_vllm_job(
+    settings: Settings,
+    *,
+    scene: dict,
+    constraints: dict,
+    language: str,
+    system_prompt: str | None,
+) -> dict:
+    """Submit once and return a RunPod job id without waiting for inference."""
+    response = _json_request(
+        _runpod_run_url(settings),
+        _auth_headers(_prompt_llm_api_key(settings)),
+        {"input": _runpod_vllm_input(settings, scene=scene, constraints=constraints, language=language, system_prompt=system_prompt)},
+        settings.prompt_llm_submit_timeout,
+        retry_delays=(),
+    )
+    job_id = str(response.get("id") or "").strip()
+    if not job_id:
+        raise RuntimeError(f"RunPod vLLM submission did not include a job id: {response}")
+    return response
+
+
+def get_runpod_vllm_job_status(settings: Settings, job_id: str) -> dict:
+    request = urllib.request.Request(
+        _runpod_status_url(settings, job_id),
+        method="GET",
+        headers=_auth_headers(_prompt_llm_api_key(settings)),
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=settings.prompt_llm_submit_timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"RunPod vLLM status HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"RunPod vLLM status request failed: {exc.reason}") from exc
+
+
+def cancel_runpod_vllm_job(settings: Settings, job_id: str) -> dict:
+    return _json_request(
+        _runpod_cancel_url(settings, job_id),
+        _auth_headers(_prompt_llm_api_key(settings)),
+        {},
+        settings.prompt_llm_submit_timeout,
+        retry_delays=(),
+    )
+
+
+def parse_runpod_vllm_job_result(response: dict, *, scene: dict) -> PromptLLMResult:
+    status = str(response.get("status") or "").upper()
+    if status not in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
+        raise RuntimeError(f"RunPod vLLM prompt job did not complete: {status or 'UNKNOWN'}")
+    return _parse_prompt_llm_output(response.get("output", response), raw_response=response, scene=scene)
 
 
 def _runpod_vllm_generate(
@@ -314,15 +386,51 @@ def _auth_headers(api_key: str) -> dict[str, str]:
 
 
 def _runpod_runsync_url(settings: Settings) -> str:
-    endpoint_url = _prompt_llm_endpoint_url(settings)
+    endpoint_url = _runpod_endpoint_url(settings)
     if endpoint_url:
-        if endpoint_url.endswith("/runsync"):
-            return endpoint_url
-        return f"{endpoint_url.rstrip('/')}/runsync"
+        return f"{endpoint_url}/runsync"
     endpoint_id = _prompt_llm_endpoint_id(settings)
     if not endpoint_id:
         raise ValueError("PROMPT_LLM_ENDPOINT_ID or PROMPT_LLM_ENDPOINT_URL is required for runpod_vllm provider.")
     return f"{settings.runpod_base_url.rstrip('/')}/{endpoint_id}/runsync"
+
+
+def _runpod_run_url(settings: Settings) -> str:
+    endpoint_url = _runpod_endpoint_url(settings)
+    if endpoint_url:
+        return f"{endpoint_url}/run"
+    endpoint_id = _prompt_llm_endpoint_id(settings)
+    if not endpoint_id:
+        raise ValueError("PROMPT_LLM_ENDPOINT_ID or PROMPT_LLM_ENDPOINT_URL is required for runpod_vllm provider.")
+    return f"{settings.runpod_base_url.rstrip('/')}/{endpoint_id}/run"
+
+
+def _runpod_status_url(settings: Settings, job_id: str) -> str:
+    endpoint_url = _runpod_endpoint_url(settings)
+    if endpoint_url:
+        return f"{endpoint_url}/status/{job_id}"
+    endpoint_id = _prompt_llm_endpoint_id(settings)
+    if not endpoint_id:
+        raise ValueError("PROMPT_LLM_ENDPOINT_ID or PROMPT_LLM_ENDPOINT_URL is required for runpod_vllm provider.")
+    return f"{settings.runpod_base_url.rstrip('/')}/{endpoint_id}/status/{job_id}"
+
+
+def _runpod_cancel_url(settings: Settings, job_id: str) -> str:
+    endpoint_url = _runpod_endpoint_url(settings)
+    if endpoint_url:
+        return f"{endpoint_url}/cancel/{job_id}"
+    endpoint_id = _prompt_llm_endpoint_id(settings)
+    if not endpoint_id:
+        raise ValueError("PROMPT_LLM_ENDPOINT_ID or PROMPT_LLM_ENDPOINT_URL is required for runpod_vllm provider.")
+    return f"{settings.runpod_base_url.rstrip('/')}/{endpoint_id}/cancel/{job_id}"
+
+
+def _runpod_endpoint_url(settings: Settings) -> str:
+    endpoint_url = _prompt_llm_endpoint_url(settings).rstrip("/")
+    for suffix in ("/runsync", "/run"):
+        if endpoint_url.endswith(suffix):
+            return endpoint_url[: -len(suffix)]
+    return endpoint_url
 
 
 def _openai_chat_completions_url(settings: Settings) -> str:
