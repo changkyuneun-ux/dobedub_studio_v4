@@ -258,6 +258,9 @@ export function StudioShell({
   const [promptScene, setPromptScene] = useState<PromptSceneResponse | null>(null);
   const [promptGenerated, setPromptGenerated] = useState<PromptGenerateResponse | null>(null);
   const [promptSceneDescription, setPromptSceneDescription] = useState("");
+  // Keyword/Scene 초안보다 사용자가 결과 카드에서 직접 수정한 문장을 우선한다.
+  // 세그먼트별로 보관해 SEG를 오가도 수정한 값이 사라지지 않게 한다.
+  const [promptEditorOverrides, setPromptEditorOverrides] = useState<Record<number, { positive?: string; negative?: string }>>({});
   const [promptBuilderLoading, setPromptBuilderLoading] = useState(false);
   const [promptBuilderNotice, setPromptBuilderNotice] = useState("");
   const [promptReviewItems, setPromptReviewItems] = useState<TaskPromptItem[]>([]);
@@ -293,6 +296,19 @@ export function StudioShell({
     setToast({ id: toastIdRef.current, message, tone });
   }
 
+  // Prompt Builder의 초안은 현재 작업 화면에만 속한다. 재작업처럼 다른 Task의
+  // 세그먼트를 불러올 때 이 상태를 비우지 않으면 이전 화면의 Qwen 결과가 새로
+  // 복원한 세그먼트 Prompt보다 먼저 렌더되어, 노드 설정만 바뀐 것처럼 보인다.
+  function resetPromptBuilderDraft() {
+    setPromptBuilderPanel("keywords");
+    setPromptSelectedTermIds([]);
+    setPromptScene(null);
+    setPromptGenerated(null);
+    setPromptSceneDescription("");
+    setPromptEditorOverrides({});
+    setPromptBuilderNotice("");
+  }
+
   useEffect(() => {
     if (!toast) {
       return;
@@ -309,9 +325,7 @@ export function StudioShell({
     setSegments(createSegmentsFromSchema(nextSchema));
     setSelectedSegmentIndex(1);
     setKeyframes(createKeyframes(nextSchema.keyframeCount || 1));
-    setPromptSceneDescription("");
-    setPromptScene(null);
-    setPromptGenerated(null);
+    resetPromptBuilderDraft();
     resetRunState();
     if (!options?.preserveNotice) {
       setNotice("");
@@ -571,6 +585,13 @@ export function StudioShell({
     setPromptGenerated(null);
     setPromptSceneDescription("");
     setPromptSelectedTermIds([]);
+    // 재사용 프롬프트는 기존 Builder의 수동 편집값보다 우선해야 한다. 이 값을
+    // 남겨두면 화면과 실제 segments 상태가 어긋나 재사용이 적용되지 않은 것처럼 보인다.
+    setPromptEditorOverrides((items) => {
+      const next = { ...items };
+      delete next[targetIndex];
+      return next;
+    });
     setNotice(`${targetSegment.displayName}에 재사용 프롬프트 #${prompt.id}를 적용했습니다.`);
     setPromptReuseNotice("");
     return true;
@@ -882,6 +903,11 @@ export function StudioShell({
         language: "ko"
       });
       const completed = await waitForPromptGeneration(generated);
+      setPromptEditorOverrides((items) => {
+        const next = { ...items };
+        delete next[selectedSegment.index];
+        return next;
+      });
       setPromptGenerated(completed);
       setPromptBuilderNotice(`${promptScene ? "" : "Scene JSON 자동 생성 후 "}Prompt generation 완료 (${completed.provider}).`);
     } catch (error) {
@@ -940,6 +966,11 @@ export function StudioShell({
     const category = findPromptTermCategory(promptCatalog, termId);
     setPromptScene(null);
     setPromptGenerated(null);
+    setPromptEditorOverrides((items) => {
+      const next = { ...items };
+      delete next[selectedSegmentIndex];
+      return next;
+    });
     const sameCategoryTermIds = new Set((category?.terms || []).map((term) => term.id));
     setPromptSelectedTermIds((items) => {
       if (items.includes(termId)) {
@@ -973,6 +1004,11 @@ export function StudioShell({
     }
     setPromptScene(null);
     setPromptGenerated(null);
+    setPromptEditorOverrides((items) => {
+      const next = { ...items };
+      delete next[selectedSegmentIndex];
+      return next;
+    });
     setPromptBuilderNotice("선택한 key word를 초기화했습니다.");
   }
 
@@ -995,6 +1031,73 @@ export function StudioShell({
       negativePromptAddition: promptOverride?.negativePrompt ?? combinePromptText(segment.defaultNegativePrompt || segment.negativePrompt, negativePromptAddition)
     }));
     setNotice(`${selectedSegment.displayName}에 ${promptOverride?.source || (promptGenerated ? "Generated Prompt" : "Prompt Builder")} 결과를 적용했습니다.`);
+  }
+
+  function editPromptResult(field: "positive" | "negative", value: string) {
+    if (!selectedSegment) {
+      return;
+    }
+    if (field === "positive") {
+      setPromptEditorOverrides((items) => ({
+        ...items,
+        [selectedSegment.index]: { ...items[selectedSegment.index], positive: value }
+      }));
+      setPromptGenerated((current) => current ? { ...current, positivePrompt: value } : current);
+      setPromptScene((current) => current ? { ...current, positivePromptDraft: value } : current);
+      updateSegment(selectedSegment.index, (segment) => ({ ...segment, positivePrompt: value }));
+      return;
+    }
+
+    const effectiveNegativePrompt = value || selectedSegment.defaultNegativePrompt || selectedSegment.negativePrompt;
+    setPromptEditorOverrides((items) => ({
+      ...items,
+      [selectedSegment.index]: { ...items[selectedSegment.index], negative: effectiveNegativePrompt }
+    }));
+    setPromptGenerated((current) => current ? { ...current, negativePrompt: value } : current);
+    setPromptScene((current) => current ? { ...current, negativePromptDraft: value } : current);
+    updateSegment(selectedSegment.index, (segment) => ({
+      ...segment,
+      negativePrompt: effectiveNegativePrompt,
+      // RunPod에 전달되는 값은 ComfyUI의 실제 Negative 입력값이다. 기본값만
+      // 복원한 경우에도 빈 문자열이 아니라 기본 Negative를 전달해야 한다.
+      negativePromptAddition: effectiveNegativePrompt
+    }));
+  }
+
+  function resetPromptResult(field: "positive" | "negative", termIds: number[]) {
+    if (!selectedSegment) {
+      return;
+    }
+    const removedTermIds = new Set(termIds);
+    if (removedTermIds.size) {
+      setPromptSelectedTermIds((items) => items.filter((termId) => !removedTermIds.has(termId)));
+    }
+
+    if (field === "positive") {
+      setPromptEditorOverrides((items) => ({
+        ...items,
+        [selectedSegment.index]: { ...items[selectedSegment.index], positive: "" }
+      }));
+      setPromptSceneDescription("");
+      setPromptGenerated((current) => current ? { ...current, positivePrompt: "" } : current);
+      setPromptScene((current) => current ? { ...current, positivePromptDraft: "" } : current);
+      updateSegment(selectedSegment.index, (segment) => ({ ...segment, positivePrompt: "" }));
+      setPromptBuilderNotice("Positive Prompt와 선택한 Positive key word를 초기화했습니다.");
+      return;
+    }
+
+    setPromptEditorOverrides((items) => ({
+      ...items,
+      [selectedSegment.index]: { ...items[selectedSegment.index], negative: "" }
+    }));
+    setPromptGenerated((current) => current ? { ...current, negativePrompt: "" } : current);
+    setPromptScene((current) => current ? { ...current, negativePromptDraft: "" } : current);
+    updateSegment(selectedSegment.index, (segment) => ({
+      ...segment,
+      negativePrompt: "",
+      negativePromptAddition: ""
+    }));
+    setPromptBuilderNotice("내장 Negative Prompt와 추가 Negative key word를 모두 초기화했습니다.");
   }
 
   async function loadWorkflows(preferredWorkflowId?: string) {
@@ -1626,6 +1729,7 @@ export function StudioShell({
       const nextSegments = createSegmentsFromHistory(nextSchema, item);
       const nextKeyframes = createKeyframesFromHistory(nextSchema, item);
       releaseKeyframePreviews(keyframes);
+      resetPromptBuilderDraft();
       skipWorkflowLoadRef.current = targetWorkflowId !== selectedWorkflow;
       setSelectedWorkflow(targetWorkflowId);
       setSchema(nextSchema);
@@ -1769,10 +1873,18 @@ export function StudioShell({
           setPromptSceneDescription(value);
           setPromptScene(null);
           setPromptGenerated(null);
+          setPromptEditorOverrides((items) => {
+            const next = { ...items };
+            delete next[selectedSegmentIndex];
+            return next;
+          });
         }}
         onClearSelection={clearPromptBuilderSelection}
         onGenerate={() => void generatePromptDraft()}
         onApply={applyPromptSceneToSegment}
+        onEditPrompt={editPromptResult}
+        onResetPrompt={resetPromptResult}
+        promptEditorOverride={promptEditorOverrides[selectedSegmentIndex]}
         onOpenPromptReuse={() => void goToPromptReuseScreen()}
         onUpdateConfigValue={updateConfigValue}
         onResetDefaults={() => void resetSegmentConfigsToDefaults()}

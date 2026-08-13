@@ -307,6 +307,7 @@ export function Create2bScreen({
   generated,
   sceneDescription,
   baseNegativePrompt,
+  promptEditorOverride,
   onReloadSystemPrompt,
   onSaveSystemPrompt,
   onSystemPromptTextChange,
@@ -316,6 +317,8 @@ export function Create2bScreen({
   onClearSelection,
   onGenerate,
   onApply,
+  onEditPrompt,
+  onResetPrompt,
   onOpenPromptReuse,
   onUpdateConfigValue,
   onResetDefaults,
@@ -340,6 +343,7 @@ export function Create2bScreen({
   generated: PromptGenerateResponse | null;
   sceneDescription: string;
   baseNegativePrompt: string;
+  promptEditorOverride?: { positive?: string; negative?: string };
   onReloadSystemPrompt: () => void;
   onSaveSystemPrompt: () => void;
   onSystemPromptTextChange: (value: string) => void;
@@ -354,6 +358,8 @@ export function Create2bScreen({
     negativePromptAddition?: string;
     source?: string;
   }) => void;
+  onEditPrompt: (field: "positive" | "negative", value: string) => void;
+  onResetPrompt: (field: "positive" | "negative", termIds: number[]) => void;
   onOpenPromptReuse: () => void;
   onUpdateConfigValue: (key: string, value: string, control?: ConfigControl) => void;
   onResetDefaults: () => void;
@@ -403,10 +409,10 @@ export function Create2bScreen({
   const draftNegativePrompt = combinePromptText(baseNegativePrompt, negativePromptAddition);
   // Prompt Library 적용 후 Builder 초안은 의도적으로 비워진다. 이때도 현재
   // 세그먼트에 저장된 최종 Prompt를 결과 패널에서 확인할 수 있어야 한다.
-  const positivePrompt = draftPositivePrompt || selectedSegment?.positivePrompt || "";
-  const negativePrompt = draftPositivePrompt || negativePromptAddition
+  const positivePrompt = promptEditorOverride?.positive ?? (draftPositivePrompt || selectedSegment?.positivePrompt || "");
+  const negativePrompt = promptEditorOverride?.negative ?? (draftPositivePrompt || negativePromptAddition
     ? draftNegativePrompt
-    : selectedSegment?.negativePrompt || baseNegativePrompt;
+    : selectedSegment?.negativePrompt || baseNegativePrompt);
   const warnings = [...(scene?.warnings || []), ...(generated?.warnings || [])];
   const warningGroups = groupPromptWarningsBySeverity(warnings);
   const hasBlockingWarning = warningGroups.some((group) => group.severity === "error");
@@ -462,14 +468,44 @@ export function Create2bScreen({
               <span className="v3-label">POSITIVE</span>
               <span className="v3-card-header-meta">{generated ? `Qwen · ${generated.provider}` : draftPositivePrompt ? "Draft" : selectedSegment?.positivePrompt ? "적용됨" : "Draft"}</span>
             </div>
-            <div className="v3-prompt-text-block">{positivePrompt || "-"}</div>
+            <textarea
+              className="v3-prompt-editor"
+              aria-label="Positive Prompt"
+              value={positivePrompt}
+              placeholder="Positive Prompt가 여기에 표시됩니다. 직접 수정할 수 있습니다."
+              onChange={(event) => onEditPrompt("positive", event.target.value)}
+            />
+            <div className="v3-prompt-editor-actions">
+              <button
+                className="v3-prompt-reset-button"
+                type="button"
+                onClick={() => onResetPrompt("positive", selectedKeywords.positive.map((term) => term.id))}
+              >
+                Positive 초기화
+              </button>
+            </div>
           </div>
           <div className="v3-card">
             <div className="v3-card-header">
               <span className="v3-label">NEGATIVE</span>
               <span className="v3-card-header-meta">내장 + 추가분</span>
             </div>
-            <div className="v3-prompt-text-block">{negativePrompt || "-"}</div>
+            <textarea
+              className="v3-prompt-editor"
+              aria-label="Negative Prompt"
+              value={negativePrompt}
+              placeholder="워크플로우 기본 Negative Prompt가 여기에 표시됩니다. 직접 수정할 수 있습니다."
+              onChange={(event) => onEditPrompt("negative", event.target.value)}
+            />
+            <div className="v3-prompt-editor-actions">
+              <button
+                className="v3-prompt-reset-button"
+                type="button"
+                onClick={() => onResetPrompt("negative", selectedKeywords.negative.map((term) => term.id))}
+              >
+                Negative 초기화
+              </button>
+            </div>
           </div>
           <div className="v3-summary-card">
             <div className="v3-label">SCENE JSON</div>
@@ -480,11 +516,11 @@ export function Create2bScreen({
             <button
               className="v3-primary-button v3-flex-button"
               type="button"
-              disabled={(!hasPositiveInput && !generated) || hasBlockingWarning}
+              disabled={!positivePrompt.trim() || hasBlockingWarning}
               onClick={() => onApply({
-                positivePrompt: draftPositivePrompt,
-                negativePrompt: draftNegativePrompt,
-                negativePromptAddition,
+                positivePrompt,
+                negativePrompt,
+                negativePromptAddition: negativePrompt,
                 source: generated ? "Generated Prompt" : "Prompt Builder"
               })}
             >
@@ -762,7 +798,12 @@ export function Create2bScreen({
                 const rawValue = selectedSegment?.config[control.key] ?? control.default ?? "";
                 const isNumeric = (control.type === "int" || control.type === "float") && control.min != null && control.max != null;
                 const hasOptions = Boolean(control.options && control.options.length);
-                const step = control.step ?? (control.type === "int" ? 1 : 0.01);
+                const isMotionShift = /motion[\s_-]*shift/i.test(`${control.key} ${control.label}`);
+                const numericValue = Number(rawValue) || 0;
+                // workflow metadata가 float으로 등록됐어도 Motion Shift는 Wan 노드에서
+                // 정수 단위로 쓰인다. 5.000000000000001 같은 부동소수점 표시는 숨긴다.
+                const displayValue = isMotionShift ? String(Math.round(numericValue)) : String(rawValue);
+                const step = isMotionShift ? 1 : (control.step ?? (control.type === "int" ? 1 : 0.01));
                 return (
                   <div className="v3-config-row" key={control.key}>
                     <div>
@@ -772,7 +813,7 @@ export function Create2bScreen({
                             없어지지 않도록 라벨에 title 툴팁으로만 남겨(마우스 오버 시 확인),
                             평소 화면은 더 간결하게 유지한다. */}
                         <span className="v3-label" title={control.description || undefined}>{control.label}</span>
-                        {isNumeric ? <span className="v3-config-row-value">{String(rawValue)}</span> : null}
+                        {isNumeric ? <span className="v3-config-row-value">{displayValue}</span> : null}
                       </div>
                       {isNumeric ? (
                         <>
@@ -782,7 +823,7 @@ export function Create2bScreen({
                             min={control.min ?? undefined}
                             max={control.max ?? undefined}
                             step={step}
-                            value={Number(rawValue) || 0}
+                            value={isMotionShift ? Math.round(numericValue) : numericValue}
                             onChange={(event) => onUpdateConfigValue(control.key, event.target.value, control)}
                           />
                           <div className="v3-config-range-labels">
