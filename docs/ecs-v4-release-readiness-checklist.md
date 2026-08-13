@@ -16,6 +16,7 @@
 | 항목 | 판정 |
 | --- | --- |
 | Alembic head | `20260812_0019` |
+| 감사 로그 보존 migration | `20260812_0018_purge_login_audit_logs`는 보존형 no-op으로 전환 |
 | 자산 컬렉션 migration | `20260811_0015_collections` |
 | 컬렉션 신규 테이블 | `collections`, `collection_items` |
 | Task Policy migration | `20260812_0019_task_execution_policy` |
@@ -26,6 +27,8 @@
 | 기존 RDS 데이터 영향 | 기존 행 수정·삭제 없음 |
 
 `20260811_0015_collections.py`는 자산 컬렉션과 컬렉션-asset 연결을 저장하기 위해 `collections`, `collection_items`를 추가한다. `collection_items`의 FK cascade는 **향후** 컬렉션 또는 asset 삭제 시의 연결 정리 규칙일 뿐, migration 실행 중에는 기존 asset/task를 삭제하거나 변경하지 않는다.
+
+`20260812_0018_purge_login_audit_logs.py`는 과거의 `action='login'` 감사 로그 삭제를 수행하지 않는다. 운영 RDS의 기존 audit record를 보존하기 위해 no-op으로 유지하며, 감사 로그 정리는 이 릴리스의 migration 범위에서 제외한다.
 
 `20260812_0019_task_execution_policy.py`는 멀티태스킹 정책을 저장하기 위해서만 필요하다. 이 migration은 새 테이블과 기본 정책 한 행을 생성한다. 기본 행도 운영 DB의 새 설정 데이터이므로, 배포 승인 시 이 생성까지 승인 대상으로 기록한다.
 

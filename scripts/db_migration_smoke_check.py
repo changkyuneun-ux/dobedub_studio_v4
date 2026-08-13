@@ -56,16 +56,33 @@ def main():
 
         before_upgrade = migration_state(config)
         assert before_upgrade["migrationRequired"] is True, before_upgrade
+        # 0018 must not delete an existing login audit record while advancing the
+        # RDS schema.  Keep the check explicit because production data retention
+        # is more important than the revision's historical filename.
+        command.upgrade(config, "20260811_0017")
+        engine = create_engine(os.environ["DATABASE_URL"], future=True)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "insert into audit_logs "
+                    "(actor_id, action, target_type, target_id, created_at) "
+                    "values ('user_smoke', 'login', 'session', 'user_smoke', CURRENT_TIMESTAMP)"
+                )
+            )
+
         command.upgrade(config, "head")
         after_upgrade = migration_state(config)
         assert after_upgrade["migrationRequired"] is False, after_upgrade
 
-        engine = create_engine(os.environ["DATABASE_URL"], future=True)
         inspector = inspect(engine)
         tables = set(inspector.get_table_names())
         missing = EXPECTED_TABLES - tables
         assert not missing, f"Missing tables: {sorted(missing)}"
         with engine.begin() as connection:
+            login_audit_count = connection.execute(
+                text("select count(*) from audit_logs where action = 'login'")
+            ).scalar_one()
+            assert login_audit_count == 1, login_audit_count
             policy = connection.execute(
                 text(
                     "select max_active_tasks_per_user, max_active_tasks_total "

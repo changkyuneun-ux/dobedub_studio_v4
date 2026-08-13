@@ -1,24 +1,20 @@
-"""purge login audit logs
+"""preserve existing login audit logs
 
 Revision ID: 20260812_0018
 Revises: 20260811_0017
 Create Date: 2026-08-12
 
-2026-08-12: 사용자 요청 - 감사 로그(audit_logs)는 "어드민 정보 수정사항"만 남기기로
-범위를 좁혔다. `action="login"`은 로그인 시도 기록(A-05, auth.py)이지 관리자
-정보 수정이 아니라서 이제 기록 대상에서 빠졌는데(auth.py 코드 변경), 그 전까지
-이미 쌓여 있던 login 레코드는 이 마이그레이션으로 일괄 삭제한다. `history.delete`
-(작업 이력 삭제, history.py)도 같은 이유로 기록을 중단했지만 기존 레코드를
-지워달라는 요청은 없었으므로 여기서는 건드리지 않는다 - 필요해지면 별도
-마이그레이션으로 처리한다.
+로그인 시도는 새 감사 로그 작성 대상에서 제외되었지만, 이미 저장된 로그인 감사
+로그는 운영 데이터다. 운영 RDS migration은 기존 업무 데이터를 변경하지 않는다는
+원칙에 따라 이 revision은 schema graph를 연결하는 no-op으로 유지한다.
 
-downgrade()는 삭제된 로그를 복구할 수 없다(데이터 손실이 의도된 동작) - 다른
-정리성 마이그레이션(20260810_0013)과 같은 방식으로 안내만 출력한다.
+이전 코드에 있던 `delete from audit_logs where action = 'login'`은 RDS가 아직 이
+revision을 적용하지 않은 환경에서 과거 데이터를 삭제하므로 제거했다. 별도의 데이터
+정리 작업은 backup과 명시적 운영 승인을 받은 전용 작업으로만 수행한다.
 """
 from __future__ import annotations
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "20260812_0018"
@@ -28,13 +24,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    bind.execute(sa.text("delete from audit_logs where action = 'login'"))
+    # Intentionally no-op: never delete historical audit records during schema migration.
+    pass
 
 
 def downgrade() -> None:
-    print(
-        "[0018_purge_login_audit_logs] downgrade: 삭제된 login 감사 로그는 "
-        "복구할 수 없습니다(의도된 데이터 정리) - downgrade는 아무 것도 하지 "
-        "않습니다."
-    )
+    # No schema or data change was made in upgrade.
+    pass
