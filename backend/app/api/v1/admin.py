@@ -21,6 +21,10 @@ from backend.app.services.admin_service import (
 )
 from backend.app.services.audit_log_service import list_audit_logs, record_audit_log
 from backend.app.services.permission_service import update_role_permission_codes
+from backend.app.services.task_policy_service import (
+    task_execution_policy_payload,
+    update_task_execution_policy,
+)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -42,6 +46,49 @@ def permissions(_: CurrentUser = Depends(require_permission("roles:read")), db: 
         return list_permission_governance(db)
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Permission governance load failed: {exc}") from exc
+
+
+@router.get("/task-execution-policy")
+def task_execution_policy(
+    _: CurrentUser = Depends(require_permission("roles:read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return task_execution_policy_payload(db)
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Task execution policy load failed: {exc}") from exc
+
+
+@router.put("/task-execution-policy")
+def update_task_policy(
+    payload: dict,
+    request: Request,
+    current_user: CurrentUser = Depends(require_permission("roles:write")),
+    db: Session = Depends(get_db),
+):
+    before = task_execution_policy_payload(db)
+    try:
+        result = update_task_execution_policy(
+            db,
+            max_active_tasks_per_user=payload.get("maxActiveTasksPerUser"),
+            max_active_tasks_total=payload.get("maxActiveTasksTotal"),
+            updated_by=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Task execution policy save failed: {exc}") from exc
+    record_audit_log(
+        db,
+        actor_id=current_user.id,
+        action="task.execution_policy.update",
+        target_type="task_execution_policy",
+        target_id="1",
+        before=before,
+        after=result,
+        ip=_client_ip(request),
+    )
+    return result
 
 
 @router.put("/roles/{role_code}/permissions")

@@ -49,9 +49,12 @@ PROMPT_LLM_API_KEY=<secret>
 PROMPT_LLM_ENDPOINT_ID=<qwen-endpoint-id>
 PROMPT_LLM_RUNPOD_INPUT_MODE=prompt
 PROMPT_LLM_TIMEOUT=240
+PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30
 AUTH_JWT_SECRET=<strong-random-secret>
 AUTH_TOKEN_TTL_MINUTES=480
+TASK_MONITOR_INTERVAL_SECONDS=5
 RUN_SERVER_AUTO_MIGRATE=0
+RUN_SERVER_SKIP_ENV_LOAD=1
 ```
 
 `RUNPOD_API_KEY`, `PROMPT_LLM_API_KEY`, `DATABASE_URL`, `AUTH_JWT_SECRET`는 Secrets Manager 또는 SSM Parameter Store 참조로 주입합니다. `PROMPT_LLM_API_KEY`가 같은 RunPod key를 쓰는 경우에도 별도 secret으로 분리해 두면 endpoint 교체가 쉽습니다. `DATABASE_SSL_CA`는 AWS RDS 콘솔이 안내하는 `global-bundle.pem` 경로를 container 안의 실제 파일 위치로 지정합니다. `DATABASE_SSL_VERIFY_IDENTITY=1`은 RDS 권장 접속 방식과 맞춥니다. `RUN_SERVER_AUTO_MIGRATE=0`으로 두고, migration은 one-off task로 분리합니다.

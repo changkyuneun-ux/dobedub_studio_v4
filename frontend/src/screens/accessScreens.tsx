@@ -209,11 +209,8 @@ export function AccessDeniedScreen({
 // 그리는 전체 화면으로 전환. iframe 문서 내 검색(하이라이트·다음 이동) 로직은
 // ManualModal에서 그대로 이관.
 //
-// 설계 원본과 다르게 뺀 것(더미 데이터 금지):
-// - 좌측 목차(TOC) 패널 — 매뉴얼은 /api/manual이 주는 단일 HTML 문서이고 그 내부
-//   구조(장·절)를 신뢰성 있게 파싱해 TOC를 만들 수단이 없다. 문서 자체의 내부 앵커
-//   이동은 iframe 안에서 그대로 동작한다. 임의 목차를 지어내지 않고 본문 검색으로 대체.
-// - "PDF 내려받기" — 매뉴얼 PDF를 주는 API가 없다.
+// 문서 자체의 목차와 상단 검색을 제공한다. iframe 내부의 hash 링크는 부모 SPA를
+// 다시 열지 않고 이 문서 안에서만 이동하도록 onLoad 시 가로챈다.
 export function ManualScreen({
   user,
   html,
@@ -315,14 +312,26 @@ export function ManualScreen({
     setSearchStatus("");
     const doc = iframeRef.current?.contentDocument;
     doc?.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement | null;
-      const link = target?.closest?.('a[href^="#"]');
-      const anchorId = decodeURIComponent(link?.getAttribute("href")?.slice(1) || "");
-      const section = anchorId ? doc.getElementById(anchorId) : null;
-      if (!section) return;
+      // iframe의 Element 생성자는 부모 window의 Element와 다르다. instanceof를
+      // 쓰면 항상 false가 될 수 있으므로 nodeType으로 확인한다.
+      const target = event.target as Element | null;
+      if (!target || target.nodeType !== 1) return;
+      const link = target.closest<HTMLAnchorElement>('a[href^="#"]');
+      if (!link) return;
+
+      // srcDoc iframe의 상대 hash 링크가 상위 SPA 경로를 다시 여는 브라우저가
+      // 있어 세션 초기화 및 로그인 화면 전환으로 이어질 수 있다. 매뉴얼의 모든
+      // 내부 앵커는 여기서만 처리한다.
       event.preventDefault();
+      event.stopPropagation();
+      const anchorId = decodeURIComponent(link.getAttribute("href")?.slice(1) || "");
+      const section = anchorId ? doc.getElementById(anchorId) : null;
+      if (!section) {
+        setSearchStatus("연결된 매뉴얼 항목을 찾지 못했습니다.");
+        return;
+      }
       section.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    }, true);
   }
 
   useEffect(() => {

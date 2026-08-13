@@ -29,6 +29,8 @@ export function shellNavigateAdmin(key: string, onGoTo: (route: StudioRoute) => 
     onGoTo("admin.metadata");
   } else if (key === "adminSandbox") {
     onGoTo("admin.sandbox");
+  } else if (key === "adminTaskPolicy") {
+    onGoTo("admin.taskPolicy");
   } else if (key === "adminRoles") {
     onGoTo("admin.roles");
   } else if (key === "adminUsers") {

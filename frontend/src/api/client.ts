@@ -2,6 +2,8 @@ export type HealthResponse = {
   ok: boolean;
   backend?: string;
   status?: string;
+  progress?: number;
+  elapsedSeconds?: number;
   system?: SystemStatusResponse;
   legacy?: SystemStatusResponse;
 };
@@ -420,6 +422,8 @@ export type HistoryItem = {
   workerName?: string;
   user?: { id?: string; name?: string };
   status?: string;
+  progress?: number;
+  elapsedSeconds?: number;
   prompt?: string;
   positivePrompt?: string;
   negativePrompt?: string;
@@ -532,6 +536,15 @@ export type JobCreateResponse = {
   runpodJobId: string;
   status: string;
   generationSeed?: number | string;
+};
+
+export type TaskExecutionPolicy = {
+  maxActiveTasksPerUser: number;
+  maxActiveTasksTotal: number;
+  activeForUser?: number;
+  activeTotal?: number;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
 };
 
 export type JobStatusResponse = {
@@ -872,6 +885,12 @@ export const apiClient = {
     }),
   adminUsers: () => requestJson<AdminUsersResponse>("/api/admin/users"),
   adminPermissions: () => requestJson<PermissionGovernance>("/api/admin/permissions"),
+  taskExecutionPolicy: () => requestJson<TaskExecutionPolicy>("/api/admin/task-execution-policy"),
+  saveTaskExecutionPolicy: (payload: Pick<TaskExecutionPolicy, "maxActiveTasksPerUser" | "maxActiveTasksTotal">) =>
+    requestJson<TaskExecutionPolicy>("/api/admin/task-execution-policy", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
   saveAdminRolePermissions: (roleCode: string, permissionCodes: string[]) =>
     requestJson<PermissionGovernance>(`/api/admin/roles/${encodeURIComponent(roleCode)}/permissions`, {
       method: "PUT",

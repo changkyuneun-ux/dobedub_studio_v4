@@ -1,30 +1,44 @@
 import { User, AuthSession } from "./auth";
 
 export const LOGIN_DISABLED_FOR_DEV = false;
-export const RESTORE_LOGIN_SESSION_ON_REFRESH = false;
+// sessionStorage는 같은 탭의 새로고침에서는 유지되고 탭/브라우저 종료 시 정리된다.
+// 따라서 새로고침까지 로그아웃으로 취급하지 않도록 복원은 항상 허용한다.
+export const RESTORE_LOGIN_SESSION_ON_REFRESH = true;
 export const SESSION_USER_STORAGE_KEY = "dobedub.react.user.db-auth.v1";
 export const LEGACY_SESSION_USER_STORAGE_KEYS = ["dobedub.react.user", "dobedub.react.user.auth"];
 export const DEV_USER: User = { id: "dobedub", name: "장균은", role: "SUPER_ADMIN", permissions: ["admin:*"], isActive: true };
 
-export function loadSessionUser(): User | null {
+export function loadAuthSession(): AuthSession | null {
+  // 이전 로컬/구버전 키만 정리하고, 현재 탭의 JWT 세션은 보존한다.
   clearLoginSession(RESTORE_LOGIN_SESSION_ON_REFRESH);
   if (LOGIN_DISABLED_FOR_DEV) {
-    sessionStorage.setItem(SESSION_USER_STORAGE_KEY, JSON.stringify({ user: DEV_USER, accessToken: "" }));
-    return DEV_USER;
-  }
-  if (!RESTORE_LOGIN_SESSION_ON_REFRESH) {
-    return null;
+    const session = { user: DEV_USER, accessToken: "" };
+    sessionStorage.setItem(SESSION_USER_STORAGE_KEY, JSON.stringify(session));
+    return session;
   }
   try {
     const raw = sessionStorage.getItem(SESSION_USER_STORAGE_KEY);
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as Partial<AuthSession> & User;
-    return parsed.user || parsed;
+    const parsed = JSON.parse(raw) as Partial<AuthSession>;
+    if (!parsed.user || !parsed.accessToken) {
+      clearLoginSession();
+      return null;
+    }
+    if (parsed.expiresAt && Date.parse(parsed.expiresAt) <= Date.now()) {
+      clearLoginSession();
+      return null;
+    }
+    return parsed as AuthSession;
   } catch {
+    clearLoginSession();
     return null;
   }
+}
+
+export function loadSessionUser(): User | null {
+  return loadAuthSession()?.user || null;
 }
 
 export function clearLoginSession(keepCurrent = false) {

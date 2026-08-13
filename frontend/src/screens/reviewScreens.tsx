@@ -73,8 +73,10 @@ export function Create3aScreen({
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
+  onCancelTask,
   canRework,
   canDelete,
+  canCancel,
   canReview,
   canGiveFeedback
 }: {
@@ -108,12 +110,14 @@ export function Create3aScreen({
   onRequestDelete: (item: HistoryItem) => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
+  onCancelTask: (item: HistoryItem) => void;
   canRework: boolean;
   canDelete: boolean;
+  canCancel: boolean;
   canReview: boolean;
   canGiveFeedback: boolean;
 }) {
-  const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
   // 선택한 Run이 바뀌어도 사용자가 펼쳐둔 섹션은 유지한다(세션 내 UX 편의).
@@ -125,8 +129,9 @@ export function Create3aScreen({
   const toggleSection = (key: string) => setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   const filteredHistory = history.filter((item) => {
     if (statusFilter === "all") return true;
+    if (statusFilter === "active") return !isTerminalHistoryStatus(item.status);
     if (statusFilter === "completed") return isSuccessStatus(item.status);
-    if (statusFilter === "failed") return !isSuccessStatus(item.status) && Boolean(item.status);
+    if (statusFilter === "failed") return isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
     return true;
   });
   const selectedItem = history.find((item) => item.taskId === selectedTaskId) || history[0] || null;
@@ -134,8 +139,10 @@ export function Create3aScreen({
   const pageEnd = Math.min(total, page * pageSize);
   const pageOffset = (page - 1) * pageSize;
   const completedCount = history.filter((item) => isSuccessStatus(item.status)).length;
-  const failedCount = history.filter((item) => !isSuccessStatus(item.status) && item.status).length;
-  const isFailedSelected = selectedItem ? !isSuccessStatus(selectedItem.status) && Boolean(selectedItem.status) : false;
+  const activeCount = history.filter((item) => !isTerminalHistoryStatus(item.status)).length;
+  const failedCount = history.filter((item) => isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status)).length;
+  const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
+  const isFailedSelected = selectedItem ? isTerminalHistoryStatus(selectedItem.status) && !isSuccessStatus(selectedItem.status) : false;
   const output = selectedItem ? historyOutputAsset(selectedItem) : null;
   // 훅은 조건 없이 매 렌더 호출해야 한다(selectedItem이 null↔값 사이를 오갈 수
   // 있으므로 이 hook을 early return 뒤에 두지 않는다) - 3f 구버전의 실수를 반복하지 않음.
@@ -158,6 +165,7 @@ export function Create3aScreen({
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {history.length}</div>
           {([
             ["all", "전체", history.length],
+            ["active", "진행", activeCount],
             ["completed", "완료", completedCount],
             ["failed", "실패", failedCount]
           ] as const).map(([key, label, count]) => (
@@ -189,13 +197,16 @@ export function Create3aScreen({
               <div className="v3-summary-row"><span>runpod_job_id</span><strong style={{ fontFamily: "var(--v3-font-mono)", fontSize: 11 }}>{selectedItem.runpodJobId || "-"}</strong></div>
               <div className="v3-summary-row"><span>실행자 · 시각</span><strong>{selectedItem.workerName || selectedItem.user?.name || "-"} · {formatTimestamp(selectedItem.timestamp).replace("\n", " ")}</strong></div>
               <div className="v3-summary-row"><span>Segments · Seed</span><strong>{selectedItem.segmentCount || selectedItem.segments?.length || 1} · {selectedItem.generationSeed || selectedItem.seed || "-"}</strong></div>
+              {isActiveSelected ? <div className="v3-summary-row"><span>진행률</span><strong>{Math.min(100, Math.max(0, Number(selectedItem.progress || 0)))}%</strong></div> : null}
             </div>
 
             <div className="v3-inline-actions">
-              {isFailedSelected
+              {isActiveSelected
+                ? (canCancel ? <button className="v3-danger-button v3-flex-button" type="button" onClick={() => onCancelTask(selectedItem)}>작업 취소</button> : null)
+                : isFailedSelected
                 ? (canRework ? <button className="v3-primary-button v3-flex-button" type="button" onClick={() => onRework(selectedItem)}>전체 재실행</button> : null)
                 : <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onDownload(selectedItem)}>Final 다운로드</button>}
-              {!isFailedSelected && canRework ? <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onRework(selectedItem)}>재작업</button> : null}
+              {!isActiveSelected && !isFailedSelected && canRework ? <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onRework(selectedItem)}>재작업</button> : null}
             </div>
 
             {/* Assets */}
@@ -206,7 +217,9 @@ export function Create3aScreen({
               </button>
               {openSections.assets ? (
                 <div className="v3-accordion-body">
-                  {isFailedSelected ? (
+                  {isActiveSelected ? (
+                    <p className="v3-muted-text">RunPod 작업이 진행 중입니다. 완료되면 이 영역에 결과 영상이 표시됩니다.</p>
+                  ) : isFailedSelected ? (
                     <p className="v3-muted-text">이 작업은 결과물이 저장되지 않았습니다.</p>
                   ) : outputMediaUrl ? (
                     <div className="v3-result-video-frame" style={{ borderRadius: 8, marginBottom: 10 }}>
@@ -254,7 +267,7 @@ export function Create3aScreen({
             </div>
 
             {/* Prompt Review */}
-            {!isFailedSelected && canReview ? (
+            {!isActiveSelected && !isFailedSelected && canReview ? (
               <div className="v3-card">
                 <button type="button" className="v3-card-header v3-accordion-header" aria-expanded={openSections.promptReview} onClick={() => toggleSection("promptReview")}>
                   <div className="v3-card-header-title">
@@ -531,6 +544,7 @@ export function Create4cScreen({
   pageSize,
   total,
   workflowName,
+  targetSegmentName,
   onKeywordChange,
   onSearch,
   onPageChange,
@@ -547,6 +561,7 @@ export function Create4cScreen({
   pageSize: number;
   total: number;
   workflowName: string;
+  targetSegmentName: string;
   onKeywordChange: (value: string) => void;
   onSearch: () => void;
   onPageChange: (page: number) => void;
@@ -572,7 +587,7 @@ export function Create4cScreen({
       area="generate"
       activeItem="promptLibrary"
       onNavigate={(key) => shellNavigate(key, onGoTo)}
-      headerEyebrow={`대상 워크플로 · ${workflowName || "-"}`}
+      headerEyebrow={`대상 워크플로 · ${workflowName || "-"} · 적용 대상 ${targetSegmentName}`}
       headerTitle="프롬프트 재사용"
       headerActions={
         <>
@@ -594,7 +609,7 @@ export function Create4cScreen({
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       <div className="v3-card" style={{ overflowX: "auto" }}>
         <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 980 }}>
-          <span>워크플로</span><span>시작 → 다음 이미지</span><span>프롬프트 (Positive)</span><span>프롬프트 (Negative)</span><span>사유</span><span>코멘트</span><span>레이팅</span><span>생성자</span><span>모델명</span><span style={{ textAlign: "right" }}>적용</span>
+          <span>워크플로</span><span>시작 → 다음 이미지</span><span>프롬프트 (Positive)</span><span>프롬프트 (Negative)</span><span>사유</span><span>코멘트</span><span>레이팅</span><span>생성자</span><span>모델명</span><span style={{ textAlign: "right" }}>재사용</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {!loading && !items.length ? (
@@ -652,7 +667,7 @@ export function Create4cScreen({
                 {prompt.modelName || prompt.modelProfileId || "-"}
               </span>
               <span style={{ textAlign: "right" }}>
-                <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>적용</button>
+                <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>프롬프트 재사용</button>
               </span>
             </div>
           );
@@ -756,22 +771,6 @@ export function Create5aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ASSETS"
       headerTitle={`Asset 관리 · 전체 ${total}개`}
-      headerActions={
-        <>
-          <input
-            className="v3-search-input"
-            value={createName}
-            placeholder="새 컬렉션 이름"
-            onChange={(event) => onCreateNameChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && createName.trim()) {
-                onCreateCollection();
-              }
-            }}
-          />
-          <button className="v3-secondary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>＋ 컬렉션 만들기</button>
-        </>
-      }
       sidebarExtra={
         <div className="v3-step-tracker">
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>COLLECTION · {collections.length}</div>
@@ -804,6 +803,31 @@ export function Create5aScreen({
       }
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
+      <section className="v3-collection-management" aria-label="컬렉션 관리">
+        <div className="v3-collection-management-heading">
+          <div>
+            <span className="v3-label">COLLECTION MANAGEMENT</span>
+            <h2>컬렉션 관리</h2>
+          </div>
+          <span className="v3-collection-management-count">{collections.length}개 컬렉션</span>
+        </div>
+        <div className="v3-collection-management-form">
+          <label htmlFor="new-collection-name">새 컬렉션 이름</label>
+          <input
+            id="new-collection-name"
+            className="v3-search-input"
+            value={createName}
+            placeholder="예: 광고 시안, 검수 완료"
+            onChange={(event) => onCreateNameChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && createName.trim()) {
+                onCreateCollection();
+              }
+            }}
+          />
+          <button className="v3-primary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>컬렉션 만들기</button>
+        </div>
+      </section>
       <div className="v3-card" style={{ overflowX: "auto" }}>
         <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }}>
           <span>Collection</span><span>Asset ID</span><span>미리보기</span><span>Asset 이름</span><span>생성일</span><span>생성자</span><span>입력 이미지</span><span style={{ textAlign: "right" }}>다운로드</span>

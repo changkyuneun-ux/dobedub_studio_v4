@@ -41,6 +41,50 @@ def render_manual_table(lines: list[str]) -> str:
     return "\n".join(parts)
 
 
+def render_manual_toc(lines: list[str]) -> str:
+    """Render the manual's indented Markdown TOC as a real nested navigation tree."""
+    root: list[dict[str, object]] = []
+    stack: list[tuple[int, list[dict[str, object]]]] = [(-1, root)]
+
+    for line in lines:
+        item = re.match(r"^(?P<indent>\s*)(?P<marker>\d+\.|[-*])\s+(?P<body>.+)$", line)
+        if not item:
+            continue
+        indent = len(item.group("indent").expandtabs(2))
+        while len(stack) > 1 and indent < stack[-1][0]:
+            stack.pop()
+        if indent > stack[-1][0]:
+            if stack[-1][0] < 0:
+                stack.append((indent, root))
+            elif stack[-1][1]:
+                children: list[dict[str, object]] = []
+                stack[-1][1][-1]["children"] = children
+                stack.append((indent, children))
+
+        stack[-1][1].append(
+            {
+                "ordered": item.group("marker").endswith("."),
+                "body": item.group("body"),
+                "children": [],
+            }
+        )
+
+    def render_items(items: list[dict[str, object]], depth: int = 0) -> str:
+        if not items:
+            return ""
+        tag = "ol" if bool(items[0]["ordered"]) else "ul"
+        parts = [f'<{tag} class="manual-toc-level manual-toc-level-{depth}">']
+        for item in items:
+            parts.append("<li>")
+            parts.append(inline_markdown(str(item["body"])))
+            parts.append(render_items(item["children"], depth + 1))
+            parts.append("</li>")
+        parts.append(f"</{tag}>")
+        return "".join(parts)
+
+    return f'<nav class="manual-toc" aria-label="사용자 매뉴얼 목차">{render_items(root)}</nav>'
+
+
 def render_manual_markdown(markdown: str) -> str:
     lines = markdown.splitlines()
     parts = []
@@ -106,9 +150,21 @@ def render_manual_markdown(markdown: str) -> str:
             level = len(heading.group(1))
             text = heading.group(2).strip()
             tag = "h1" if level == 1 else "h2" if level == 2 else "h3"
-            heading_id = re.sub(r"[^0-9A-Za-z가-힣]+", "-", text).strip("-")
+            # 목차의 Markdown 앵커는 GitHub와 같은 소문자 slug 규칙을 사용한다.
+            # 제목의 영문 대소문자가 남아 있으면 같은 문서를 가리키는 링크가 대상
+            # 요소를 찾지 못하고 iframe의 기본 페이지 이동으로 이어질 수 있다.
+            normalized_heading = re.sub(r"[^0-9A-Za-z가-힣\s-]", "", text.lower())
+            heading_id = re.sub(r"\s", "-", normalized_heading).strip("-")
             parts.append(f'<{tag} id="{html.escape(heading_id)}">{inline_markdown(text)}</{tag}>')
             i += 1
+            if text == "목차":
+                while i < len(lines) and not lines[i].strip():
+                    i += 1
+                toc_lines = []
+                while i < len(lines) and re.match(r"^\s*(?:\d+\.|[-*])\s+", lines[i]):
+                    toc_lines.append(lines[i].rstrip())
+                    i += 1
+                parts.append(render_manual_toc(toc_lines))
             continue
         bullet = re.match(r"^[-*]\s+(.+)$", stripped)
         number = re.match(r"^\d+\.\s+(.+)$", stripped)
@@ -157,6 +213,12 @@ def manual_html_page(manual_path: Path | None = None) -> str:
       p {{ margin: 0 0 12px; }}
       ul {{ margin: 0 0 14px 20px; padding: 0; }}
       li {{ margin: 5px 0; }}
+      .manual-toc {{ background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; margin: 14px 0 22px; padding: 16px 20px; }}
+      .manual-toc ol, .manual-toc ul {{ margin: 0; padding-left: 21px; }}
+      .manual-toc .manual-toc-level-0 {{ padding-left: 18px; }}
+      .manual-toc li {{ margin: 5px 0; }}
+      .manual-toc a {{ color: #0f56b3; text-decoration: none; }}
+      .manual-toc a:hover {{ text-decoration: underline; }}
       code {{ background: #eef4ff; border: 1px solid #d7e5ff; border-radius: 4px; color: #0f56b3; padding: 1px 5px; }}
       pre {{ background: #111827; border-radius: 8px; color: #f8fafc; overflow: auto; padding: 14px; }}
       figure {{ margin: 18px 0 22px; }}

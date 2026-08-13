@@ -44,8 +44,10 @@ export function createSegmentsFromSchema(schema: WorkflowSchema): SegmentState[]
     nodeId: segment.nodeId || "",
     subgraphName: segment.subgraphName || "Subgraph",
     displayName: segment.displayName || `${segment.subgraphName || "Subgraph"}_${segment.index || index + 1}`,
-    startImageIndex: Number(segment.startImageIndex || index + 1),
-    endImageIndex: Number(segment.endImageIndex || index + 2),
+    // 단일 이미지 I2V workflow는 endImageIndex를 null로 전달한다. `||`를 쓰면
+    // 이 의도된 빈값이 KF 2로 바뀌어 실행 전 확인에 가짜 끝 프레임이 생긴다.
+    startImageIndex: Number(segment.startImageIndex ?? index + 1),
+    endImageIndex: Number(segment.endImageIndex ?? segment.startImageIndex ?? index + 1),
     progress: 0,
     positivePrompt: segment.defaultPositivePrompt || "",
     defaultNegativePrompt: segment.defaultNegativePrompt || "",
@@ -319,4 +321,3 @@ export function segmentTitleParts(displayName: string) {
   const detail = `${match[2] || ""}${match[3] || ""}`.trim();
   return [main, detail].filter(Boolean);
 }
-

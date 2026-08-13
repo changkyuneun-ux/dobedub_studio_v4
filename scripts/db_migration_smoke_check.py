@@ -24,7 +24,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 EXPECTED_TABLES = {
     "users",
     "assets",
+    "collections",
+    "collection_items",
     "workflow_tasks",
+    "task_execution_policies",
     "task_input_assets",
     "task_output_assets",
     "config_snapshots",
@@ -63,6 +66,13 @@ def main():
         missing = EXPECTED_TABLES - tables
         assert not missing, f"Missing tables: {sorted(missing)}"
         with engine.begin() as connection:
+            policy = connection.execute(
+                text(
+                    "select max_active_tasks_per_user, max_active_tasks_total "
+                    "from task_execution_policies where id = 1"
+                )
+            ).one()
+            assert policy == (3, 10), policy
             connection.execute(text("insert into users (id, name, role, created_at, updated_at) values ('user_smoke', 'Smoke User', 'operator', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
             count = connection.execute(text("select count(*) from users")).scalar_one()
             assert count == 1

@@ -10,6 +10,8 @@
 - [ ] `python3 scripts/frontend_smoke_check.py`를 통과한다.
 - [ ] 권한 관련 변경이 있으면 `python3 scripts/rbac_permission_smoke_check.py`를 통과한다.
 - [ ] Alembic migration 파일이 추가·변경된 경우 로컬에서 `python3 scripts/db_migration_smoke_check.py`를 통과한다.
+- [ ] 운영 RDS가 `20260811_0015_collections`보다 뒤처졌다면 이번 one-off migration에서 `collections`, `collection_items`가 함께 생성됨을 승인한다. 이 migration은 기존 asset/task 행을 수정하거나 컬렉션 데이터를 seed하지 않는다.
+- [ ] 이번 릴리스에 `20260812_0019_task_execution_policy.py`가 포함되면, 변경 범위가 `task_execution_policies` 신규 테이블과 기본 정책 행 `(id=1, 사용자당 3건, 전체 10건)`뿐인지 검토·승인한다. 기존 `users`, catalog, workflow, task, asset 행을 변경하지 않는다.
 - [ ] local DB의 catalog, users, task history는 운영 RDS로 자동 이전되지 않는다는 점을 확인한다. 데이터 이관은 별도 승인 작업이다.
 
 ## 2. 이미지와 task definition
@@ -17,7 +19,8 @@
 - [ ] `linux/amd64`로 immutable tag 이미지를 ECR `dobedub-app`에 push한다.
 - [ ] ECS task definition family `default-dobedub-app`의 새 revision을 만든다.
 - [ ] image만 새 immutable tag로 교체하고, task role/execution role, log group, port `7860`, EFS volume과 mount `/data/outputs`는 유지한다.
-- [ ] 환경값을 확인한다: `PERSISTENCE_BACKEND=db`, `STORAGE_BACKEND=local`, `STUDIO_DATA_DIR=/data/outputs/dobedub-studio`, `OUTPUTS_DIR=/data/outputs/dobedub-studio/outputs`, `RUN_SERVER_AUTO_MIGRATE=0`, `RUNPOD_DRY_RUN=0`.
+- [ ] 환경값을 확인한다: `PERSISTENCE_BACKEND=db`, `STORAGE_BACKEND=local`, `STUDIO_DATA_DIR=/data/outputs/dobedub-studio`, `OUTPUTS_DIR=/data/outputs/dobedub-studio/outputs`, `WORKFLOW_SEED_DIR=/app/workflows`, `WORKFLOWS_DIR=/data/outputs/dobedub-studio/workflows`, `METADATA_DIR=/data/outputs/dobedub-studio/metadata`, `RUN_SERVER_AUTO_MIGRATE=0`, `RUNPOD_DRY_RUN=0`.
+- [ ] `RUN_SERVER_SKIP_ENV_LOAD=1`, `TASK_MONITOR_INTERVAL_SECONDS=5`, `PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30`을 명시하거나, 이미지 기본값을 사용한다는 운영 판단을 기록한다.
 - [ ] `DATABASE_URL`, `RUNPOD_API_KEY`, `PROMPT_LLM_API_KEY`, `AUTH_JWT_SECRET`는 Secrets Manager 참조인지 확인한다.
 - [ ] Sandbox Pod 운영을 사용하는 경우 `RUNPOD_SANDBOX_POD_API_KEY`도 Secrets Manager 참조인지 확인하고, `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`, `RUNPOD_SANDBOX_TEMPLATE_ID`, GPU type/count를 현재 RunPod Sandbox 구성과 일치시킨다.
 - [ ] `DATABASE_SSL_CA=/app/certs/global-bundle.pem`, `DATABASE_SSL_VERIFY_IDENTITY=1`을 확인한다.
@@ -35,6 +38,7 @@ python3 scripts/upgrade_database.py --if-needed
 ```
 
 - [ ] `--if-needed` task가 exit code `0`으로 끝났는지 확인한다. 실패 시 service 배포를 중단한다.
+- [ ] migration 적용 후 동일 task definition으로 `--check`를 한 번 더 실행해 exit code `0`, `migrationRequired=false`, target head `20260812_0019`를 확인한다.
 - [ ] RDS 접속 오류, CA 오류, security group 오류는 migration 필요 여부가 아니라 배포 차단 오류로 처리한다.
 
 ## 4. ECS service 배포

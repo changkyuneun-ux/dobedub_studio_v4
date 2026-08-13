@@ -39,7 +39,7 @@
 - 운영 Secret 값은 읽거나 문서/채팅/commit에 기록하지 않는다.
 
 ```bash
-cd "/Users/changkyuneun/Documents/New project/comfyui-video-studio-app-v3"
+cd "/Users/changkyuneun/Documents/New project/comfyui-video-studio-app-v4"
 aws sts get-caller-identity
 docker buildx version
 jq --version

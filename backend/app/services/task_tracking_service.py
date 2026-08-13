@@ -15,7 +15,7 @@ from backend.app.services.json_repository import hydrate_input_images, hydrate_o
 
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
-HISTORY_RESULT_STATES = {"COMPLETED", "SUCCESS", "FAILED", "TIMED_OUT"}
+ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 REVIEW_FLAG_LABELS = {
     "intentMatched": "프롬프트 의도 반영 intent matched prompt intent",
     "identityPreserved": "이미지 정체성 유지 identity preserved",
@@ -38,8 +38,9 @@ def task_history_items(page: int | None = None, page_size: int | None = None) ->
     try:
         id_statement = (
             select(WorkflowTask.id)
-            # B-05: soft delete된 작업(deleted_at IS NOT NULL)은 이력에서 제외.
-            .where(func.upper(WorkflowTask.status).in_(HISTORY_RESULT_STATES), WorkflowTask.deleted_at.is_(None))
+            # 작업 생성 직후부터 같은 Task History에서 상태를 추적한다. 완료/실패만
+            # 보이던 이전 필터는 활성 Task를 숨겨 멀티 작업 운영을 불가능하게 했다.
+            .where(WorkflowTask.deleted_at.is_(None))
             .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
         )
         if page is not None and page_size is not None:
@@ -75,8 +76,8 @@ def task_history_total() -> int:
         statement = (
             select(func.count())
             .select_from(WorkflowTask)
-            # B-05: soft delete된 작업은 총계에서도 제외(목록과 페이지네이션 일치).
-            .where(func.upper(WorkflowTask.status).in_(HISTORY_RESULT_STATES), WorkflowTask.deleted_at.is_(None))
+            # soft delete된 작업은 총계에서도 제외(목록과 페이지네이션 일치).
+            .where(WorkflowTask.deleted_at.is_(None))
         )
         return int(session.scalar(statement) or 0)
     finally:
@@ -343,6 +344,24 @@ def restore_job_from_task(task_id: str) -> dict | None:
             "historySaved": str(task.status or "").upper() in TERMINAL_STATES,
             "restoredFromDb": True,
         }
+    finally:
+        session.close()
+
+
+def active_task_ids() -> list[str]:
+    """Return persisted non-terminal tasks for the server-side monitor."""
+    session = SessionLocal()
+    try:
+        return list(
+            session.scalars(
+                select(WorkflowTask.id)
+                .where(
+                    WorkflowTask.deleted_at.is_(None),
+                    func.upper(WorkflowTask.status).in_(ACTIVE_STATES),
+                )
+                .order_by(WorkflowTask.created_at.asc())
+            )
+        )
     finally:
         session.close()
 

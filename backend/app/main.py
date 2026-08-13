@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import logging
 import os
 from fastapi import FastAPI
@@ -27,7 +28,7 @@ from backend.app.api.v1.system import router as system_router
 from backend.app.api.v1.workflows import router as workflows_router
 from backend.app.core.config import get_settings
 from backend.app.db.session import engine
-from backend.app.services.studio_api_service import ensure_storage_dirs
+from backend.app.services.studio_api_service import ensure_storage_dirs, monitor_active_jobs
 from backend.app.services.workflow_storage_service import bootstrap_workflow_store
 
 
@@ -69,7 +70,23 @@ async def _lifecycle(_: FastAPI):
         len(workflow_store["preserved"]),
     )
     _ensure_database_schema()
-    yield
+    async def monitor_loop() -> None:
+        while True:
+            try:
+                result = await asyncio.to_thread(monitor_active_jobs)
+                if result["failures"]:
+                    LOGGER.warning("Task monitor could not refresh tasks: %s", result["failures"])
+            except Exception:
+                LOGGER.exception("Task monitor cycle failed")
+            await asyncio.sleep(settings.task_monitor_interval_seconds)
+
+    monitor_task = asyncio.create_task(monitor_loop(), name="task-status-monitor")
+    try:
+        yield
+    finally:
+        monitor_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor_task
 
 
 def create_app() -> FastAPI:

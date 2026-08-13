@@ -527,3 +527,33 @@ node --check src/app.js
 - `python3 -m py_compile scripts/run_server.py` 통과
 - `git diff --check` 통과
 - `docker build -t dobedub-studio:ecs-check .` 통과
+
+## Step 9. 다중 Task 제출 및 상태 운영
+
+- [x] `task_execution_policies` singleton 테이블 및 Alembic migration 추가
+- [x] 기본 동시 활성 Task 한도 설정: 사용자당 3개, 전체 10개
+- [x] `POST /api/jobs`에서 인증 사용자 기준 한도 검사 및 서버 주도 사용자 스냅샷 기록
+- [x] 활성 상태(`QUEUED`, `IN_QUEUE`, `IN_PROGRESS`, `RUNNING`)를 `GET /api/history`에 포함
+- [x] 서버 lifecycle task monitor가 DB 활성 Task를 RunPod 상태로 주기 갱신
+- [x] 브라우저 종료/로그아웃 뒤에도 DB task 원장 기준 상태 관리 유지
+- [x] 제출 후 Task History로 이동하고 워크스페이스를 다음 작업용으로 초기화
+- [x] Task History 진행 필터, 활성 Task 진행률, 취소 액션 추가
+- [x] Sandbox Pod 바로 아래의 독립 Task Policy 메뉴에 동시 작업 제출 정책 관리 추가
+- [x] 생성 진행/결과 전용 route를 retired 처리하고 Task History를 단일 작업 상태·결과 화면으로 통합
+- [x] 사용자 매뉴얼을 사용자 업무/관리자 운영 구분으로 현행화
+- [x] User Manual 내부 목차 앵커가 iframe 안에서만 이동하도록 회귀 방지
+- [x] 같은 탭 새로고침에서 JWT 세션을 복원하고 명시 로그아웃/만료 시에만 정리
+- [x] README 현행화
+
+로컬 확인 기준:
+
+- `python3 scripts/upgrade_database.py`로 `20260812_0019` 적용
+- 활성 Task 3건 생성 시 이력 목록에 `QUEUED` 상태로 보이는지 확인
+- 같은 사용자 네 번째 제출이 409 한도 오류로 차단되는지 확인
+- `npm run build`, `python3 -m compileall -q backend/app`, `git diff --check` 통과
+
+운영 반영 전 확인:
+
+- RDS에 migration one-off task를 먼저 적용한다.
+- `TASK_MONITOR_INTERVAL_SECONDS`는 기본 5초이며, RunPod 상태 호출량에 맞춰 1~60초로 조정할 수 있다.
+- 다중 ECS replica로 확장할 때는 제출 한도 검사에 DB 잠금 또는 원자적 SQL 카운트 갱신을 추가 검토한다.

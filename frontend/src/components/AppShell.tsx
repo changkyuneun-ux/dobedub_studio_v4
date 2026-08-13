@@ -77,6 +77,7 @@ const ADMIN_NAV_ITEMS: NavItem[] = [
   { key: "adminCatalog", label: "프롬프트 카탈로그", permission: "prompt-catalog:read" },
   { key: "adminWorkflows", label: "워크플로 정의", permission: "workflows:read" },
   { key: "adminSandbox", label: "Sandbox Pod", permission: "sandbox:read" },
+  { key: "adminTaskPolicy", label: "Task Policy", permission: "roles:read" },
   { key: "adminAuditLog", label: "감사 로그", permission: "roles:read" }
 ];
 

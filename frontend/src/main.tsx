@@ -1,24 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { apiClient, HealthResponse } from "./api/client";
-import { routeFromLocation, routePath, StudioRoute } from "./router";
+import { isRetiredCreateRoutePath, routeFromLocation, routePath, StudioRoute } from "./router";
 // E-01: User/AuthSession types moved to ./auth so components can use them
 // without importing this entry file.
 import { User, AuthSession } from "./auth";
 import "./styles.css";
-import { SESSION_USER_STORAGE_KEY, loadSessionUser, clearLoginSession } from "./auth-session";
+import { SESSION_USER_STORAGE_KEY, loadAuthSession, clearLoginSession } from "./auth-session";
 import { StudioShell } from "./StudioShell";
 import { AppShellChromeContext } from "./components/AppShell";
 import { LoginScreen, SessionExpiryBanner } from "./screens/accessScreens";
 
 function App() {
-  const initialUser = useMemo(() => loadSessionUser(), []);
-  const [user, setUser] = useState<User | null>(() => initialUser);
-  const [route, setRoute] = useState<StudioRoute>(() => routeFromLocation(window.location.pathname, Boolean(initialUser)));
+  const initialSession = useMemo(() => loadAuthSession(), []);
+  const [user, setUser] = useState<User | null>(() => initialSession?.user || null);
+  const [route, setRoute] = useState<StudioRoute>(() => routeFromLocation(window.location.pathname, Boolean(initialSession?.user)));
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState("");
   // A-06: 세션 만료 예고 배너용. 로그인/연장 시 토큰 expiresAt을 담아둔다.
-  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | undefined>(undefined);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | undefined>(() => initialSession?.expiresAt);
   const [refreshingSession, setRefreshingSession] = useState(false);
 
   useEffect(() => {
@@ -45,6 +45,10 @@ function App() {
     const nextRoute = routeFromLocation(window.location.pathname, Boolean(user));
     if (!user && window.location.pathname !== routePath("access.login")) {
       navigate("access.login", true);
+    } else if (isRetiredCreateRoutePath(window.location.pathname)) {
+      // 멀티 Task에서는 결과 확인이 Task History에 통합됐다. 이전 북마크도
+      // 주소와 화면을 함께 정규 경로로 보정한다.
+      navigate(nextRoute, true);
     } else if (nextRoute !== route) {
       setRoute(nextRoute);
     }
@@ -57,18 +61,6 @@ function App() {
     window.addEventListener("popstate", syncRouteFromHistory);
     return () => window.removeEventListener("popstate", syncRouteFromHistory);
   }, [user]);
-
-  useEffect(() => {
-    function clearSessionOnPageExit() {
-      clearLoginSession();
-    }
-    window.addEventListener("pagehide", clearSessionOnPageExit);
-    window.addEventListener("beforeunload", clearSessionOnPageExit);
-    return () => {
-      window.removeEventListener("pagehide", clearSessionOnPageExit);
-      window.removeEventListener("beforeunload", clearSessionOnPageExit);
-    };
-  }, []);
 
   useEffect(() => {
     if (!user) {

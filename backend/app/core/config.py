@@ -53,8 +53,10 @@ class Settings:
     prompt_llm_temperature: float = 0.2
     prompt_llm_max_tokens: int = 900
     prompt_llm_timeout: int = 45
+    prompt_llm_cold_start_retry_delays_seconds: tuple[int, ...] = (5, 10, 20, 30, 30)
     auth_jwt_secret: str = "dobedub-studio-local-dev-secret"
     auth_token_ttl_minutes: int = 480
+    task_monitor_interval_seconds: int = 5
 
 
 def get_settings() -> Settings:
@@ -81,6 +83,9 @@ def get_settings() -> Settings:
         prompt_llm_timeout = int(os.environ.get("PROMPT_LLM_TIMEOUT", "45"))
     except ValueError:
         prompt_llm_timeout = 45
+    prompt_llm_cold_start_retry_delays_seconds = _prompt_llm_retry_delays(
+        os.environ.get("PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS", "5,10,20,30,30")
+    )
     try:
         prompt_llm_temperature = float(os.environ.get("PROMPT_LLM_TEMPERATURE", "0.2"))
     except ValueError:
@@ -93,6 +98,10 @@ def get_settings() -> Settings:
         auth_token_ttl_minutes = int(os.environ.get("AUTH_TOKEN_TTL_MINUTES", "480"))
     except ValueError:
         auth_token_ttl_minutes = 480
+    try:
+        task_monitor_interval_seconds = min(60, max(1, int(os.environ.get("TASK_MONITOR_INTERVAL_SECONDS", "5"))))
+    except ValueError:
+        task_monitor_interval_seconds = 5
     return Settings(
         workflow_seed_dir=Path(os.environ.get("WORKFLOW_SEED_DIR", PROJECT_ROOT / "workflows")),
         workflows_dir=Path(os.environ.get("WORKFLOWS_DIR", PROJECT_ROOT / "workflows")),
@@ -130,6 +139,20 @@ def get_settings() -> Settings:
         prompt_llm_temperature=prompt_llm_temperature,
         prompt_llm_max_tokens=prompt_llm_max_tokens,
         prompt_llm_timeout=prompt_llm_timeout,
+        prompt_llm_cold_start_retry_delays_seconds=prompt_llm_cold_start_retry_delays_seconds,
         auth_jwt_secret=os.environ.get("AUTH_JWT_SECRET", "dobedub-studio-local-dev-secret"),
         auth_token_ttl_minutes=auth_token_ttl_minutes,
+        task_monitor_interval_seconds=task_monitor_interval_seconds,
     )
+
+
+def _prompt_llm_retry_delays(raw_value: str) -> tuple[int, ...]:
+    delays: list[int] = []
+    for value in raw_value.split(","):
+        try:
+            delay = int(value.strip())
+        except ValueError:
+            continue
+        if 1 <= delay <= 120:
+            delays.append(delay)
+    return tuple(delays[:8]) or (5, 10, 20, 30, 30)

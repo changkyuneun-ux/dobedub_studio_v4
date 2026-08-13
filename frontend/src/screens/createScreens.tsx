@@ -80,6 +80,7 @@ export function Create2aScreen({
   onNext: () => void;
 }) {
   const selected = workflows.find((workflow) => workflow.id === selectedWorkflow) || null;
+  const [draggingKeyframeIndex, setDraggingKeyframeIndex] = useState<number | null>(null);
   const requiredKeyframeCount = schema?.keyframeCount || selected?.keyframeCount || keyframes.length || 0;
   const filledKeyframeCount = keyframes.filter((keyframe) => Boolean(keyframe.previewUrl)).length;
   const segmentCount = schema?.segmentCount || selected?.segmentCount || 0;
@@ -122,7 +123,7 @@ export function Create2aScreen({
           </div>
           <div className="v3-step">
             <span className="v3-step-index">4</span>
-            <span>결과 조회</span>
+            <span>Task History</span>
           </div>
         </div>
       }
@@ -195,7 +196,27 @@ export function Create2aScreen({
           {keyframes.map((keyframe) => (
             <label
               key={keyframe.index}
-              className={`v3-keyframe-slot ${activeImageIndexes.has(keyframe.index) ? "is-linked" : ""} ${keyframe.previewUrl ? "has-image" : ""}`}
+              className={`v3-keyframe-slot ${activeImageIndexes.has(keyframe.index) ? "is-linked" : ""} ${keyframe.previewUrl ? "has-image" : ""} ${draggingKeyframeIndex === keyframe.index ? "is-dragging" : ""}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setDraggingKeyframeIndex(keyframe.index);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setDraggingKeyframeIndex(keyframe.index);
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setDraggingKeyframeIndex((current) => current === keyframe.index ? null : current);
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDraggingKeyframeIndex(null);
+                onUploadFiles(keyframe.index, event.dataTransfer.files);
+              }}
             >
               <input
                 type="file"
@@ -204,7 +225,9 @@ export function Create2aScreen({
                 onChange={(event) => onUploadFiles(keyframe.index, event.target.files)}
               />
               <div className="v3-keyframe-slot-preview">
-                {keyframe.previewUrl ? <ProtectedImage src={keyframe.previewUrl} alt={`Input ${keyframe.index}`} /> : <span>SLOT {String(keyframe.index).padStart(2, "0")} 비어있음</span>}
+                {keyframe.previewUrl ? <ProtectedImage src={keyframe.previewUrl} alt={`Input ${keyframe.index}`} /> : (
+                  <span>SLOT {String(keyframe.index).padStart(2, "0")}<br />파일 선택 또는 끌어놓기</span>
+                )}
               </div>
               <div className="v3-keyframe-slot-meta">
                 <span>SLOT {String(keyframe.index).padStart(2, "0")}</span>
@@ -374,9 +397,15 @@ export function Create2bScreen({
   const negativeKeywordDraft = promptKeywordText(selectedKeywords.negative);
   const sceneDetailDraft = sceneDescription.trim();
   const hasPositiveInput = Boolean(positiveKeywordDraft || sceneDetailDraft);
-  const positivePrompt = generated?.positivePrompt || positiveKeywordDraft || sceneDetailDraft;
+  const draftPositivePrompt = generated?.positivePrompt || positiveKeywordDraft || sceneDetailDraft;
   const negativePromptAddition = generated?.negativePrompt || negativeKeywordDraft;
-  const negativePrompt = combinePromptText(baseNegativePrompt, negativePromptAddition);
+  const draftNegativePrompt = combinePromptText(baseNegativePrompt, negativePromptAddition);
+  // Prompt Library 적용 후 Builder 초안은 의도적으로 비워진다. 이때도 현재
+  // 세그먼트에 저장된 최종 Prompt를 결과 패널에서 확인할 수 있어야 한다.
+  const positivePrompt = draftPositivePrompt || selectedSegment?.positivePrompt || "";
+  const negativePrompt = draftPositivePrompt || negativePromptAddition
+    ? draftNegativePrompt
+    : selectedSegment?.negativePrompt || baseNegativePrompt;
   const warnings = [...(scene?.warnings || []), ...(generated?.warnings || [])];
   const warningGroups = groupPromptWarningsBySeverity(warnings);
   const hasBlockingWarning = warningGroups.some((group) => group.severity === "error");
@@ -397,7 +426,7 @@ export function Create2bScreen({
       headerTitle="세그먼트 설정"
       headerActions={
         <>
-          <button className="v3-secondary-button" type="button" onClick={onOpenPromptReuse}>Prompt Reuse</button>
+          <button className="v3-secondary-button" type="button" onClick={onOpenPromptReuse}>프롬프트 재사용</button>
           <span className="v3-header-hint">설정 {configuredCount}/{segments.length}</span>
           <button className="v3-primary-button" type="button" disabled={!allConfigured} onClick={onNext}>실행 전 확인으로 →</button>
         </>
@@ -430,7 +459,7 @@ export function Create2bScreen({
           <div className="v3-card">
             <div className="v3-card-header">
               <span className="v3-label">POSITIVE</span>
-              <span className="v3-card-header-meta">{generated ? `Qwen · ${generated.provider}` : "Draft"}</span>
+              <span className="v3-card-header-meta">{generated ? `Qwen · ${generated.provider}` : draftPositivePrompt ? "Draft" : selectedSegment?.positivePrompt ? "적용됨" : "Draft"}</span>
             </div>
             <div className="v3-prompt-text-block">{positivePrompt || "-"}</div>
           </div>
@@ -452,8 +481,8 @@ export function Create2bScreen({
               type="button"
               disabled={(!hasPositiveInput && !generated) || hasBlockingWarning}
               onClick={() => onApply({
-                positivePrompt,
-                negativePrompt,
+                positivePrompt: draftPositivePrompt,
+                negativePrompt: draftNegativePrompt,
                 negativePromptAddition,
                 source: generated ? "Generated Prompt" : "Prompt Builder"
               })}
@@ -462,7 +491,7 @@ export function Create2bScreen({
             </button>
           </div>
           <div className="v3-inline-actions">
-            <button className="v3-secondary-button v3-flex-button" type="button" onClick={onOpenPromptReuse}>라이브러리 재사용</button>
+            <button className="v3-secondary-button v3-flex-button" type="button" onClick={onOpenPromptReuse}>프롬프트 재사용</button>
           </div>
 
           {/* 2026-08-11: 2e "설정 현황"을 같은 우측 패널에 세로로 이어붙였다(사용자
@@ -833,18 +862,48 @@ export function Create2fScreen({
   const keyframesFilled = keyframes.every((keyframe) => Boolean(keyframe.upload?.assetId));
   const filledKeyframeCount = keyframes.filter((keyframe) => Boolean(keyframe.upload?.assetId)).length;
   const segmentsPromptFilled = segments.length > 0 && segments.every((segment) => segment.positivePrompt.trim());
-  const negativeFixedIncluded = segments.length > 0 && segments.every((segment) => Boolean(segment.defaultNegativePrompt));
+  const effectiveNegativePrompt = (segment: SegmentState) => combinePromptText(
+    segment.defaultNegativePrompt || segment.negativePrompt,
+    segment.negativePromptAddition
+  );
+  const negativePromptIncluded = segments.length > 0 && segments.every((segment) => Boolean(effectiveNegativePrompt(segment)));
   const validationItems = [
     { label: `키프레임 슬롯 ${filledKeyframeCount} / ${keyframes.length} 채워짐`, done: keyframesFilled },
     { label: `세그먼트 ${segments.length}개 모두 프롬프트 적용`, done: segmentsPromptFilled },
     { label: "노드 구성값 범위 내", done: true },
-    { label: "Negative 고정 프롬프트 포함", done: negativeFixedIncluded }
+    { label: "세그먼트별 최종 Negative Prompt 포함", done: negativePromptIncluded }
   ];
   const passedCount = validationItems.filter((item) => item.done).length;
-  const canRun = keyframesFilled && segmentsPromptFilled && !running && canUse(user, "jobs:run");
+  const canRun = keyframesFilled && segmentsPromptFilled && negativePromptIncluded && !running && canUse(user, "jobs:run");
   const totalFrames = segments.reduce((sum, segment) => {
     const frames = Number(segment.config.frames ?? segment.config.FRAMES ?? 0);
     return Number.isFinite(frames) ? sum + frames : sum;
+  }, 0);
+  const configValue = (segment: SegmentState, keys: string[]) => {
+    for (const key of keys) {
+      const value = segment.config[key];
+      if (value !== undefined && value !== null && String(value).trim()) return value;
+    }
+    return null;
+  };
+  const segmentOutputSummary = (segment: SegmentState) => {
+    const width = configValue(segment, ["width", "Width"]);
+    const height = configValue(segment, ["height", "Height"]);
+    const frames = configValue(segment, ["frames", "FRAMES"]);
+    const fps = configValue(segment, ["fps", "FPS", "final_fps", "finalFps"]);
+    const format = configValue(segment, ["format", "final_format", "finalFormat"]);
+    const codec = configValue(segment, ["codec", "final_codec", "finalCodec"]);
+    return {
+      resolution: width && height ? `${width} × ${height}` : "워크플로 기본값",
+      timing: frames && fps ? `${frames} frames · ${fps} FPS` : frames ? `${frames} frames` : fps ? `${fps} FPS` : "워크플로 기본값",
+      encoding: [format, codec].filter(Boolean).join(" · ") || "워크플로 기본값"
+    };
+  };
+  const outputSummaries = segments.map(segmentOutputSummary);
+  const estimatedSeconds = segments.reduce((sum, segment) => {
+    const frames = Number(configValue(segment, ["frames", "FRAMES"]));
+    const fps = Number(configValue(segment, ["fps", "FPS", "final_fps", "finalFps"]));
+    return frames > 0 && fps > 0 ? sum + (frames / fps) : sum;
   }, 0);
 
   return (
@@ -870,7 +929,7 @@ export function Create2fScreen({
           <div className="v3-step is-done"><span className="v3-step-index">✓</span><span>이미지 로드</span></div>
           <div className="v3-step is-done"><span className="v3-step-index">✓</span><span>세그먼트 설정</span></div>
           <div className="v3-step is-active"><span className="v3-step-index">3</span><span>실행 전 확인</span></div>
-          <div className="v3-step"><span className="v3-step-index">4</span><span>결과 조회</span></div>
+          <div className="v3-step"><span className="v3-step-index">4</span><span>Task History</span></div>
         </div>
       }
       rightPanel={
@@ -880,6 +939,8 @@ export function Create2fScreen({
             <div className="v3-label" style={{ color: "var(--v3-accent-text)" }}>제출 요약</div>
             <div className="v3-summary-row"><span>작업</span><strong>1건 · segments {segments.length}</strong></div>
             {totalFrames > 0 ? <div className="v3-summary-row"><span>총 프레임</span><strong>{totalFrames}</strong></div> : null}
+            {estimatedSeconds > 0 ? <div className="v3-summary-row"><span>예상 길이</span><strong>약 {estimatedSeconds.toFixed(1)}초</strong></div> : null}
+            <div className="v3-summary-row"><span>Seed</span><strong>서버 자동 생성</strong></div>
           </div>
           <button className="v3-primary-button" type="button" disabled={!canRun} onClick={onRun}>
             {running ? "제출 중..." : "Run · 영상 생성 시작"}
@@ -893,6 +954,7 @@ export function Create2fScreen({
         <div className="v3-summary-tile"><span className="v3-label">WORKFLOW</span><strong>{selected?.label || selected?.name || selectedWorkflow || "-"}</strong></div>
         <div className="v3-summary-tile"><span className="v3-label">KEYFRAMES</span><strong>{filledKeyframeCount} / {keyframes.length}</strong></div>
         <div className="v3-summary-tile"><span className="v3-label">SEGMENTS</span><strong>{segments.length}</strong></div>
+        <div className="v3-summary-tile"><span className="v3-label">OUTPUT</span><strong>{totalFrames ? `${totalFrames} frames` : "workflow default"}</strong></div>
       </div>
 
       {/* 2026-08-11: 2b+2e 병합으로 세그먼트별 시작→끝 키프레임 쌍 미리보기 카드가
@@ -909,6 +971,7 @@ export function Create2fScreen({
           {segments.map((segment) => {
             const startKeyframe = keyframes.find((keyframe) => keyframe.index === segment.startImageIndex);
             const endKeyframe = keyframes.find((keyframe) => keyframe.index === segment.endImageIndex);
+            const hasEndKeyframe = keyframes.length > 1 && segment.endImageIndex > segment.startImageIndex;
             const applied = segment.positivePrompt.trim();
             return (
               <div className="v3-kf-pair-row-item" key={segment.index}>
@@ -920,10 +983,12 @@ export function Create2fScreen({
                   <div className="v3-kf-thumb v3-kf-thumb-sm">
                     {startKeyframe?.previewUrl ? <ProtectedImage src={startKeyframe.previewUrl} alt="시작 키프레임" /> : <span>KF {segment.startImageIndex}</span>}
                   </div>
-                  <span className="v3-kf-arrow">→</span>
-                  <div className="v3-kf-thumb v3-kf-thumb-sm">
-                    {endKeyframe?.previewUrl ? <ProtectedImage src={endKeyframe.previewUrl} alt="끝 키프레임" /> : <span>KF {segment.endImageIndex}</span>}
-                  </div>
+                  {hasEndKeyframe ? <>
+                    <span className="v3-kf-arrow">→</span>
+                    <div className="v3-kf-thumb v3-kf-thumb-sm">
+                      {endKeyframe?.previewUrl ? <ProtectedImage src={endKeyframe.previewUrl} alt="끝 키프레임" /> : <span>KF {segment.endImageIndex}</span>}
+                    </div>
+                  </> : null}
                 </div>
               </div>
             );
@@ -932,30 +997,55 @@ export function Create2fScreen({
       </div>
 
       <div className="v3-card">
-        <div className="v3-review-table-head">
-          <span>세그먼트</span>
-          <span>프롬프트</span>
-          <span>노드 컨피그</span>
-          <span style={{ textAlign: "center" }}>상태</span>
-        </div>
-        {segments.map((segment) => (
-          <div className="v3-review-table-row" key={segment.index}>
-            <span className="v3-review-seg-name">SEG {String(segment.index).padStart(2, "0")}</span>
-            <span className="v3-review-prompt">{segment.positivePrompt.trim() || "프롬프트 미적용"}</span>
-            <span className="v3-review-config">
-              {[
-                segment.config.fps ?? segment.config.FPS,
-                segment.config.frames ?? segment.config.FRAMES,
-                segment.config.motion_shift ?? segment.config.motionShift
-              ].filter((value) => value !== undefined && value !== null).join(" · ") || "-"}
-            </span>
-            <span style={{ textAlign: "center" }}>
-              <span className={`v3-status-badge ${segment.positivePrompt.trim() ? "is-ready" : "is-pending"}`}>
-                {segment.positivePrompt.trim() ? "준비됨" : "필요"}
-              </span>
-            </span>
+        <div className="v3-table-scroll">
+          <div className="v3-preflight-review-head">
+            <span>세그먼트</span>
+            <span>Positive Prompt</span>
+            <span>Negative Prompt</span>
+            <span>노드 컨피그</span>
+            <span style={{ textAlign: "center" }}>상태</span>
           </div>
-        ))}
+          {segments.map((segment) => (
+            <div className="v3-preflight-review-row" key={segment.index}>
+              <span className="v3-review-seg-name">SEG {String(segment.index).padStart(2, "0")}</span>
+              <span className="v3-review-prompt">{segment.positivePrompt.trim() || "프롬프트 미적용"}</span>
+              <span className="v3-review-prompt">{effectiveNegativePrompt(segment) || "Negative Prompt 미적용"}</span>
+              <span className="v3-review-config">
+                {[
+                  segment.config.fps ?? segment.config.FPS,
+                  segment.config.frames ?? segment.config.FRAMES,
+                  segment.config.motion_shift ?? segment.config.motionShift
+                ].filter((value) => value !== undefined && value !== null).join(" · ") || "-"}
+              </span>
+              <span style={{ textAlign: "center" }}>
+                <span className={`v3-status-badge ${segment.positivePrompt.trim() ? "is-ready" : "is-pending"}`}>
+                  {segment.positivePrompt.trim() ? "준비됨" : "필요"}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="v3-card">
+        <div className="v3-card-header">
+          <div className="v3-card-header-title">출력 설정</div>
+          <span className="v3-card-header-meta">워크플로우 · 세그먼트별 적용값</span>
+        </div>
+        <div className="v3-preflight-output-grid">
+          {segments.map((segment, index) => (
+            <div className="v3-preflight-output-card" key={segment.index}>
+              <span className="v3-label">SEG {String(segment.index).padStart(2, "0")}</span>
+              <div className="v3-summary-row"><span>해상도</span><strong>{outputSummaries[index].resolution}</strong></div>
+              <div className="v3-summary-row"><span>프레임</span><strong>{outputSummaries[index].timing}</strong></div>
+              <div className="v3-summary-row"><span>인코딩</span><strong>{outputSummaries[index].encoding}</strong></div>
+            </div>
+          ))}
+        </div>
+        <div className="v3-note-block v3-preflight-submit-note">
+          <div className="v3-label">제출 후 처리</div>
+          <div>Run을 누르면 현재 구성으로 Task 1건이 생성됩니다. 입력 이미지, 최종 Positive/Negative Prompt, 노드 설정과 생성된 결과는 Task History에서 계속 확인할 수 있습니다.</div>
+        </div>
       </div>
 
       <div className="v3-card">

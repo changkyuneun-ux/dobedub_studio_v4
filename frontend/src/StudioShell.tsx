@@ -14,7 +14,6 @@ import {
   MetadataStatusResponse,
   WorkflowWidgetMetadata,
   ModelMetadataResponse,
-  OutputAsset,
   PromptEntry,
   PromptCatalogResponse,
   PromptSystemPromptResponse,
@@ -25,7 +24,6 @@ import {
   AssetItem,
   CollectionSummary,
   CollectionDetail,
-  JobStatusResponse,
   TaskPromptItem
 } from "./api/client";
 import { StudioRoute } from "./router";
@@ -34,9 +32,7 @@ import {
   canUse
 } from "./auth";
 import {
-  isSuccessStatus,
-  fileUrlWithMode,
-  sleep
+  isTerminalHistoryStatus,
 } from "./helpers/format";
 import {
   promptText,
@@ -66,19 +62,14 @@ import {
   fileToDataUrl,
   workflowIdFromHistoryItem,
   openOutputAsset,
-  downloadProtectedAsset,
-  selectedOutputAsset,
-  finalOutputAsset,
-  previewSegmentDetailRows
+  downloadProtectedAsset
 } from "./helpers/workflow";
 import { AccessDeniedScreen, ManualScreen } from "./screens/accessScreens";
 import { useProtectedAssetUrl } from "./components/ProtectedAssets";
 import {
   Create2aScreen,
   Create2bScreen,
-  Create2fScreen,
-  Create2cScreen,
-  Create2dScreen
+  Create2fScreen
 } from "./screens/createScreens";
 import {
   Create3aScreen,
@@ -90,6 +81,7 @@ import {
   Create6cScreen,
   Create6dScreen,
   Create5bScreen,
+  TaskPolicyScreen,
   Create3bScreen,
   Create7bScreen,
   Create3eScreen,
@@ -113,6 +105,7 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "review.assets": "history:read",
   "admin.systemPrompt": "prompts:build",
   "admin.sandbox": "sandbox:read",
+  "admin.taskPolicy": "roles:read",
   "admin.roles": "roles:read",
   "admin.resourceMap": "roles:read",
   "admin.users": "users:read",
@@ -128,6 +121,20 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "access.manual": "manual:read"
 };
 
+type ConfirmationRequest = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone?: "danger" | "primary";
+  onConfirm: () => Promise<void>;
+};
+
+type PromptReuseTarget = {
+  workflowId: string;
+  segmentIndex: number;
+  segmentName: string;
+};
+
 export function routeAccessGranted(user: User | null, route: StudioRoute): boolean {
   const requiredPermission = ROUTE_REQUIRED_PERMISSION[route];
   if (!requiredPermission) {
@@ -141,6 +148,7 @@ export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "review.assets": "Assets",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
+  "admin.taskPolicy": "Task Policy",
   "admin.roles": "역할 & 권한",
   "admin.resourceMap": "기능 리소스 매핑",
   "admin.users": "사용자",
@@ -221,6 +229,8 @@ export function StudioShell({
   // notice가 아니라 해당 버튼 근처에 표시한다. 성공 안내는 기존대로 adminUsersNotice.
   const [adminUsersError, setAdminUsersError] = useState("");
   const [modalNotice, setModalNotice] = useState("");
+  const [confirmationRequest, setConfirmationRequest] = useState<ConfirmationRequest | null>(null);
+  const [confirmationSubmitting, setConfirmationSubmitting] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
   const [runpodConnection, setRunpodConnection] = useState<RunpodConnectionResponse | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -254,6 +264,7 @@ export function StudioShell({
   const [promptReuseItems, setPromptReuseItems] = useState<TaskPromptItem[]>([]);
   const [promptReuseLoading, setPromptReuseLoading] = useState(false);
   const [promptReuseNotice, setPromptReuseNotice] = useState("");
+  const [promptReuseTarget, setPromptReuseTarget] = useState<PromptReuseTarget | null>(null);
   // 2026-08-11: 카드 그리드 → 리스트 전환과 함께 서버사이드 페이지네이션 추가
   // (고정 20건/페이지 - "최대 20개 이내" 요건). 3a(historyPage 등)와 동일한 패턴.
   const [promptReusePage, setPromptReusePage] = useState(1);
@@ -265,13 +276,6 @@ export function StudioShell({
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(1);
   const [keyframes, setKeyframes] = useState<KeyframeState[]>([]);
   const [running, setRunning] = useState(false);
-  const [cancelRequested, setCancelRequested] = useState(false);
-  const [currentTaskId, setCurrentTaskId] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [logText, setLogText] = useState("");
-  const [latestJob, setLatestJob] = useState<JobStatusResponse | null>(null);
-  const [outputAssets, setOutputAssets] = useState<OutputAsset[]>([]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   // A-03 · 1안(2026-08-11 결정): 알림은 폴링 결과를 클라이언트 토스트로만 처리한다.
@@ -279,7 +283,7 @@ export function StudioShell({
   // 소실되는 휘발성 알림). 작업이 종료(완료/취소/실패)될 때 아래 showToast로 띄운다.
   const toastIdRef = useRef(0);
   const [toast, setToast] = useState<{ id: number; message: string; tone: "success" | "danger" | "neutral" } | null>(null);
-  const workflowSelectionLocked = running || cancelRequested;
+  const workflowSelectionLocked = running;
 
   function showToast(message: string, tone: "success" | "danger" | "neutral") {
     toastIdRef.current += 1;
@@ -488,6 +492,13 @@ export function StudioShell({
   // 쓰던 모달 방식(openPromptReuse/promptReuseOpen/PromptReuseModal)은 제거됐다.
   async function goToPromptReuseScreen() {
     setPromptReuseNotice("");
+    if (selectedSegment && selectedWorkflow) {
+      setPromptReuseTarget({
+        workflowId: selectedWorkflow,
+        segmentIndex: selectedSegment.index,
+        segmentName: selectedSegment.displayName
+      });
+    }
     await searchPromptReuse(promptReuseKeyword, 1);
     onNavigate("review.reuse");
   }
@@ -523,12 +534,43 @@ export function StudioShell({
   }
 
   function applyReusablePrompt(prompt: TaskPromptItem) {
-    applyPromptSceneToSegment({
-      positivePrompt: prompt.positivePrompt,
-      negativePrompt: prompt.negativePrompt,
-      negativePromptAddition: "",
-      source: `Prompt Reuse #${prompt.id}`
-    });
+    const targetIndex = promptReuseTarget?.workflowId === selectedWorkflow
+      ? promptReuseTarget.segmentIndex
+      : selectedSegmentIndex;
+    const targetSegment = segments.find((segment) => segment.index === targetIndex);
+    if (!targetSegment) {
+      setPromptReuseNotice("적용할 세그먼트를 찾을 수 없습니다. Workspace에서 세그먼트를 선택한 뒤 다시 시도하세요.");
+      return false;
+    }
+
+    const positivePrompt = String(prompt.positivePrompt || "").trim();
+    const negativePrompt = String(prompt.negativePrompt || "").trim();
+    if (!positivePrompt) {
+      setPromptReuseNotice("선택한 재사용 프롬프트에 Positive Prompt가 없어 적용하지 않았습니다.");
+      return false;
+    }
+
+    // 재사용 항목은 다른 workflow에서 생성됐을 수 있다. 그래서 해당 항목의 최종
+    // Negative Prompt를 그대로 보존하되, 현재 작업의 Node Config·입력 이미지는 건드리지 않는다.
+    setSegments((items) => items.map((segment) => (
+      segment.index === targetIndex
+        ? {
+            ...segment,
+            positivePrompt,
+            defaultNegativePrompt: segment.defaultNegativePrompt || segment.negativePrompt,
+            negativePrompt: negativePrompt || segment.negativePrompt,
+            negativePromptAddition: negativePrompt || segment.negativePrompt
+          }
+        : segment
+    )));
+    setSelectedSegmentIndex(targetIndex);
+    setPromptScene(null);
+    setPromptGenerated(null);
+    setPromptSceneDescription("");
+    setPromptSelectedTermIds([]);
+    setNotice(`${targetSegment.displayName}에 재사용 프롬프트 #${prompt.id}를 적용했습니다.`);
+    setPromptReuseNotice("");
+    return true;
   }
 
   async function loadSystemStatus() {
@@ -721,9 +763,6 @@ export function StudioShell({
   }
 
   async function deactivatePromptCategoryGroup(groupId: number) {
-    if (!window.confirm("카테고리와 하위 서브 카테고리, key word 연결을 비활성화합니다. 기존 이력은 유지됩니다. 진행하시겠습니까?")) {
-      return;
-    }
     setPromptBuilderLoading(true);
     setPromptBuilderNotice("");
     try {
@@ -738,9 +777,6 @@ export function StudioShell({
   }
 
   async function deactivatePromptCategory(categoryId: number) {
-    if (!window.confirm("카테고리와 포함된 key word를 비활성화합니다. 기존 이력은 유지됩니다. 진행하시겠습니까?")) {
-      return;
-    }
     setPromptBuilderLoading(true);
     setPromptBuilderNotice("");
     try {
@@ -769,9 +805,6 @@ export function StudioShell({
   }
 
   async function deactivatePromptTerm(termId: number) {
-    if (!window.confirm("선택한 key word를 비활성화합니다. 기존 이력은 유지됩니다. 진행하시겠습니까?")) {
-      return;
-    }
     setPromptBuilderLoading(true);
     setPromptBuilderNotice("");
     try {
@@ -782,6 +815,24 @@ export function StudioShell({
       setPromptBuilderNotice(error instanceof Error ? error.message : "Key word 비활성화에 실패했습니다.");
     } finally {
       setPromptBuilderLoading(false);
+    }
+  }
+
+  function requestConfirmation(request: ConfirmationRequest) {
+    setConfirmationRequest(request);
+  }
+
+  async function confirmPendingAction() {
+    const request = confirmationRequest;
+    if (!request) {
+      return;
+    }
+    setConfirmationSubmitting(true);
+    try {
+      await request.onConfirm();
+      setConfirmationRequest(null);
+    } finally {
+      setConfirmationSubmitting(false);
     }
   }
 
@@ -1242,15 +1293,15 @@ export function StudioShell({
     }
   }, [route, selectedWorkflow, workflows.length, user, promptSystemPrompt, adminWorkflowItems.length, adminUsers.length, promptCatalog, promptBuilderLoading, promptReuseItems.length, promptReuseLoading]);
 
-  // E-02 · 2c → 2d: generateVideo()는 create.confirm(2f)의 onRun에서 호출되고
-  // 완료(성공/실패/취소)까지 내부적으로 기다린다(pollJob). running이 false로
-  // 바뀌는 시점이 곧 종료 시점이므로, 진행 화면(create.progress)에 있는 동안 이
-  // 전환이 일어나면 결과 화면(create.result)으로 자동 이동한다.
+  // 활성 Task가 있는 동안에만 이력 화면을 짧게 갱신한다. 상태 조회는 서버의
+  // 백그라운드 모니터가 담당하므로, 이 타이머는 UI 표시를 최신화하는 역할만 한다.
   useEffect(() => {
-    if (route === "create.progress" && !running && latestJob) {
-      onNavigate("create.result");
+    if (route !== "review.history" || !history.some((item) => !isTerminalHistoryStatus(item.status))) {
+      return;
     }
-  }, [running, latestJob, route]);
+    const timer = window.setInterval(() => void loadHistoryPage(historyPage), 3000);
+    return () => window.clearInterval(timer);
+  }, [route, history, historyPage, historyPageSize]);
 
   // E-03: 3a 우측 패널 Prompt Review 아코디언은 세그먼트별 task_prompts를 보여준다.
   // 2026-08-11: 별도 화면(review.runDetail)이 폐지되면서 3a 목록 화면 자체에서
@@ -1356,9 +1407,16 @@ export function StudioShell({
   }
 
   async function applySelectedFiles(startIndex: number, files: FileList | null) {
-    const selectedFiles = Array.from(files || []);
+    const droppedFiles = Array.from(files || []);
+    const selectedFiles = droppedFiles.filter((file) => file.type.startsWith("image/"));
     if (!selectedFiles.length) {
+      if (droppedFiles.length) {
+        setNotice("이미지 파일만 업로드할 수 있습니다.");
+      }
       return;
+    }
+    if (selectedFiles.length !== droppedFiles.length) {
+      setNotice("이미지 파일만 선택해 업로드합니다.");
     }
     setNotice("이미지 미리보기를 준비하고 업로드를 시작합니다.");
     for (const [offset, file] of selectedFiles.entries()) {
@@ -1458,18 +1516,6 @@ export function StudioShell({
     }),
     [keyframes, segments, selectedWorkflow, user]
   );
-  const selectedOutput = useMemo(() => selectedOutputAsset(outputAssets, selectedSegmentIndex), [outputAssets, selectedSegmentIndex]);
-  const finalOutput = useMemo(() => finalOutputAsset(outputAssets), [outputAssets]);
-  const displayOutput = finalOutput || selectedOutput || (latestJob?.outputUrl ? { downloadUrl: latestJob.outputUrl, fileName: "generated output", outputRole: "final" } : null);
-  const displayOutputRawUrl = displayOutput?.downloadUrl || displayOutput?.url || "";
-  const displayOutputInlineUrl = displayOutputRawUrl ? fileUrlWithMode(displayOutputRawUrl, "inline") : "";
-  const displayOutputDownloadUrl = displayOutputRawUrl ? fileUrlWithMode(displayOutputRawUrl, "download") : "";
-  const displayOutputMediaUrl = useProtectedAssetUrl(displayOutputInlineUrl);
-  const hasSuccessfulOutput = isSuccessStatus(latestJob?.status) && Boolean(displayOutputInlineUrl);
-  const hasFailedJob = Boolean(latestJob && ["fail", "failed", "timed_out"].includes(latestJob.status.toLowerCase()));
-  const segmentDetailRows = selectedSegment
-    ? previewSegmentDetailRows(selectedWorkflow, selectedSegment, segments.length, selectedOutput, finalOutput)
-    : [];
   const selectedHistory = useMemo(
     () => history.find((item) => item.taskId === selectedHistoryTaskId) || history[0] || null,
     [history, selectedHistoryTaskId]
@@ -1556,99 +1602,45 @@ export function StudioShell({
       return;
     }
     setRunning(true);
-    setCancelRequested(false);
     setError("");
     setNotice("작업을 제출합니다.");
-    setProgress(0);
-    setElapsedSeconds(0);
-    setOutputAssets([]);
-    setLatestJob(null);
-    setLogText("RUNPOD STATUS : QUEUED");
     try {
       const created = await apiClient.createJob(jobPayloadPreview);
-      setCurrentTaskId(created.taskId);
-      const finalJob = await pollJob(created.taskId);
-      setLatestJob(finalJob);
-      if (finalJob.status === "success") {
-        setNotice("작업이 완료되었습니다.");
-        setOutputAssets(finalJob.outputAssets || []);
-        setSegments((items) => items.map((segment) => ({ ...segment, progress: 100 })));
-        setHistory((await apiClient.history(1, historyPageSize)).items || []);
-        showToast("작업이 완료되었습니다. 결과 화면에서 확인하세요.", "success");
-      } else if (finalJob.status === "cancelled") {
-        setNotice("작업이 취소되었습니다.");
-        showToast("작업이 취소되었습니다.", "neutral");
-      } else {
-        setNotice(finalJob.message || "작업이 종료되었습니다.");
-        setOutputAssets(finalJob.outputAssets || []);
-        showToast(finalJob.message || "작업이 실패했습니다.", "danger");
+      setNotice("작업을 제출했습니다. Task History에서 진행 상태를 확인하세요.");
+      showToast("작업이 제출되었습니다. 다른 작업을 계속 준비할 수 있습니다.", "success");
+
+      // 제출 이후에는 브라우저가 완료까지 붙잡고 있지 않는다. 같은 워크플로우의
+      // 새 작업을 위한 빈 입력을 준비하고, 방금 생성된 Task가 맨 위에 보이는
+      // 이력으로 즉시 이동한다.
+      try {
+        await loadWorkflowIntoState(selectedWorkflow, { preserveNotice: true });
+      } catch (resetError) {
+        setError(resetError instanceof Error ? resetError.message : "새 작업 화면을 초기화하지 못했습니다.");
       }
+      await loadHistoryPage(1);
+      onNavigate("review.history");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Generate failed";
       setError(message);
-      setLogText(`RUNPOD STATUS : FAILED`);
       showToast(message, "danger");
     } finally {
       setRunning(false);
-      setCancelRequested(false);
     }
   }
 
-  async function pollJob(taskId: string): Promise<JobStatusResponse> {
-    let latest: JobStatusResponse | null = null;
-    for (;;) {
-      const job = await apiClient.jobStatus(taskId);
-      latest = job;
-      updateRunProgress(job);
-      if (["success", "fail", "cancelled", "timed_out"].includes(job.status.toLowerCase())) {
-        return job;
-      }
-      await sleep(900);
-    }
-  }
-
-  function updateRunProgress(job: JobStatusResponse) {
-    const nextProgress = Math.min(100, Math.max(0, Math.round(job.progress || 0)));
-    setProgress(nextProgress);
-    setElapsedSeconds(Math.round(job.elapsedSeconds || 0));
-    setLogText(job.rawStatus ? `RUNPOD STATUS : ${job.rawStatus.toUpperCase()}` : job.message || job.status);
-    setLatestJob(job);
-    setSegments((items) => {
-      const count = Math.max(1, items.length);
-      const range = 100 / count;
-      return items.map((segment, index) => {
-        const start = index * range;
-        const segmentProgress = ((nextProgress - start) / range) * 100;
-        return { ...segment, progress: Math.min(100, Math.max(0, Math.round(segmentProgress))) };
-      });
-    });
-  }
-
-  async function cancelGeneration() {
-    if (!running || !currentTaskId || cancelRequested) {
-      return;
-    }
-    setCancelRequested(true);
-    setNotice("취소 요청을 보냈습니다.");
+  async function cancelHistoryTask(item: HistoryItem) {
+    setModalNotice("");
     try {
-      const job = await apiClient.cancelJob(currentTaskId);
-      updateRunProgress(job);
-      setLatestJob(job);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Cancel failed");
-      setCancelRequested(false);
+      await apiClient.cancelJob(item.taskId);
+      setNotice("작업 취소를 요청했습니다. RunPod 응답에 따라 이력이 갱신됩니다.");
+      await loadHistoryPage(historyPage);
+    } catch (cancelError) {
+      setModalNotice(cancelError instanceof Error ? cancelError.message : "작업 취소 요청에 실패했습니다.");
     }
   }
 
   function resetRunState() {
     setRunning(false);
-    setCancelRequested(false);
-    setCurrentTaskId("");
-    setProgress(0);
-    setElapsedSeconds(0);
-    setLogText("");
-    setLatestJob(null);
-    setOutputAssets([]);
   }
 
   // E-05 · 7g: 권한 없는 라우트에 직접 URL로 진입한 경우 라우트 화면 대신 403
@@ -1750,52 +1742,8 @@ export function StudioShell({
         running={running}
         onEditSegments={() => onNavigate("create.prompt")}
         onRun={() => {
-          onNavigate("create.progress");
           void generateVideo();
         }}
-      />
-    ) : route === "create.progress" ? (
-      <Create2cScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        selected={selected || null}
-        selectedWorkflow={selectedWorkflow}
-        keyframes={keyframes}
-        segments={segments}
-        progress={progress}
-        elapsedSeconds={elapsedSeconds}
-        logText={logText}
-        running={running}
-        cancelRequested={cancelRequested}
-        currentTaskId={currentTaskId}
-        onCancel={() => void cancelGeneration()}
-        onViewPayload={() => onNavigate("create.confirm")}
-      />
-    ) : route === "create.result" ? (
-      <Create2dScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        selected={selected || null}
-        selectedWorkflow={selectedWorkflow}
-        keyframes={keyframes}
-        segments={segments}
-        latestJob={latestJob}
-        outputAssets={outputAssets}
-        displayOutput={displayOutput}
-        displayOutputMediaUrl={displayOutputMediaUrl}
-        displayOutputDownloadUrl={displayOutputDownloadUrl}
-        hasSuccessfulOutput={hasSuccessfulOutput}
-        hasFailedJob={hasFailedJob}
-        elapsedSeconds={elapsedSeconds}
-        onDownload={() => downloadProtectedAsset(displayOutputDownloadUrl, displayOutput?.fileName || "generated-output.mp4").catch((downloadError) => setError(downloadError instanceof Error ? downloadError.message : "영상 다운로드에 실패했습니다."))}
-        onOpenHistory={() => onNavigate("review.history")}
-        onNewRun={() => {
-          resetRunState();
-          onNavigate("create.load");
-        }}
-        onReviewSettings={() => onNavigate("create.confirm")}
       />
     ) : route === "review.history" ? (
       <Create3aScreen
@@ -1824,8 +1772,10 @@ export function StudioShell({
         onRequestDelete={(item) => { setModalNotice(""); setDeleteTarget(item); }}
         onCancelDelete={() => { setModalNotice(""); setDeleteTarget(null); }}
         onConfirmDelete={() => void deleteHistoryItem()}
+        onCancelTask={(item) => void cancelHistoryTask(item)}
         canRework={canUse(user, "jobs:run")}
         canDelete={canUse(user, "history:delete")}
+        canCancel={canUse(user, "jobs:cancel")}
         canReview={canUse(user, "prompts:review")}
         canGiveFeedback={canUse(user, "prompts:review")}
       />
@@ -1842,12 +1792,14 @@ export function StudioShell({
         pageSize={promptReusePageSize}
         total={promptReuseTotal}
         workflowName={selected?.label || selected?.name || selectedWorkflow}
+        targetSegmentName={promptReuseTarget?.workflowId === selectedWorkflow ? promptReuseTarget.segmentName : selectedSegment?.displayName || "현재 세그먼트"}
         onKeywordChange={setPromptReuseKeyword}
         onSearch={() => void searchPromptReuse(promptReuseKeyword, 1)}
         onPageChange={(page) => void searchPromptReuse(promptReuseKeyword, page)}
         onApply={(prompt) => {
-          applyReusablePrompt(prompt);
-          onNavigate("create.prompt");
+          if (applyReusablePrompt(prompt)) {
+            onNavigate("create.prompt");
+          }
         }}
       />
     ) : route === "review.assets" ? (
@@ -1916,6 +1868,8 @@ export function StudioShell({
       />
     ) : route === "admin.sandbox" ? (
       <Create5bScreen user={user} onGoTo={onNavigate} />
+    ) : route === "admin.taskPolicy" ? (
+      <TaskPolicyScreen user={user} onGoTo={onNavigate} />
     ) : route === "admin.roles" ? (
       <Create3bScreen user={user} onGoTo={onNavigate} />
     ) : route === "admin.resourceMap" ? (
@@ -1983,11 +1937,29 @@ export function StudioShell({
         loading={promptBuilderLoading}
         notice={promptBuilderNotice}
         onSaveCategoryGroup={(payload, groupId) => void savePromptCategoryGroup(payload, groupId)}
-        onDeactivateCategoryGroup={(groupId) => void deactivatePromptCategoryGroup(groupId)}
+        onDeactivateCategoryGroup={(groupId) => requestConfirmation({
+          title: "카테고리 비활성화",
+          description: "이 카테고리와 하위 서브 카테고리, 연결된 key word를 비활성화합니다. 기존 작업 이력은 유지됩니다.",
+          confirmLabel: "비활성화",
+          tone: "danger",
+          onConfirm: () => deactivatePromptCategoryGroup(groupId)
+        })}
         onSaveCategory={(payload, categoryId) => void savePromptCategory(payload, categoryId)}
-        onDeactivateCategory={(categoryId) => void deactivatePromptCategory(categoryId)}
+        onDeactivateCategory={(categoryId) => requestConfirmation({
+          title: "서브 카테고리 비활성화",
+          description: "이 서브 카테고리와 포함된 key word를 비활성화합니다. 기존 작업 이력은 유지됩니다.",
+          confirmLabel: "비활성화",
+          tone: "danger",
+          onConfirm: () => deactivatePromptCategory(categoryId)
+        })}
         onSaveTerm={(payload, termId) => void savePromptTerm(payload, termId)}
-        onDeactivateTerm={(termId) => void deactivatePromptTerm(termId)}
+        onDeactivateTerm={(termId) => requestConfirmation({
+          title: "Key word 비활성화",
+          description: "선택한 key word를 비활성화합니다. 기존 작업 이력은 유지됩니다.",
+          confirmLabel: "비활성화",
+          tone: "danger",
+          onConfirm: () => deactivatePromptTerm(termId)
+        })}
       />
     ) : route === "admin.auditLog" ? (
       <AdminAuditLogScreen user={user} onGoTo={onNavigate} />
@@ -2022,6 +1994,44 @@ export function StudioShell({
        deleteTarget을 받아 자체적으로 v3 스펙 삭제 확인창을 그리므로(reviewScreens.tsx
        213~243번째 줄), 여기서 또 렌더하면 3a에서 확인창이 두 개 겹쳐 떴다.
        E-05: 매뉴얼(6b)도 ManualScreen 전체 화면으로 전환돼 전역 모달 렌더가 없다. */}
+    {confirmationRequest ? (
+      <div
+        className="v3-modal-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="v3GlobalConfirmTitle"
+        onMouseDown={() => {
+          if (!confirmationSubmitting) setConfirmationRequest(null);
+        }}
+      >
+        <div className="v3-modal-panel v3-confirm-dialog" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="v3-confirm-dialog-heading">
+            <span className={`v3-confirm-dialog-icon ${confirmationRequest.tone === "danger" ? "is-danger" : ""}`} aria-hidden="true">!</span>
+            <div>
+              <div className="v3-label" style={{ color: confirmationRequest.tone === "danger" ? "var(--v3-danger)" : undefined }}>CONFIRM</div>
+              <h2 id="v3GlobalConfirmTitle" className="v3-modal-title">{confirmationRequest.title}</h2>
+            </div>
+          </div>
+          <p className="v3-modal-body-text">{confirmationRequest.description}</p>
+          <div className="v3-warning-strip" style={{ margin: 0 }}>
+            <span className="v3-warning-dot" />
+            <span>비활성화된 항목은 새 프롬프트 선택에 표시되지 않습니다.</span>
+          </div>
+          <div className="v3-inline-actions">
+            <button className="v3-secondary-button v3-flex-button" type="button" disabled={confirmationSubmitting} onClick={() => setConfirmationRequest(null)}>취소</button>
+            <button
+              className={confirmationRequest.tone === "danger" ? "v3-danger-button v3-flex-button" : "v3-primary-button v3-flex-button"}
+              style={confirmationRequest.tone === "danger" ? { background: "var(--v3-danger)", borderColor: "var(--v3-danger)", color: "#fff" } : undefined}
+              type="button"
+              disabled={confirmationSubmitting}
+              onClick={() => void confirmPendingAction()}
+            >
+              {confirmationSubmitting ? "처리 중..." : confirmationRequest.confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
     {/* A-03 · 1안: 작업 종료 알림 토스트. 어느 화면에 있든(진행 화면을 떠나도) 보이도록
        StudioShell 루트에 고정 렌더한다. 6초 후 자동 사라짐 + 수동 닫기. */}
     {toast ? (

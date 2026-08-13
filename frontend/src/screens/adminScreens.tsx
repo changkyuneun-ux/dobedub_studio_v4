@@ -7,6 +7,7 @@ import {
   AdminUser,
   PermissionGovernance,
   AdminWorkflow,
+  TaskExecutionPolicy,
   SandboxPodStatus,
   MetadataStatusResponse,
   WorkflowWidgetMetadata,
@@ -574,6 +575,102 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
           </div>
         </div>
       ) : null}
+    </AppShell>
+  );
+}
+
+function TaskPolicySettings({ user }: { user: User }) {
+  const canView = canUse(user, "roles:read");
+  const canEdit = canUse(user, "roles:write");
+  const [taskPolicy, setTaskPolicy] = useState<TaskExecutionPolicy | null>(null);
+  const [taskPolicyDraft, setTaskPolicyDraft] = useState({ maxActiveTasksPerUser: "3", maxActiveTasksTotal: "10" });
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    apiClient.taskExecutionPolicy()
+      .then((policy) => {
+        if (!active) return;
+        setTaskPolicy(policy);
+        setTaskPolicyDraft({
+          maxActiveTasksPerUser: String(policy.maxActiveTasksPerUser),
+          maxActiveTasksTotal: String(policy.maxActiveTasksTotal)
+        });
+      })
+      .catch((error: Error) => active && setNotice(error.message))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [canView]);
+
+  async function save() {
+    setNotice("");
+    try {
+      const next = await apiClient.saveTaskExecutionPolicy({
+        maxActiveTasksPerUser: Number(taskPolicyDraft.maxActiveTasksPerUser),
+        maxActiveTasksTotal: Number(taskPolicyDraft.maxActiveTasksTotal)
+      });
+      setTaskPolicy(next);
+      setTaskPolicyDraft({
+        maxActiveTasksPerUser: String(next.maxActiveTasksPerUser),
+        maxActiveTasksTotal: String(next.maxActiveTasksTotal)
+      });
+      setNotice("Task Policy를 저장했습니다. 이후 작업 제출부터 적용됩니다.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Task policy save failed");
+    }
+  }
+
+  if (!canView) {
+    return null;
+  }
+
+  return (
+    <div className="v3-card">
+      <div className="v3-card-header">
+        <div className="v3-card-header-title">동시 실행 한도</div>
+        <span className="v3-card-header-meta">기본값 3 / 10</span>
+      </div>
+      <div style={{ padding: "0 16px 16px" }}>
+        <p className="v3-muted-text">Serverless 영상 생성에만 적용되는 제출 상한입니다. Sandbox Pod의 시작·중지, 이미 제출된 Task의 실행 여부와는 독립적입니다.</p>
+        <div className="v3-task-policy-limit-grid">
+          <label className="v3-task-policy-limit-card">사용자당 동시 활성 Task
+            <input className="v3-search-input" type="number" min="1" max="100" value={taskPolicyDraft.maxActiveTasksPerUser} disabled={!canEdit || loading} onChange={(event) => setTaskPolicyDraft((current) => ({ ...current, maxActiveTasksPerUser: event.target.value }))} />
+            <span>한 사용자가 동시에 제출·대기·실행할 수 있는 최대 수</span>
+          </label>
+          <label className="v3-task-policy-limit-card">전체 동시 활성 Task
+            <input className="v3-search-input" type="number" min="1" max="100" value={taskPolicyDraft.maxActiveTasksTotal} disabled={!canEdit || loading} onChange={(event) => setTaskPolicyDraft((current) => ({ ...current, maxActiveTasksTotal: event.target.value }))} />
+            <span>모든 사용자의 제출·대기·실행 Task를 합산한 최대 수</span>
+          </label>
+        </div>
+        <p className="v3-muted-text" style={{ marginTop: 12 }}>한도 계산 대상: `QUEUED`, `IN_QUEUE`, `IN_PROGRESS`, `RUNNING` · 완료·실패·취소·시간초과 Task는 즉시 제외</p>
+        {taskPolicy?.updatedAt ? <p className="v3-muted-text" style={{ marginTop: 10 }}>마지막 변경: {taskPolicy.updatedAt}{taskPolicy.updatedBy ? ` · ${taskPolicy.updatedBy}` : ""}</p> : null}
+        {notice ? <p className="v3-inline-notice">{notice}</p> : null}
+      </div>
+      <div className="v3-inline-actions" style={{ padding: "0 16px 16px" }}>
+        <button className="v3-primary-button" type="button" disabled={!canEdit || loading} onClick={() => void save()}>Save Task Policy</button>
+      </div>
+    </div>
+  );
+}
+
+export function TaskPolicyScreen({ user, onGoTo }: { user: User; onGoTo: (route: StudioRoute) => void }) {
+  return (
+    <AppShell
+      user={user}
+      area="admin"
+      activeItem="adminTaskPolicy"
+      onNavigate={(key) => shellNavigateAdmin(key, onGoTo)}
+      headerEyebrow="ADMIN · TASK POLICY"
+      headerTitle="Task Policy"
+      sidebarFooter={<p className="v3-muted-text">Serverless 작업 제출량을 제어하는 운영 정책입니다. Sandbox Pod의 시작·중지 상태와는 독립적으로 적용됩니다.</p>}
+    >
+      <TaskPolicySettings user={user} />
+      <AuditLogTable targetType="task_execution_policy" pageSize={10} title="Task Policy 변경 이력" />
     </AppShell>
   );
 }

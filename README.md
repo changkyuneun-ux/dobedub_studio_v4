@@ -64,15 +64,14 @@ http://127.0.0.1:8787/studio
 | `6b` | 사용자 매뉴얼 (문서 내 검색·강조·이동 지원) | `/studio/access/manual` |
 | `7g` | 403 권한 없음 / 401 세션 만료 / 서버 오류 | (권한 가드가 자동 진입) |
 
-### 2 Create — 영상 생성 (S1~S5 핵심 흐름)
+### 2 Create — 영상 생성 및 다중 Task 제출
 
 | id | 단계 | 화면 | 라우트 |
 |---|---|---|---|
 | `2a` | S1 이미지 로드 | 워크플로 선택 + 키프레임 업로드 | `/studio/create/load` |
 | `2b`+`2e` | S2 세그먼트 설정 | 프롬프트 키워드 카탈로그(포지티브/네거티브 스코프 아코디언) + Wan Node Config를 좌우 분할로 병합 | `/studio/create/prompt` |
-| `2f` | S3 실행 전 확인 | 제출 payload 확인 후 Run | `/studio/create/confirm` |
-| `2c` | S4 진행 | 상태 인포그래픽 + 로그 + 취소 요청(Cancelling) | `/studio/create/progress` |
-| `2d` | S5 결과 | Final 병합본 + 구간별 검수본 | `/studio/create/result` |
+| `2f` | S3 실행 전 확인 | 제출 payload 확인 후 Run. 제출 직후 Task History로 이동 | `/studio/create/confirm` |
+| `2c` / `2d` | 진행 / 결과 | **retired.** 상태, 취소, 결과, 다운로드, 재작업은 작업 이력 우측 패널에 통합 | `/studio/review/history` |
 
 ### 3 Review — 검수 · 자산
 
@@ -97,6 +96,7 @@ http://127.0.0.1:8787/studio
 | `4b` | Negative 기본값 (NEGATIVE 스코프 필터) | `/studio/admin/catalog/negative-defaults` |
 | `7a` | 시스템 프롬프트 (LLM 지시문, 버전 이력·되돌리기) | `/studio/admin/system-prompt` |
 | `5b` | Sandbox Pod 시작/정지 | `/studio/admin/sandbox` |
+| — | Task Policy (사용자별/전체 활성 Task 한도) | `/studio/admin/task-policy` |
 | — | 감사 로그 | `/studio/admin/audit-log` |
 
 `6c`(시스템 상태)와 `6d`(메타데이터)는 설계상 ADMIN 사이드바 소속이 아니라 스튜디오 HELP 그룹 소속입니다. HELP 메뉴에서 진입하면 관리자 콘솔 쉘로 전환되지 않고 GENERATE 영역 그대로 유지됩니다(`/studio/admin/status`, `/studio/admin/metadata` 경로는 유지하되 화면은 `area="generate"`로 렌더링).
@@ -130,16 +130,16 @@ http://127.0.0.1:8787/studio
 | `POST /api/uploads`, `GET /api/files/{assetId}` | 이미지 업로드, 보호된 자산 다운로드 |
 | `GET /api/assets` | 자산 목록(작업 출력 기준, type/workflowId/기간/컬렉션 필터 + 페이지네이션) |
 | `GET/POST /api/collections`, `GET /api/collections/{id}`, `POST /api/collections/{id}/items`, `DELETE /api/collections/{id}/items/{assetId}` | 컬렉션 CRUD |
-| `POST /api/jobs`, `GET /api/jobs/{taskId}`, `POST /api/jobs/{taskId}/cancel` | 작업 제출·조회·취소 |
+| `POST /api/jobs`, `GET /api/jobs/{taskId}`, `POST /api/jobs/{taskId}/cancel` | 작업 제출·조회·취소. 제출 사용자 기준 동시 활성 Task 한도 적용, 서버 모니터가 세션 종료 뒤에도 상태 갱신 |
 | `GET /api/jobs/{taskId}/prompts`, `PATCH .../quality`, `PATCH .../review` | 세그먼트별 프롬프트 조회·품질/평가 저장 |
-| `GET /api/history`, `POST /api/history/{taskId}/delete` | 작업 이력 조회(20건 페이지네이션)·삭제(진행 중 작업은 차단) |
+| `GET /api/history`, `POST /api/history/{taskId}/delete` | 활성/종료 Task를 함께 조회하는 작업 이력(20건 페이지네이션)·삭제(진행 중 작업은 차단) |
 | `GET /api/prompts/catalog`, `GET /api/prompts/reusable`, `GET /api/prompts/scene-schema` | 프롬프트 카탈로그, 재사용 검색, Scene schema |
 | `POST /api/prompts/scene`, `POST /api/prompts/generate`, `POST /api/prompts/feedback` | Scene JSON 생성, LLM 프롬프트 생성, 피드백 저장 |
 | `GET/PUT /api/prompts/system-prompt`, `GET /api/prompts/system-prompt/versions` | 시스템 프롬프트 조회/저장, 버전 이력 |
 | `POST/PUT /api/prompts/category-groups`, `/categories`, `/terms` (+ `deactivate`) | 카탈로그 그룹·카테고리·용어 CRUD |
 | `GET /api/metadata/status`, `GET /api/metadata/models`, `POST /api/metadata/rebuild` | 워크플로 메타데이터 조회·재생성 |
 | `GET/POST /api/admin/users`, `PUT /api/admin/users/{id}`, `POST .../deactivate`, `POST .../reset-password` | 사용자 CRUD, 비활성화, 비밀번호 초기화 |
-| `GET /api/admin/permissions`, `PUT /api/admin/roles/{roleCode}/permissions` | 역할×권한 매트릭스, 기능 리소스 매핑 |
+| `GET /api/admin/permissions`, `PUT /api/admin/roles/{roleCode}/permissions`, `GET/PUT /api/admin/task-execution-policy` | 역할×권한 매트릭스, 기능 리소스 매핑, 동시 작업 제출 정책 |
 | `GET/POST /api/admin/workflows`, `POST .../activate`, `POST .../deactivate` | 워크플로 정의 등록·활성화 |
 | `GET /api/admin/audit-logs` | 감사 로그 조회(권한 변경·사용자 변경·카탈로그 수정·Sandbox 제어) |
 | `GET/POST /api/admin/sandbox-pod`, `POST .../start`, `POST .../stop` | Sandbox Pod 상태·시작·정지 |
@@ -221,11 +221,14 @@ PROMPT_LLM_RUNPOD_INPUT_MODE=prompt
 PROMPT_LLM_TEMPERATURE=0.2
 PROMPT_LLM_MAX_TOKENS=900
 PROMPT_LLM_TIMEOUT=90
+PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30
 ```
 
 `PROMPT_LLM_ENDPOINT_URL`에 전체 URL을 직접 넣는 것도 가능합니다. 예: `https://api.runpod.ai/v2/{PROMPT_ENDPOINT_ID}` 또는 `https://api.runpod.ai/v2/{PROMPT_ENDPOINT_ID}/runsync`.
 
 RunPod vLLM quick start가 `{"input":{"prompt":"..."}}` 형태를 안내하므로 `PROMPT_LLM_RUNPOD_INPUT_MODE=prompt`가 기본값입니다. handler가 `messages`를 받도록 구성된 경우에만 `PROMPT_LLM_RUNPOD_INPUT_MODE=messages`로 바꿉니다.
+
+RunPod Serverless Qwen 워커의 콜드 스타트 구간에서 502/503/504가 반환되면 앱은 `PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS` 순서로 같은 요청을 재시도합니다. 기본값은 총 95초를 기다리므로, 일시적인 워커 기동 실패를 사용자가 수동으로 다시 요청할 필요가 없습니다. 400/401/403처럼 설정을 수정해야 하는 오류는 재시도하지 않습니다.
 
 콜드스타트로 인한 502/503/504는 `prompt_llm_client.py`가 최대 4회(백오프 3·5·8초)까지 자동 재시도합니다.
 

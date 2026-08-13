@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import os
 import base64
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -106,6 +107,39 @@ def main():
         assert response.json()["user"]["name"] == "장균은"
         assert response.json()["accessToken"]
 
+        response = client.get("/manual", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        manual_html = response.text
+        manual_links = re.findall(r'<a href="(#[^"]+)">', manual_html)
+        assert manual_links
+        for href in manual_links:
+            assert f'id="{href[1:]}"' in manual_html, href
+        manual_images = re.findall(r'<img src="/docs/manual-assets/([^"]+)"', manual_html)
+        assert manual_images
+        for image_name in manual_images:
+            assert (PROJECT_ROOT / "docs" / "manual-assets" / image_name).is_file(), image_name
+        expected_manual_images = {
+            "v4-00-login.jpg",
+            "v4-01-workspace.jpg",
+            "v4-02-segment-config-empty.png",
+            "v4-02-segment-config-complete.png",
+            "v4-03-task-history.jpg",
+            "v4-04-prompt-reuse.jpg",
+            "v4-05-assets.jpg",
+            "v4-06-admin-roles.jpg",
+            "v4-07-admin-users.jpg",
+            "v4-08-admin-user-detail.jpg",
+            "v4-10-admin-catalog-tree-expanded.jpg",
+            "v4-11-admin-negative-defaults.jpg",
+            "v4-12-admin-workflows.jpg",
+            "v4-13-admin-sandbox-pod.jpg",
+            "v4-14-admin-system-status.jpg",
+            "v4-15-admin-metadata.jpg",
+            "v4-16-admin-audit-log.jpg",
+            "v4-17-admin-resource-map.jpg",
+        }
+        assert expected_manual_images.issubset(set(manual_images))
+
         data_url = "data:image/png;base64," + base64.b64encode(b"fake-image").decode("ascii")
         response = client.post("/api/uploads", headers=admin_headers, json={"fileName": "example.png", "dataUrl": data_url})
         assert response.status_code == 201, response.text
@@ -169,7 +203,8 @@ def main():
         assert created_job["generationSeed"] > 0
         response = client.get("/api/history?page=1&pageSize=10", headers=admin_headers)
         assert response.status_code == 200, response.text
-        assert all(item.get("status") in {"Completed", "Failed"} for item in response.json()["items"])
+        initial_history = response.json()["items"]
+        assert any(item.get("taskId") == task_id and item.get("status") in {"queued", "QUEUED"} for item in initial_history), initial_history
         last_status = {}
         for _ in range(80):
             response = client.get(f"/api/jobs/{task_id}", headers=admin_headers)
@@ -212,6 +247,28 @@ def main():
         response = client.get("/api/prompts/reusable?reuseEligible=true", headers=admin_headers)
         assert response.status_code == 200, response.text
 
+        response = client.put(
+            "/api/admin/task-execution-policy",
+            headers=admin_headers,
+            json={"maxActiveTasksPerUser": 1, "maxActiveTasksTotal": 1},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["maxActiveTasksPerUser"] == 1
+        response = client.post("/api/jobs", headers=admin_headers, json=job_payload)
+        assert response.status_code == 201, response.text
+        limited_task_id = response.json()["taskId"]
+        response = client.post("/api/jobs", headers=admin_headers, json=job_payload)
+        assert response.status_code == 409, response.text
+        assert "사용자 동시 활성 Task 한도(1개)에 도달했습니다" in response.json()["detail"]
+        response = client.post(f"/api/jobs/{limited_task_id}/cancel", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        response = client.put(
+            "/api/admin/task-execution-policy",
+            headers=admin_headers,
+            json={"maxActiveTasksPerUser": 3, "maxActiveTasksTotal": 10},
+        )
+        assert response.status_code == 200, response.text
+
         from backend.app.db.models import TaskPrompt
         from backend.app.services.task_tracking_service import reusable_task_prompts
 
@@ -251,12 +308,12 @@ def main():
         response = client.get("/manual", headers=admin_headers)
         assert response.status_code == 200, response.text
         assert "dobedub studio" in response.text
-        assert "v3-01-login.png" in response.text
-        assert "v3-14-admin-prompt-catalog.png" in response.text
+        assert "v4-00-login.jpg" in response.text
+        assert "v4-10-admin-catalog-tree-expanded.jpg" in response.text
         assert 'href="#1-서비스-개요"' in response.text
         assert "manualSearch" not in response.text
         assert "<script>" not in response.text
-        assert "Prompt Reuse" in response.text
+        assert "프롬프트 재사용" in response.text
         assert "Admin Console" in response.text
 
     print("OK fastapi smoke check passed")

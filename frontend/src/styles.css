@@ -4442,6 +4442,17 @@ button {
   border-color: var(--v3-accent);
 }
 
+.v3-keyframe-slot.is-dragging {
+  background: var(--v3-accent-bg);
+  border-color: var(--v3-accent);
+  box-shadow: 0 0 0 3px rgba(37, 141, 104, 0.16);
+}
+
+.v3-keyframe-slot.is-dragging .v3-keyframe-slot-preview {
+  background: var(--v3-accent-bg);
+  color: var(--v3-accent-text);
+}
+
 .v3-keyframe-slot-preview {
   align-items: center;
   background: repeating-linear-gradient(135deg, #fbfcfb 0 7px, #f2f4f3 7px 14px);
@@ -5275,6 +5286,98 @@ button {
   border-bottom: none;
 }
 
+.v3-preflight-review-head,
+.v3-preflight-review-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 64px minmax(180px, 1fr) minmax(180px, 1fr) 140px 96px;
+  min-width: 920px;
+}
+
+.v3-preflight-review-head {
+  background: var(--v3-bg-table);
+  border-bottom: 1px solid var(--v3-border-inner);
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: var(--v3-font-size-label);
+  font-weight: 500;
+  letter-spacing: var(--v3-label-letter-spacing);
+  padding: 11px 15px;
+}
+
+.v3-preflight-review-row {
+  align-items: center;
+  border-bottom: 1px solid var(--v3-border-inner);
+  padding: 12px 15px;
+}
+
+.v3-preflight-review-row:last-child {
+  border-bottom: none;
+}
+
+.v3-preflight-output-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  padding: 0 16px 14px;
+}
+
+.v3-preflight-output-card {
+  background: var(--v3-bg-table);
+  border: 1px solid var(--v3-border-inner);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.v3-preflight-submit-note {
+  margin: 0 16px 16px;
+}
+
+.v3-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.v3-task-policy-limit-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.v3-task-policy-limit-card {
+  background: var(--v3-bg-table);
+  border: 1px solid var(--v3-border-inner);
+  border-radius: 8px;
+  color: var(--v3-text-body);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 650;
+  gap: 7px;
+  padding: 12px;
+}
+
+.v3-task-policy-limit-card .v3-search-input {
+  margin: 0;
+  width: 100%;
+}
+
+.v3-task-policy-limit-card span {
+  color: var(--v3-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .v3-task-policy-limit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* 2026-08-11: Asset 관리(5a+5c 통합) - 자산 하나가 여러 컬렉션에 동시에 속할 수
    있어(다대다 유지 결정) "Collection" 열은 단일 뱃지가 아니라 칩 목록 +
    추가/제거로 구현한다. */
@@ -5314,6 +5417,78 @@ button {
   margin-top: 4px;
   padding: 2px 4px;
   width: 100%;
+}
+
+/* Assets 화면의 컬렉션 생성은 목록 헤더의 보조 입력으로 두면 발견하기 어렵다.
+   목록 직전의 독립 영역으로 분리해 현재 관리 대상과 생성 액션을 함께 보여준다. */
+.v3-collection-management {
+  background: var(--v3-accent-bg);
+  border: 1px solid var(--v3-accent);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 16px 18px;
+}
+
+.v3-collection-management-heading {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.v3-collection-management h2 {
+  color: var(--v3-text-heading);
+  font-size: 17px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  margin: 3px 0 0;
+}
+
+.v3-collection-management-count {
+  background: var(--v3-bg-panel);
+  border: 1px solid var(--v3-border);
+  border-radius: 999px;
+  color: var(--v3-accent-text);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.v3-collection-management-form {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 160px;
+}
+
+.v3-collection-management-form label {
+  color: var(--v3-text-label);
+  font-size: 12px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+}
+
+.v3-collection-management-form .v3-search-input {
+  margin: 0;
+  width: 100%;
+}
+
+.v3-collection-management-form .v3-primary-button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+@media (max-width: 680px) {
+  .v3-collection-management-form {
+    grid-template-columns: 1fr;
+  }
+
+  .v3-collection-management-form .v3-primary-button {
+    width: 100%;
+  }
 }
 
 /* 2026-08-11: 출력 자산 행에 종속된 입력 이미지들(여러 장일 수 있음) - 줄바꿈
@@ -5831,6 +6006,38 @@ button {
   font-weight: 700;
   letter-spacing: -0.015em;
   margin: 0;
+}
+
+.v3-confirm-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.v3-confirm-dialog-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.v3-confirm-dialog-icon {
+  align-items: center;
+  background: var(--v3-accent-bg);
+  border: 1px solid var(--v3-accent);
+  border-radius: 999px;
+  color: var(--v3-accent-text);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--v3-font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.v3-confirm-dialog-icon.is-danger {
+  background: var(--v3-danger-bg);
+  border-color: var(--v3-danger);
+  color: var(--v3-danger);
 }
 
 /* E-03 · 3f/3c Run 상세의 프롬프트 평가 카드(V3PromptReviewGroup). B-02 두 평가

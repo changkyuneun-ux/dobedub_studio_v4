@@ -215,6 +215,19 @@ class WorkflowTask(Base):
     prompts: Mapped[list["TaskPrompt"]] = relationship(back_populates="task", cascade="all, delete-orphan")
 
 
+class TaskExecutionPolicy(Base):
+    """Singleton submission limits shared by every Studio user."""
+
+    __tablename__ = "task_execution_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    max_active_tasks_per_user: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    max_active_tasks_total: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    updated_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
 class TaskInputAsset(Base):
     __tablename__ = "task_input_assets"
 

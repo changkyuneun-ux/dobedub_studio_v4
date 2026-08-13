@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 
 from backend.app.core.config import get_settings
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
@@ -12,6 +13,7 @@ from backend.app.services.asset_storage import encode_file_base64, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
 from backend.app.services.task_tracking_service import (
+    active_task_ids,
     assets_total,
     list_assets,
     record_job_status,
@@ -23,9 +25,12 @@ from backend.app.services.task_tracking_service import (
     update_task_prompt_quality,
     update_task_prompt_review,
 )
+from backend.app.services.task_policy_service import assert_task_submission_allowed
+from backend.app.db.session import SessionLocal
 
 
 JOBS: dict[str, dict] = {}
+JOB_LOCK = RLock()
 
 
 def ensure_storage_dirs() -> None:
@@ -284,20 +289,70 @@ def job_runtime() -> job_service.JobRuntime:
     )
 
 
-def create_job(payload: dict) -> dict:
-    return job_service.create_job(job_runtime(), payload)
+def create_job(payload: dict, *, user: dict[str, object]) -> dict:
+    """Submit one task after enforcing the persisted active-task policy.
+
+    The browser payload is intentionally not trusted for task ownership.  The
+    authenticated request principal is copied into the immutable task snapshot
+    immediately before the RunPod request is made.
+    """
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise ValueError("인증된 사용자 정보를 찾을 수 없습니다.")
+    with JOB_LOCK:
+        session = SessionLocal()
+        try:
+            assert_task_submission_allowed(session, user_id)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+        safe_payload = dict(payload)
+        safe_payload["user"] = {
+            "id": user_id,
+            "name": str(user.get("name") or user_id),
+            "role": str(user.get("role") or ""),
+            "permissions": list(user.get("permissions") or []),
+        }
+        return job_service.create_job(job_runtime(), safe_payload)
 
 
 def job_status(task_id: str) -> dict:
-    if task_id not in JOBS:
-        restored = restore_job_from_task(task_id)
-        if restored:
-            JOBS[task_id] = restored
-    return job_service.job_status(job_runtime(), task_id)
+    with JOB_LOCK:
+        if task_id not in JOBS:
+            restored = restore_job_from_task(task_id)
+            if restored:
+                JOBS[task_id] = restored
+        return job_service.job_status(job_runtime(), task_id)
 
 
 def cancel_job(task_id: str) -> dict:
-    return job_service.cancel_job(job_runtime(), task_id)
+    with JOB_LOCK:
+        if task_id not in JOBS:
+            restored = restore_job_from_task(task_id)
+            if restored:
+                JOBS[task_id] = restored
+        return job_service.cancel_job(job_runtime(), task_id)
+
+
+def monitor_active_jobs() -> dict:
+    """Poll persisted active tasks so status survives browser/session loss.
+
+    A failed RunPod status lookup is isolated to the affected task.  The next
+    monitor cycle retries it rather than changing a task to failed merely
+    because the status API had a transient error.
+    """
+    task_ids = active_task_ids()
+    failures: list[str] = []
+    for task_id in task_ids:
+        try:
+            job_status(task_id)
+        except Exception:
+            failures.append(task_id)
+    return {"checked": len(task_ids), "failures": failures}
 
 
 def job_prompts(task_id: str) -> list[dict]:

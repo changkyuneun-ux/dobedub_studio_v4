@@ -20,7 +20,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "prompt_catalog.term.create": "용어 생성",
   "prompt_catalog.term.update": "용어 수정",
   "sandbox_pod.start": "Pod 시작",
-  "sandbox_pod.stop": "Pod 중지"
+  "sandbox_pod.stop": "Pod 중지",
+  "task.execution_policy.update": "작업 정책 변경"
 };
 
 function auditActionLabel(action: string): string {
@@ -106,30 +107,34 @@ export function AuditLogTable({
         <span className="v3-card-header-meta">{total}</span>
       </div>
       {notice ? <p className="v3-inline-notice is-warning">{notice}</p> : null}
-      <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns }}>
-        <span>시각</span><span>행위자</span><span>작업</span><span>대상</span><span>상세</span>
-      </div>
-      {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
-      {!loading && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 감사 로그가 없습니다.</p> : null}
-      {!loading && items.map((item) => (
-        <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns }} key={item.id}>
-          <span className="v3-review-seg-name">{formatAuditLogTimestamp(item.createdAt)}</span>
-          <span>{item.actorId || "-"}</span>
-          <span title={item.action}>{auditActionLabel(item.action)}</span>
-          <span>{[item.targetType, item.targetId].filter(Boolean).join(" · ") || "-"}</span>
-          <span>
-            {item.beforeJson || item.afterJson ? (
-              <details>
-                <summary style={{ cursor: "pointer" }}>보기</summary>
-                {item.beforeJson ? <pre className="v3-payload-json">{JSON.stringify(item.beforeJson, null, 2)}</pre> : null}
-                {item.afterJson ? <pre className="v3-payload-json">{JSON.stringify(item.afterJson, null, 2)}</pre> : null}
-              </details>
-            ) : (
-              <span className="v3-muted-text">-</span>
-            )}
-          </span>
+      <div className="v3-table-scroll" aria-label={`${title} 표`}>
+        <div style={{ minWidth: 820 }}>
+          <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns }}>
+            <span>시각</span><span>행위자</span><span>작업</span><span>대상</span><span>상세</span>
+          </div>
+          {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
+          {!loading && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 감사 로그가 없습니다.</p> : null}
+          {!loading && items.map((item) => (
+            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns }} key={item.id}>
+              <span className="v3-review-seg-name">{formatAuditLogTimestamp(item.createdAt)}</span>
+              <span>{item.actorId || "-"}</span>
+              <span title={item.action}>{auditActionLabel(item.action)}</span>
+              <span>{[item.targetType, item.targetId].filter(Boolean).join(" · ") || "-"}</span>
+              <span>
+                {item.beforeJson || item.afterJson ? (
+                  <details>
+                    <summary style={{ cursor: "pointer" }}>보기</summary>
+                    {item.beforeJson ? <pre className="v3-payload-json">{JSON.stringify(item.beforeJson, null, 2)}</pre> : null}
+                    {item.afterJson ? <pre className="v3-payload-json">{JSON.stringify(item.afterJson, null, 2)}</pre> : null}
+                  </details>
+                ) : (
+                  <span className="v3-muted-text">-</span>
+                )}
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
       {total > pageSize ? (
         <div className="v3-pagination">
           <span className="v3-pagination-meta">{pageStart}–{pageEnd} / {total}</span>

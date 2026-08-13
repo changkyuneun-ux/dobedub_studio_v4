@@ -557,6 +557,30 @@ def main() -> None:
         runpod_request_body = json.loads(runpod_request.data.decode("utf-8"))
         assert "CUSTOM QWEN SYSTEM PROMPT" in json.dumps(runpod_request_body, ensure_ascii=False)
 
+        import io
+        from urllib.error import HTTPError
+
+        os.environ["PROMPT_LLM_PROVIDER"] = "runpod_vllm"
+        os.environ["PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS"] = "1"
+        cold_start_error = HTTPError("https://example.invalid/runsync", 502, "Bad Gateway", {}, io.BytesIO(b"worker starting"))
+        with patch(
+            "backend.app.services.prompt_llm_client.urllib.request.urlopen",
+            side_effect=[cold_start_error, FakeRunpodResponse()],
+        ) as retry_urlopen, patch("backend.app.services.prompt_llm_client.time.sleep") as retry_sleep:
+            cold_start_response = client.post("/api/prompts/generate", json={
+                "workflowId": "1-images.json",
+                "segmentIndex": 1,
+                "language": "ko",
+                "termIds": term_ids,
+                "scene": scene["scene"],
+                "constraints": scene["constraints"],
+            })
+        os.environ.pop("PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS", None)
+        os.environ["PROMPT_LLM_PROVIDER"] = "mock"
+        assert cold_start_response.status_code == 200, cold_start_response.text
+        assert retry_urlopen.call_count == 2
+        retry_sleep.assert_called_once_with(1)
+
         class FakeEchoedRunpodResponse:
             def __enter__(self):
                 return self

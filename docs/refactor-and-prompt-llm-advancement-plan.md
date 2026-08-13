@@ -687,6 +687,8 @@ Step 5B, 다음 보완 단계:
 | web task 시작 시 migration 자동 실행 | 운영 runner는 serving 전용으로 두고, migration은 `scripts/upgrade_database.py` one-off task로 분리 |
 | ECS 환경변수 누락 시 local fallback으로 실행 | `docs/aws-ecs-deployment.md`의 필수 env/secret checklist를 task definition에 반영하고 배포 후 `/api/health`, Check Status로 확인 |
 | S3 전환 시 URL/권한 문제 | storage adapter 인터페이스를 먼저 만들고 EFS/S3 구현 분리 |
+| 브라우저 종료 시 진행 중 Task가 멈춰 보임 | `workflow_tasks` 활성 행을 서버 lifecycle monitor가 주기적으로 폴링하고, Task History가 활성 상태를 포함해 조회 |
+| 여러 사용자가 동시에 제출해 RunPod 큐/비용이 급증 | DB singleton 정책으로 사용자별/전체 활성 Task 한도를 검사하고 관리자 권한으로 조정 |
 
 ## 8. 권장 우선순위
 
@@ -707,6 +709,7 @@ Step 5B, 다음 보완 단계:
 13. ECS 운영 배포 preflight
 14. ECR push 및 ECS service update
 15. S3 storage 운영 전환 고도화
+16. 다중 ECS replica 전환 전 제출 한도의 DB 원자성/분산 잠금 검토
 
 후순위로 이동하거나 제외한 항목의 이유:
 

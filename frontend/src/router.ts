@@ -14,8 +14,8 @@
 //   create.prompt     — 2b+2e 병합 · S2 세그먼트 설정 · 프롬프트 + 노드 컨피그
 //                        (2026-08-11: 두 화면을 하나로 병합, 좌우 분할 레이아웃)
 //   create.confirm    — 2f · S4 실행 전 전체 구성 확인 & Run (신규 구현, E-02)
-//   create.progress   — 2c · S4 진행 상태 · 취소 요청 (신규 구현, E-02)
-//   create.result     — 2d · S5 결과 · Final 병합본과 구간 검수본 (신규 구현, E-02)
+//   create.progress/create.result — 멀티 Task 전환 후 retired. 진행/결과/취소/재작업은
+//                                   review.history의 목록과 우측 상세 패널이 담당한다.
 //   create.workspace  — E-02 완료 후 제거 예정이던 임시 다리였다. 2a~2d가 모두
 //                       구현되며 더 이상 랜딩 지점으로 쓰이지 않게 됐고, 다른
 //                       화면에서 참조하던 구버전 인라인 워크스페이스 JSX도
@@ -35,6 +35,8 @@
 //                       Admin 사이드바 그룹 소속.
 //   admin.sandbox      — 5b Sandbox Pod (신규 구현, E-04). "Sandbox Pod" Admin
 //                       사이드바 그룹 소속.
+//   admin.taskPolicy   — Serverless 동시 Task 제출 정책. Sandbox Pod 바로 아래의
+//                       독립 Admin 메뉴이며 Pod 제어 상태와는 분리된다.
 //   admin.roles        — 3b 역할×권한 매트릭스 (신규 구현, E-04). "역할 & 권한"
 //                       Admin 사이드바 그룹 소속.
 //   admin.resourceMap  — 7b 기능 리소스 매핑 (신규 구현, E-04). 3b와 같은
@@ -79,13 +81,12 @@ export type StudioRoute =
   | "create.load"
   | "create.prompt"
   | "create.confirm"
-  | "create.progress"
-  | "create.result"
   | "review.history"
   | "review.reuse"
   | "review.assets"
   | "admin.systemPrompt"
   | "admin.sandbox"
+  | "admin.taskPolicy"
   | "admin.roles"
   | "admin.resourceMap"
   | "admin.users"
@@ -120,13 +121,12 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "create.load": "/studio/create/load",
   "create.prompt": "/studio/create/prompt",
   "create.confirm": "/studio/create/confirm",
-  "create.progress": "/studio/create/progress",
-  "create.result": "/studio/create/result",
   "review.history": "/studio/review/history",
   "review.reuse": "/studio/review/reuse",
   "review.assets": "/studio/review/assets",
   "admin.systemPrompt": "/studio/admin/system-prompt",
   "admin.sandbox": "/studio/admin/sandbox",
+  "admin.taskPolicy": "/studio/admin/task-policy",
   "admin.roles": "/studio/admin/roles",
   "admin.resourceMap": "/studio/admin/resource-map",
   "admin.users": "/studio/admin/users",
@@ -145,9 +145,22 @@ const PATH_TO_ROUTE: Record<string, StudioRoute> = Object.fromEntries(
   Object.entries(ROUTE_PATH).map(([route, path]) => [path, route as StudioRoute])
 ) as Record<string, StudioRoute>;
 
+const RETIRED_CREATE_ROUTE_REDIRECTS: Record<string, StudioRoute> = {
+  "/studio/create/progress": "review.history",
+  "/studio/create/result": "review.history"
+};
+
+export function isRetiredCreateRoutePath(pathname: string): boolean {
+  return Boolean(RETIRED_CREATE_ROUTE_REDIRECTS[pathname]);
+}
+
 export function routeFromLocation(pathname: string, hasUser: boolean): StudioRoute {
   if (!hasUser) {
     return "access.login";
+  }
+  const retiredRoute = RETIRED_CREATE_ROUTE_REDIRECTS[pathname];
+  if (retiredRoute) {
+    return retiredRoute;
   }
   const exact = PATH_TO_ROUTE[pathname];
   if (exact) {
