@@ -58,6 +58,8 @@ import {
   createKeyframe,
   createKeyframes,
   createKeyframesFromHistory,
+  formatImageDimensions,
+  formatUploadSize,
   releaseKeyframePreviews,
   fileToDataUrl,
   workflowIdFromHistoryItem,
@@ -1439,6 +1441,7 @@ export function StudioShell({
             upload: null,
             previewUrl,
             metaText: `${Math.round(file.size / 1024)}KB · pending upload`,
+            dimensionText: "",
             uploading: true,
             error: ""
           };
@@ -1457,7 +1460,8 @@ export function StudioShell({
                   ...keyframe,
                   upload,
                   uploading: false,
-                  metaText: `${upload.fileName} · ${(upload.sizeBytes / 1024 / 1024).toFixed(1)}MB · uploaded`,
+                  metaText: `${upload.fileName} · ${formatUploadSize(upload.sizeBytes)}`,
+                  dimensionText: formatImageDimensions(upload.imageHeight, upload.imageWidth),
                   error: ""
                 }
               : keyframe

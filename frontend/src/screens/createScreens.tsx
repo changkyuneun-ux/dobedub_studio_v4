@@ -231,7 +231,8 @@ export function Create2aScreen({
               </div>
               <div className="v3-keyframe-slot-meta">
                 <span>SLOT {String(keyframe.index).padStart(2, "0")}</span>
-                <span>{keyframe.uploading ? "uploading..." : keyframe.error || keyframe.metaText || ""}</span>
+                <span className="v3-keyframe-slot-file">{keyframe.uploading ? "uploading..." : keyframe.error || keyframe.metaText || ""}</span>
+                {keyframe.dimensionText ? <strong className="v3-keyframe-slot-dimensions">{keyframe.dimensionText}</strong> : null}
               </div>
               {keyframe.previewUrl ? (
                 <button

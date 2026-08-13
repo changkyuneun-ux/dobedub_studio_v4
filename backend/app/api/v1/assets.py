@@ -52,6 +52,8 @@ def create_upload(payload: dict, _: CurrentUser = Depends(require_permission("jo
         "fileName": asset["fileName"],
         "mimeType": asset["mimeType"],
         "sizeBytes": asset["sizeBytes"],
+        "imageWidth": asset.get("imageWidth"),
+        "imageHeight": asset.get("imageHeight"),
         "downloadUrl": f"/api/files/{asset['assetId']}",
     }
 

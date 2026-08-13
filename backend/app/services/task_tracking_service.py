@@ -925,6 +925,8 @@ def _asset_to_json(asset: Asset) -> dict:
         "fileName": asset.file_name,
         "mimeType": asset.mime_type,
         "sizeBytes": asset.size_bytes,
+        "imageWidth": asset.image_width,
+        "imageHeight": asset.image_height,
         "path": asset.storage_key,
         "storageBackend": asset.storage_backend,
         "publicUrl": asset.public_url,

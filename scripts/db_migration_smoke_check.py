@@ -78,6 +78,8 @@ def main():
         tables = set(inspector.get_table_names())
         missing = EXPECTED_TABLES - tables
         assert not missing, f"Missing tables: {sorted(missing)}"
+        asset_columns = {column["name"] for column in inspector.get_columns("assets")}
+        assert {"image_width", "image_height"}.issubset(asset_columns), asset_columns
         with engine.begin() as connection:
             login_audit_count = connection.execute(
                 text("select count(*) from audit_logs where action = 'login'")

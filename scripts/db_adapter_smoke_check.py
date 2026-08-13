@@ -51,12 +51,18 @@ def main() -> None:
         outputs_dir = root / "outputs"
         repo = DbStudioRepository(session, uploads_dir=uploads_dir, outputs_dir=outputs_dir)
 
+        png_1x1 = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+            "mR4L9wAAAABJRU5ErkJggg=="
+        )
         upload = repo.create_upload({
             "fileName": "sample.png",
             "mimeType": "image/png",
-            "dataUrl": data_url(b"sample-image"),
+            "dataUrl": data_url(png_1x1),
         })
         assert upload["assetId"].startswith("asset_")
+        assert upload["imageWidth"] == 1
+        assert upload["imageHeight"] == 1
         _, upload_path = repo.get_asset(upload["assetId"])
         assert upload_path.exists()
 
@@ -93,7 +99,14 @@ def main() -> None:
                 "segmentIndex": 1,
             }],
             "inputAssets": [upload["assetId"]],
-            "inputImages": [{"index": 1, "assetId": upload["assetId"], "fileName": upload["fileName"]}],
+            "inputImages": [{
+                "index": 1,
+                "assetId": upload["assetId"],
+                "fileName": upload["fileName"],
+                "sizeBytes": upload["sizeBytes"],
+                "imageWidth": upload["imageWidth"],
+                "imageHeight": upload["imageHeight"],
+            }],
             "keyframes": [{"index": 1, "uploadId": upload["assetId"], "fileName": upload["fileName"]}],
             "segments": [{
                 "index": 1,
@@ -106,6 +119,8 @@ def main() -> None:
         history = repo.append_history(history_item)
         assert history[0]["taskId"] == history_item["taskId"]
         assert history[0]["inputImages"][0]["assetId"] == upload["assetId"]
+        assert history[0]["inputImages"][0]["imageWidth"] == 1
+        assert history[0]["inputImages"][0]["imageHeight"] == 1
         assert history[0]["outputAssets"][0]["assetId"] == output["assetId"]
         assert history[0]["wanNodeConfig"]["segments"][0]["nodes"]["sampler"]["steps"] == 4
         assert history[0]["generationSeed"] == 1234
@@ -124,9 +139,12 @@ def main() -> None:
 
         deleted = repo.delete_history_item(history_item["taskId"])
         assert deleted["deleted"] is True
+        assert deleted["softDeleted"] is True
         assert not repo.load_history()
-        assert not upload_path.exists()
-        assert not output_path.exists()
+        # Task History uses soft delete so its input/output assets remain
+        # available from Asset management after a task record is hidden.
+        assert upload_path.exists()
+        assert output_path.exists()
         session.close()
         engine.dispose()
 

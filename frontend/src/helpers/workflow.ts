@@ -34,9 +34,28 @@ export type KeyframeState = {
   upload: UploadResponse | null;
   previewUrl: string;
   metaText: string;
+  dimensionText: string;
   uploading: boolean;
   error: string;
 };
+
+export function formatUploadSize(sizeBytes?: number | null): string {
+  const size = Number(sizeBytes || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "";
+  }
+  return size >= 1024 * 1024
+    ? `${(size / 1024 / 1024).toFixed(1)}MB`
+    : `${Math.max(1, Math.round(size / 1024))}KB`;
+}
+
+export function formatImageDimensions(imageHeight?: number | null, imageWidth?: number | null): string {
+  const height = Number(imageHeight || 0);
+  const width = Number(imageWidth || 0);
+  return Number.isInteger(height) && height > 0 && Number.isInteger(width) && width > 0
+    ? `H ${height} × W ${width}`
+    : "";
+}
 
 export function createSegmentsFromSchema(schema: WorkflowSchema): SegmentState[] {
   return (schema.segments || []).map((segment, index) => ({
@@ -109,7 +128,8 @@ export function createKeyframe(index: number): KeyframeState {
     file: null,
     upload: null,
     previewUrl: "",
-    metaText: "Image: 1024x1024",
+    metaText: "이미지 선택 대기",
+    dimensionText: "",
     uploading: false,
     error: ""
   };
@@ -127,6 +147,7 @@ export function createKeyframesFromHistory(schema: WorkflowSchema, item: History
       return keyframe;
     }
     const fileName = image.fileName || image.filename || `history-image-${keyframe.index}.png`;
+    const sizeText = formatUploadSize(image.sizeBytes);
     return {
       ...keyframe,
       file: null,
@@ -134,11 +155,14 @@ export function createKeyframesFromHistory(schema: WorkflowSchema, item: History
         assetId: image.assetId,
         fileName,
         mimeType: "image/*",
-        sizeBytes: 0,
+        sizeBytes: Number(image.sizeBytes || 0),
+        imageWidth: image.imageWidth,
+        imageHeight: image.imageHeight,
         downloadUrl: `/api/files/${image.assetId}`
       },
       previewUrl: `/api/files/${image.assetId}`,
-      metaText: `${image.assetId} (${fileName})`,
+      metaText: sizeText ? `${fileName} · ${sizeText}` : `${image.assetId} (${fileName})`,
+      dimensionText: formatImageDimensions(image.imageHeight, image.imageWidth),
       uploading: false,
       error: ""
     };
@@ -209,7 +233,10 @@ export function historyInputImages(item: HistoryItem): InputImage[] {
     return item.inputImages.map((image, index) => ({
       index: Number(image.index || index + 1),
       assetId: image.assetId || "",
-      fileName: image.fileName || image.filename || "-"
+      fileName: image.fileName || image.filename || "-",
+      sizeBytes: image.sizeBytes,
+      imageWidth: image.imageWidth,
+      imageHeight: image.imageHeight
     }));
   }
   const inputAssets = item.inputAssets || [];

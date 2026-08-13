@@ -11,6 +11,7 @@ from pathlib import Path
 from backend.app.services.asset_storage import (
     asset_record,
     decode_data_url,
+    image_dimensions,
     media_kind,
     path_within_storage,
     safe_filename,
@@ -112,13 +113,27 @@ def hydrate_input_images(item: dict, assets: dict | None = None, assets_path: Pa
         if asset_id or file_name != "-":
             key = (asset_id, file_name)
             if key not in seen:
-                result.append({"index": keyframe.get("index") or index, "assetId": asset_id, "fileName": file_name})
+                result.append({
+                    "index": keyframe.get("index") or index,
+                    "assetId": asset_id,
+                    "fileName": file_name,
+                    "sizeBytes": keyframe.get("sizeBytes") or stored.get("sizeBytes"),
+                    "imageWidth": keyframe.get("imageWidth") or stored.get("imageWidth"),
+                    "imageHeight": keyframe.get("imageHeight") or stored.get("imageHeight"),
+                })
                 seen.add(key)
     for index, asset_id in enumerate(input_assets, start=1):
         if any(item.get("assetId") == asset_id for item in result):
             continue
         stored = assets.get(asset_id, {})
-        result.append({"index": index, "assetId": asset_id, "fileName": stored.get("fileName") or "-"})
+        result.append({
+            "index": index,
+            "assetId": asset_id,
+            "fileName": stored.get("fileName") or "-",
+            "sizeBytes": stored.get("sizeBytes"),
+            "imageWidth": stored.get("imageWidth"),
+            "imageHeight": stored.get("imageHeight"),
+        })
     return result
 
 
@@ -281,6 +296,10 @@ def create_upload(assets_path: Path, uploads_dir: Path, payload: dict) -> dict:
         "path": str(path),
         "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+    image_width, image_height = image_dimensions(raw, item["mimeType"])
+    if image_width and image_height:
+        item["imageWidth"] = image_width
+        item["imageHeight"] = image_height
     assets = load_assets(assets_path)
     assets[asset_id] = item
     save_assets(assets_path, assets)

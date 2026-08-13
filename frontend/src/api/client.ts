@@ -257,6 +257,8 @@ export type UploadResponse = {
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
   downloadUrl: string;
 };
 
@@ -397,6 +399,9 @@ export type InputImage = {
   assetId?: string;
   fileName?: string;
   filename?: string;
+  sizeBytes?: number | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
 };
 
 export type HistorySegment = {
@@ -494,6 +499,8 @@ export type AssetItem = {
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
   path?: string;
   storageBackend?: string;
   publicUrl?: string | null;

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import Asset, ConfigSnapshot, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
-from backend.app.services.asset_storage import asset_record, decode_data_url, media_kind, safe_filename
+from backend.app.services.asset_storage import asset_record, decode_data_url, image_dimensions, media_kind, safe_filename
 from backend.app.services.json_repository import (
     delete_asset_file,
     history_prompt_items,
@@ -174,6 +174,10 @@ class DbStudioRepository:
             "path": str(path),
             "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        image_width, image_height = image_dimensions(raw, item["mimeType"])
+        if image_width and image_height:
+            item["imageWidth"] = image_width
+            item["imageHeight"] = image_height
         self._upsert_asset_from_json(item)
         self.session.commit()
         return item
@@ -238,13 +242,19 @@ class DbStudioRepository:
         asset.file_name = file_name
         asset.mime_type = mime_type
         asset.size_bytes = int(item.get("sizeBytes") or 0)
+        # Some legacy asset payloads do not carry image dimensions. Preserve
+        # dimensions already captured at upload rather than overwriting them.
+        if "imageWidth" in item:
+            asset.image_width = to_int_or_none(item.get("imageWidth"))
+        if "imageHeight" in item:
+            asset.image_height = to_int_or_none(item.get("imageHeight"))
         asset.storage_backend = item.get("storageBackend") or "local"
         asset.storage_key = item.get("path") or item.get("storageKey") or ""
         asset.public_url = item.get("publicUrl")
         asset.metadata_json = {
             key: value
             for key, value in item.items()
-            if key not in {"assetId", "id", "type", "assetType", "fileName", "filename", "mimeType", "sizeBytes", "path", "storageKey", "storageBackend", "publicUrl", "createdAt"}
+            if key not in {"assetId", "id", "type", "assetType", "fileName", "filename", "mimeType", "sizeBytes", "imageWidth", "imageHeight", "path", "storageKey", "storageBackend", "publicUrl", "createdAt"}
         }
         asset.created_at = parse_datetime(item.get("createdAt")) or datetime.utcnow()
         return asset
@@ -399,6 +409,8 @@ class DbStudioRepository:
             "fileName": asset.file_name,
             "mimeType": asset.mime_type,
             "sizeBytes": asset.size_bytes,
+            "imageWidth": asset.image_width,
+            "imageHeight": asset.image_height,
             "path": asset.storage_key,
             "createdAt": format_datetime(asset.created_at),
         })

@@ -135,6 +135,8 @@ class Asset(Base):
     file_name: Mapped[str] = mapped_column(String(512), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(191), nullable=False, default="application/octet-stream")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    image_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     storage_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     public_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

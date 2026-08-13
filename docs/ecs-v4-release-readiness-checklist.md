@@ -15,13 +15,15 @@
 
 | 항목 | 판정 |
 | --- | --- |
-| Alembic head | `20260812_0019` |
+| Alembic head | `20260813_0021` |
 | v3/v4 history bridge | `20260813_0020_merge_v3_v4_histories` |
 | 감사 로그 보존 migration | `20260812_0018_purge_login_audit_logs`는 보존형 no-op으로 전환 |
 | 자산 컬렉션 migration | `20260811_0015_collections` |
 | 컬렉션 신규 테이블 | `collections`, `collection_items` |
 | Task Policy migration | `20260812_0019_task_execution_policy` |
 | 정책 신규 테이블 | `task_execution_policies` |
+| 입력 이미지 크기 migration | `20260813_0021_asset_image_dimensions` |
+| 기존 asset 확장 | `assets.image_width`, `assets.image_height`를 NULL 허용으로 추가 |
 | 기존 테이블 변경 | `prompt_terms.category_id`를 NULL 허용으로 완화. 기존 값·FK 행은 변경하지 않음 |
 | 컬렉션 신규 데이터 | 없음. migration은 컬렉션 또는 item을 자동 생성하지 않음 |
 | 정책 신규 데이터 | singleton 정책 행 1개: `id=1`, 사용자당 활성 Task `3`, 전체 활성 Task `10` |
@@ -34,6 +36,8 @@
 운영 RDS는 v3 head `20260812_0013`을 사용하므로, `20260813_0020` merge node가 두 Alembic 계보를 연결한다. legacy marker와 merge node는 no-op이다. migration one-off task에는 `PRESERVE_EXISTING_CATALOG_DATA=1`을 주입하여 기존 Prompt Catalog 행을 backfill·갱신하지 않는다. `20260810_0013`은 신규 keyword 입력을 위해 `prompt_terms.category_id`만 nullable로 완화하며, 기존 `prompt_subcategories.legacy_category_id` 컬럼과 값을 보존한다.
 
 `20260812_0019_task_execution_policy.py`는 멀티태스킹 정책을 저장하기 위해서만 필요하다. 이 migration은 새 테이블과 기본 정책 한 행을 생성한다. 기본 행도 운영 DB의 새 설정 데이터이므로, 배포 승인 시 이 생성까지 승인 대상으로 기록한다.
+
+`20260813_0021_asset_image_dimensions.py`는 기존 asset 행을 backfill하거나 수정하지 않는다. 새로 업로드되는 입력 이미지부터 실제 높이와 너비를 기록할 수 있도록 `assets`에 NULL 허용 컬럼만 추가한다.
 
 ## 3. 로컬 사전 검증
 
