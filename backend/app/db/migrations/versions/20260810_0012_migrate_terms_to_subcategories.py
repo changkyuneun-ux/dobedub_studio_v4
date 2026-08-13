@@ -30,6 +30,7 @@ uniquely responsible for; everything else is a no-op.
 from __future__ import annotations
 
 from datetime import datetime
+import os
 
 from alembic import op
 import sqlalchemy as sa
@@ -161,6 +162,13 @@ def _link_keyword(bind, subcategory_id: int, term: dict, now: datetime) -> bool:
 
 
 def upgrade() -> None:
+    if os.environ.get("PRESERVE_EXISTING_CATALOG_DATA", "0") == "1":
+        # The legacy v3 RDS already owns this catalog's rows.  During a v4
+        # bridge migration, preserve those rows exactly as they are instead of
+        # backfilling or updating keyword links.
+        print("[0012_migrate_terms_to_subcategories] skipped: preserving existing catalog data")
+        return
+
     bind = op.get_bind()
     now = datetime.utcnow()
 

@@ -94,6 +94,54 @@ def main():
             count = connection.execute(text("select count(*) from users")).scalar_one()
             assert count == 1
 
+    # The production RDS was last advanced by v3, whose Alembic history ends
+    # at 20260812_0013.  Verify that v4 can bridge from that precise revision
+    # without replaying catalog seed/backfill writes or dropping the legacy
+    # mapping column that contains live operating data.
+    with tempfile.TemporaryDirectory(prefix="dobedub-db-legacy-bridge-") as tmp:
+        database_path = Path(tmp) / "dobedub-legacy-bridge.db"
+        os.environ["DATABASE_URL"] = f"sqlite:///{database_path}"
+        os.environ["PRESERVE_EXISTING_CATALOG_DATA"] = "1"
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+
+        command.upgrade(config, "20260812_0013")
+        engine = create_engine(os.environ["DATABASE_URL"], future=True)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "insert into prompt_scopes "
+                    "(code, name_ko, name_en, sort_order, is_active, created_at, updated_at) "
+                    "values ('LEGACY_SCOPE', 'Legacy', 'Legacy', 99, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+        command.upgrade(config, "head")
+        bridged_state = migration_state(config)
+        assert bridged_state["migrationRequired"] is False, bridged_state
+
+        inspector = inspect(engine)
+        assert "legacy_category_id" in {
+            column["name"] for column in inspector.get_columns("prompt_subcategories")
+        }
+        category_id = next(
+            column for column in inspector.get_columns("prompt_terms") if column["name"] == "category_id"
+        )
+        assert category_id["nullable"] is True, category_id
+        with engine.begin() as connection:
+            legacy_scope_count = connection.execute(
+                text("select count(*) from prompt_scopes where code = 'LEGACY_SCOPE'")
+            ).scalar_one()
+            assert legacy_scope_count == 1, legacy_scope_count
+            policy = connection.execute(
+                text(
+                    "select max_active_tasks_per_user, max_active_tasks_total "
+                    "from task_execution_policies where id = 1"
+                )
+            ).one()
+            assert policy == (3, 10), policy
+
+    os.environ.pop("PRESERVE_EXISTING_CATALOG_DATA", None)
+
     print("OK db migration smoke check passed")
 
 
