@@ -77,6 +77,12 @@ DOBEDUB STUDIO는 이미지를 영상으로 변환하는 ComfyUI WAN Image-to-Vi
 
 v4는 기존 모달 중심 UI(Admin Console 모달, Prompt Builder 모달, Metadata View 모달 등)를 걷어내고, **좌측 사이드바 + 상단 헤더 + 우측 정보 패널**로 구성된 라우트 기반 화면으로 전면 재구성되었습니다. 화면마다 고유 URL이 있고(`/studio/create/load`, `/studio/admin/roles` 등), 브라우저 새로고침이나 뒤로가기도 정상 동작합니다.
 
+### 업무 흐름 상세 가이드
+
+화면 간 이동과 사용자·관리자 업무 흐름을 한 장으로 정리한 별도 안내 페이지입니다. 매뉴얼을 닫지 않고 새 탭에서 열립니다.
+
+[DOBEDUB STUDIO 업무 흐름 안내 열기](/docs/user-workflow-guide.html)
+
 ## 2. 로그인
 
 앱 접속 시 로그인 화면이 먼저 표시됩니다. 로그인은 `ID`와 `Password`만 사용하며, 사내 전용으로 외부 SSO는 없습니다.

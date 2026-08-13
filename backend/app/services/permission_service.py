@@ -71,12 +71,12 @@ RESOURCE_CATALOG = [
 ]
 
 
-def permission_governance_catalog(session: Session) -> dict:
+def permission_governance_catalog(session: Session, *, role_permissions: dict[str, list[str]] | None = None) -> dict:
     ensure_permission_resource_catalog(session)
     roles = session.scalars(select(Role).order_by(Role.sort_order, Role.level.desc(), Role.code)).all()
     permissions = session.scalars(select(Permission).order_by(Permission.sort_order, Permission.code)).all()
     resources = session.scalars(select(UiPermissionResource).order_by(UiPermissionResource.sort_order, UiPermissionResource.resource_key)).all()
-    role_permission_codes = role_permission_code_map(session)
+    role_permission_codes = role_permissions if role_permissions is not None else role_permission_code_map(session)
     return {
         "roles": [
             {
@@ -236,15 +236,57 @@ def effective_permission_codes(session: Session, user: User) -> list[str]:
 
 
 def user_permission_payload(session: Session, user: User) -> dict:
-    role_code = normalize_role(user.role)
-    role_permissions = role_permission_code_map(session).get(role_code, [])
-    legacy_permissions = normalize_permissions(user.permissions_json)
-    extra_permissions = user_extra_permission_codes(session, user.id)
-    return {
-        "rolePermissionCodes": role_permissions,
-        "extraPermissionCodes": unique_permissions([*legacy_permissions, *extra_permissions]),
-        "effectivePermissionCodes": unique_permissions([*role_permissions, *legacy_permissions, *extra_permissions]),
-    }
+    return user_permission_payloads(session, [user]).get(user.id, {
+        "rolePermissionCodes": [],
+        "extraPermissionCodes": [],
+        "effectivePermissionCodes": [],
+    })
+
+
+def user_permission_payloads(
+    session: Session,
+    users: list[User],
+    *,
+    role_permissions: dict[str, list[str]] | None = None,
+) -> dict[str, dict]:
+    """사용자 목록의 권한을 배치 조회한다.
+
+    Admin 사용자 화면은 기존에 사용자마다 역할/추가 권한을 다시 읽어 RDS 왕복이
+    늘어났다. 역할 권한은 한 번, 사용자별 추가 권한은 한 번의 IN 쿼리로 조립한다.
+    """
+    if not users:
+        return {}
+    role_map = role_permissions if role_permissions is not None else role_permission_code_map(session)
+    user_ids = [user.id for user in users]
+    extra_by_user: dict[str, list[str]] = {}
+    rows = session.execute(
+        select(UserPermission.user_id, Permission.code)
+        .join(Permission, Permission.id == UserPermission.permission_id)
+        .where(
+            UserPermission.user_id.in_(user_ids),
+            UserPermission.grant_type == "ALLOW",
+            Permission.is_active.is_(True),
+        )
+        .order_by(UserPermission.user_id, Permission.sort_order, Permission.code)
+    ).all()
+    for user_id, permission_code in rows:
+        extra_by_user.setdefault(str(user_id), []).append(str(permission_code))
+
+    payloads: dict[str, dict] = {}
+    for user in users:
+        role_permissions_for_user = role_map.get(normalize_role(user.role), [])
+        legacy_permissions = normalize_permissions(user.permissions_json)
+        extra_permissions = extra_by_user.get(user.id, [])
+        payloads[user.id] = {
+            "rolePermissionCodes": role_permissions_for_user,
+            "extraPermissionCodes": unique_permissions([*legacy_permissions, *extra_permissions]),
+            "effectivePermissionCodes": unique_permissions([
+                *role_permissions_for_user,
+                *legacy_permissions,
+                *extra_permissions,
+            ]),
+        }
+    return payloads
 
 
 def has_permission(permission_codes: list[str], required_permission: str) -> bool:

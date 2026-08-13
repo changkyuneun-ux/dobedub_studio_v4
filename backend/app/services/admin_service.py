@@ -14,7 +14,12 @@ from backend.app.core.security import create_access_token, ensure_admin_user, ha
 from backend.app.db.models import User
 from backend.app.services.metadata_loader import ensure_metadata_current, read_json_if_exists
 from backend.app.services.metadata_service import metadata_paths
-from backend.app.services.permission_service import permission_governance_catalog, user_permission_payload
+from backend.app.services.permission_service import (
+    permission_governance_catalog,
+    role_permission_code_map,
+    user_permission_payload,
+    user_permission_payloads,
+)
 from backend.app.services.workflow_parser import (
     generate_param_config,
     list_workflows as parse_workflow_list,
@@ -28,8 +33,13 @@ WORKFLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.json$")
 def list_admin_users(session: Session) -> dict:
     ensure_admin_user(session)
     users = session.scalars(select(User).order_by(User.created_at.desc(), User.id)).all()
-    items = [admin_user_payload(session, user) for user in users]
-    return {"items": items, "permissionGovernance": permission_governance_catalog(session)}
+    role_permissions = role_permission_code_map(session)
+    permission_payloads = user_permission_payloads(session, users, role_permissions=role_permissions)
+    items = [{**user_payload(user), **permission_payloads.get(user.id, {})} for user in users]
+    return {
+        "items": items,
+        "permissionGovernance": permission_governance_catalog(session, role_permissions=role_permissions),
+    }
 
 
 def list_permission_governance(session: Session) -> dict:

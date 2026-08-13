@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DOBEDUB STUDIO · 업무 흐름 안내</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-app: #f6f7f6;
+    --bg-panel: #ffffff;
+    --bg-table: #fbfcfb;
+    --text-body: #16191a;
+    --text-secondary: #3d4644;
+    --text-description: #6b7472;
+    --text-label: #98a09d;
+    --border: #e2e5e3;
+    --border-inner: #eef0ef;
+    --accent: #12a06a;
+    --accent-bg: #e9f5ef;
+    --accent-text: #0f7a55;
+    --accent-border: #cfe3d9;
+    --warning: #d08300;
+    --warning-bg: #fdf3e7;
+    --warning-text: #8a5a00;
+    --warning-border: #f0d7b0;
+    --admin-bg: #eef2fb;
+    --admin-text: #3f5fa0;
+    --admin-border: #d6dff4;
+    --font-body: "IBM Plex Sans", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    --font-mono: "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg-app);
+    color: var(--text-body);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+
+  .top {
+    padding: 20px 40px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .top .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--text-body); color: #fff;
+    display: grid; place-items: center;
+    font: 700 12px var(--font-mono);
+  }
+  .top .brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
+  .top .divider { width: 1px; height: 16px; background: var(--border); }
+  .top .page-title { font-size: 13px; color: var(--text-description); }
+
+  .hero {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 44px 40px 8px;
+  }
+  .hero .eyebrow {
+    font: 600 10px var(--font-mono);
+    color: var(--text-label);
+    letter-spacing: 0.08em;
+  }
+  .hero h1 {
+    font-size: 27px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 8px 0 10px;
+  }
+  .hero p {
+    font-size: 13.5px;
+    line-height: 1.75;
+    color: var(--text-description);
+    max-width: 760px;
+    margin: 0;
+  }
+
+  .legend {
+    max-width: 1180px;
+    margin: 22px auto 0;
+    padding: 0 40px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    font-size: 11.5px;
+    color: var(--text-description);
+  }
+  .legend .item { display: flex; align-items: center; gap: 7px; }
+  .legend .dot { width: 9px; height: 9px; border-radius: 3px; }
+  .legend .dot.user { background: var(--accent); }
+  .legend .dot.admin { background: var(--admin-text); }
+  .legend .dot.help { background: var(--warning); }
+
+  .flow {
+    max-width: 1180px;
+    margin: 30px auto 60px;
+    padding: 0 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .stage {
+    display: flex;
+    gap: 22px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--border-inner);
+  }
+  .stage:last-child { border-bottom: none; }
+
+  .stage-rail {
+    flex: none;
+    width: 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .stage-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: grid; place-items: center;
+    font: 600 12px var(--font-mono);
+    flex: none;
+  }
+  .stage.admin .stage-num { background: var(--admin-text); }
+  .stage-line {
+    flex: 1;
+    width: 2px;
+    background: var(--border);
+    margin-top: 6px;
+  }
+
+  .stage-body { flex: 1; min-width: 0; }
+  .stage-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .stage-head .name {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.01em;
+  }
+  .stage-head .sub {
+    font: 500 10.5px var(--font-mono);
+    color: var(--text-label);
+  }
+  .stage-head .badge {
+    font: 600 9.5px var(--font-mono);
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--admin-bg);
+    color: var(--admin-text);
+    border: 1px solid var(--admin-border);
+  }
+  .stage-desc {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-description);
+    margin: 0 0 14px;
+    max-width: 640px;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 11px;
+  }
+  .card {
+    text-decoration: none;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 13px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
+  }
+  .card:hover {
+    border-color: var(--accent-border);
+    box-shadow: 0 4px 14px rgba(18,160,106,.12);
+    transform: translateY(-1px);
+  }
+  .card.admin:hover {
+    border-color: var(--admin-border);
+    box-shadow: 0 4px 14px rgba(63,95,160,.12);
+  }
+  .card-head { display: flex; align-items: center; gap: 8px; }
+  .card-id {
+    font: 600 10px var(--font-mono);
+    background: var(--text-body);
+    color: #fff;
+    padding: 3px 7px;
+    border-radius: 5px;
+    flex: none;
+  }
+  .card-name {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: var(--text-body);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-desc {
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text-description);
+  }
+  .card-foot {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .card-perm {
+    font: 500 9.5px var(--font-mono);
+    color: var(--text-label);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-route {
+    font: 500 9px var(--font-mono);
+    color: var(--text-label);
+    opacity: 0;
+    transition: opacity .12s ease;
+  }
+  .card:hover .card-route { opacity: 1; }
+  .card.note {
+    background: var(--bg-table);
+    border-style: dashed;
+  }
+  .card.note .card-desc { color: var(--text-secondary); }
+
+  .callout {
+    max-width: 1180px;
+    margin: 0 auto 60px;
+    padding: 0 40px;
+  }
+  .callout-box {
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    color: var(--warning-text);
+    border-radius: 11px;
+    padding: 16px 18px;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .callout-box b { color: var(--text-body); }
+
+  .foot {
+    max-width: 1180px;
+    margin: 0 auto 70px;
+    padding: 18px 40px 0;
+    border-top: 1px solid var(--border);
+  }
+  .foot-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    font-size: 11.5px;
+    color: var(--text-description);
+    padding-top: 18px;
+  }
+  .foot-grid b { color: var(--text-body); }
+
+  @media (max-width: 720px) {
+    .stage { flex-direction: column; gap: 10px; }
+    .stage-rail { flex-direction: row; width: auto; }
+    .stage-line { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="mark">DB</div>
+  <div class="brand">DOBEDUB STUDIO</div>
+  <div class="divider"></div>
+  <div class="page-title">업무 흐름 안내</div>
+</div>
+
+<div class="hero">
+  <div class="eyebrow">USER WORKFLOW GUIDE</div>
+  <h1>사용자 업무 흐름 기준 화면 순서</h1>
+  <p>
+    로그인부터 영상 결과 확인, 이력·자산 관리, 관리자 운영까지 — DOBEDUB STUDIO를 처음 쓰는 사람이
+    "다음에 뭘 눌러야 하는지" 한눈에 알 수 있도록 실제 화면 순서대로 정리했습니다.
+    카드를 누르면 해당 화면으로 이동합니다(로그인 상태가 필요합니다).
+  </p>
+</div>
+
+<div class="legend">
+  <div class="item"><span class="dot user"></span>제작 흐름 · 전체 사용자</div>
+  <div class="item"><span class="dot help"></span>HELP · 언제든 접근 가능</div>
+  <div class="item"><span class="dot admin"></span>운영 · 관리자 전용</div>
+</div>
+
+<div class="flow">
+
+  <!-- 1. 진입 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">1</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">진입</span>
+        <span class="sub">로그인 · 상태 확인</span>
+      </div>
+      <p class="stage-desc">사내 계정으로 로그인하면 시작됩니다. 궁금한 점이나 시스템 이상이 의심될 때는 언제든 HELP 메뉴(User Manual · System Status · Metadata)로 돌아올 수 있습니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/access/login">
+          <div class="card-head"><span class="card-id">6a</span><span class="card-name">로그인</span></div>
+          <div class="card-desc">사내 계정 ID·비밀번호로 접속합니다. 외부 SSO는 없습니다.</div>
+          <div class="card-foot"><span class="card-perm">전체 사용자</span><span class="card-route">/studio/access/login</span></div>
+        </a>
+        <a class="card" href="/studio/access/manual">
+          <div class="card-head"><span class="card-id">6b</span><span class="card-name">User Manual</span></div>
+          <div class="card-desc">화면별 사용법과 세그먼트 규칙을 문서 내 검색으로 바로 찾을 수 있습니다.</div>
+          <div class="card-foot"><span class="card-perm">manual:read</span><span class="card-route">/studio/access/manual</span></div>
+        </a>
+        <a class="card" href="/studio/admin/status">
+          <div class="card-head"><span class="card-id">6c</span><span class="card-name">System Status</span></div>
+          <div class="card-desc">ComfyUI·Qwen 엔드포인트 상태를 미리 확인합니다. HELP 소속이라 관리자 화면으로 전환되지 않습니다.</div>
+          <div class="card-foot"><span class="card-perm">system:read</span><span class="card-route">/studio/admin/status</span></div>
+        </a>
+        <div class="card note">
+          <div class="card-head"><span class="card-id">7g</span><span class="card-name">차단 · 만료 · 오류</span></div>
+          <div class="card-desc">403 권한 없음 · 401 세션 만료 · 공통 오류는 별도 메뉴가 아니라, 해당 상황이 생기면 자동으로 표시됩니다.</div>
+          <div class="card-foot"><span class="card-perm">전체 사용자</span><span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 생성 준비 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">2</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">생성 준비</span>
+        <span class="sub">STEP 1 / 4 · 이미지 로드</span>
+      </div>
+      <p class="stage-desc">워크플로를 고르고 키프레임 이미지를 올리면, 이미지 수에 맞춰 세그먼트 수가 자동으로 정해집니다(n−1). 예전에 만든 프롬프트나 자산을 재사용하려면 이 단계에서 미리 열어봐도 됩니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/create/load">
+          <div class="card-head"><span class="card-id">2a</span><span class="card-name">이미지 로드</span></div>
+          <div class="card-desc">워크플로 선택 → 키프레임 업로드. 필수 슬롯을 모두 채워야 다음 단계로 넘어갑니다.</div>
+          <div class="card-foot"><span class="card-perm">workflows:read</span><span class="card-route">/studio/create/load</span></div>
+        </a>
+        <a class="card" href="/studio/review/reuse">
+          <div class="card-head"><span class="card-id">4c</span><span class="card-name">Prompt Library</span></div>
+          <div class="card-desc">재사용 등록된 프롬프트를 검색해 워크스페이스에 적용합니다.</div>
+          <div class="card-foot"><span class="card-perm">prompts:reuse</span><span class="card-route">/studio/review/reuse</span></div>
+        </a>
+        <a class="card" href="/studio/review/assets">
+          <div class="card-head"><span class="card-id">5a</span><span class="card-name">Assets</span></div>
+          <div class="card-desc">과거 키프레임·결과물에서 자산을 미리 확인합니다.</div>
+          <div class="card-foot"><span class="card-perm">history:read</span><span class="card-route">/studio/review/assets</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 세그먼트 설정 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">3</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">세그먼트 설정</span>
+        <span class="sub">STEP 2 / 4 · 세그먼트마다 반복</span>
+      </div>
+      <p class="stage-desc">Keyword Builder에서 Positive/Negative 카탈로그를 조합하거나 직접 입력해 프롬프트를 만들고, 같은 화면 오른쪽에서 세그먼트별 Wan Node Config(스텝·CFG·모션 등)와 seed를 설정합니다. 규칙 위반·필수 누락 경고는 화면 상단에 모아서 보여줍니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/create/prompt">
+          <div class="card-head"><span class="card-id">2b</span><span class="card-name">프롬프트 설정</span></div>
+          <div class="card-desc">Keyword Builder · 직접 입력 · 규칙 위반/필수 누락 경고. Positive/Negative는 각각 접고 펼치는 아코디언입니다.</div>
+          <div class="card-foot"><span class="card-perm">prompts:build</span><span class="card-route">/studio/create/prompt</span></div>
+        </a>
+        <a class="card" href="/studio/create/prompt">
+          <div class="card-head"><span class="card-id">2e</span><span class="card-name">노드 컨피그 & seed</span></div>
+          <div class="card-desc">세그먼트별 파라미터와 seed(자동/직접 입력). 2b와 같은 화면의 오른쪽 패널입니다.</div>
+          <div class="card-foot"><span class="card-perm">jobs:run</span><span class="card-route">/studio/create/prompt</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 실행 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">4</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">실행</span>
+        <span class="sub">STEP 3 / 4 · 단일 작업 제출</span>
+      </div>
+      <p class="stage-desc">모든 세그먼트 설정을 표로 마지막 확인한 뒤 Run을 누르면 작업이 제출됩니다. 진행 중에는 상태와 로그를 실시간으로 보여주고, 취소를 누르면 재제출을 막고 "Cancelling…" 상태로 바뀝니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/create/confirm">
+          <div class="card-head"><span class="card-id">2f</span><span class="card-name">실행 전 전체 구성 확인</span></div>
+          <div class="card-desc">세그먼트 표 · 제출 검증 · payload 확인 후 Run.</div>
+          <div class="card-foot"><span class="card-perm">jobs:run</span><span class="card-route">/studio/create/confirm</span></div>
+        </a>
+        <a class="card" href="/studio/create/progress">
+          <div class="card-head"><span class="card-id">2c</span><span class="card-name">생성 진행</span></div>
+          <div class="card-desc">상태 인포그래픽 · 로그 · 취소 요청(Cancelling). 진행 중에는 세그먼트별 부분 결과는 제공되지 않습니다.</div>
+          <div class="card-foot"><span class="card-perm">jobs:run</span><span class="card-route">/studio/create/progress</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 결과 확인 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">5</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">결과 확인</span>
+        <span class="sub">STEP 4 / 4</span>
+        <span class="badge">완료 시 우측 상단 토스트 알림</span>
+      </div>
+      <p class="stage-desc">작업이 끝나면(완료·실패·취소) 화면 어디에 있든 우측 상단에 토스트로 알려줍니다. 실행 직후에는 이 화면에서 바로 결과를 확인하고, 평가·재사용 등록·재실행은 다음 단계인 Task History에서 이어서 할 수 있습니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/create/result">
+          <div class="card-head"><span class="card-id">2d</span><span class="card-name">실행 직후 결과</span></div>
+          <div class="card-desc">Final 병합본 + 구간 검수본 미리보기와 다운로드.</div>
+          <div class="card-foot"><span class="card-perm">jobs:run</span><span class="card-route">/studio/create/result</span></div>
+        </a>
+        <div class="card note">
+          <div class="card-head"><span class="card-id">3f · 3c</span><span class="card-name">Run 상세 · 평가/재실행</span></div>
+          <div class="card-desc">완료 결과 평가·재사용 등록, 실패 원인 확인은 별도 화면이 아니라 다음 단계 Task History 우측 패널로 통합됐습니다.</div>
+          <div class="card-foot"><span class="card-perm">prompts:review</span><span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. 이력·자산 -->
+  <div class="stage">
+    <div class="stage-rail"><div class="stage-num">6</div><div class="stage-line"></div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">이력 · 자산 관리</span>
+        <span class="sub">되돌아보기와 재작업</span>
+      </div>
+      <p class="stage-desc">지난 작업을 다시 찾아보고, 완료작은 평가·재사용 등록을, 실패작은 원인 확인과 재실행을 할 수 있습니다. 자산은 컬렉션 필터로 정리해 다음 작업에 다시 가져다 씁니다.</p>
+      <div class="cards">
+        <a class="card" href="/studio/review/history">
+          <div class="card-head"><span class="card-id">3a</span><span class="card-name">Task History</span></div>
+          <div class="card-desc">목록 + 미리보기 · 20건 페이지네이션 · 우측 패널에서 Overview/Assets/Node Config/Prompt Review 확인, 평가·재사용 등록·재실행·삭제까지 여기서 처리합니다.</div>
+          <div class="card-foot"><span class="card-perm">history:read</span><span class="card-route">/studio/review/history</span></div>
+        </a>
+        <a class="card" href="/studio/review/assets">
+          <div class="card-head"><span class="card-id">5a</span><span class="card-name">Assets</span></div>
+          <div class="card-desc">키프레임 · 구간 영상 · Final 결과물을 컬렉션별로 모아 봅니다.</div>
+          <div class="card-foot"><span class="card-perm">history:read</span><span class="card-route">/studio/review/assets</span></div>
+        </a>
+        <div class="card note">
+          <div class="card-head"><span class="card-id">6e</span><span class="card-name">알림 센터</span></div>
+          <div class="card-desc">별도 목록 화면 대신, 작업이 끝나는 순간 화면 우측 상단 토스트로 안내합니다(6초간 표시).</div>
+          <div class="card-foot"><span class="card-perm">전체 사용자</span><span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. 운영 관리 -->
+  <div class="stage admin">
+    <div class="stage-rail"><div class="stage-num">7</div></div>
+    <div class="stage-body">
+      <div class="stage-head">
+        <span class="name">운영 · 관리</span>
+        <span class="sub">Admin 전용 · 좌측 사이드바 상단 "관리자 콘솔 →"</span>
+      </div>
+      <p class="stage-desc">권한 설계, 사용자 관리, 프롬프트 카탈로그·워크플로 정의, Sandbox Pod, 감사 로그까지 운영에 필요한 모든 화면입니다. 권한이 없는 항목은 사이드바에 아예 보이지 않습니다.</p>
+      <div class="cards">
+        <a class="card admin" href="/studio/admin/roles">
+          <div class="card-head"><span class="card-id">3b</span><span class="card-name">역할 & 권한</span></div>
+          <div class="card-desc">역할별 권한 매트릭스를 편집하고 일괄 저장합니다.</div>
+          <div class="card-foot"><span class="card-perm">roles:read</span><span class="card-route">/studio/admin/roles</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/resource-map">
+          <div class="card-head"><span class="card-id">7b</span><span class="card-name">기능 리소스 매핑</span></div>
+          <div class="card-desc">화면·API ↔ 필요 권한 코드 대조표(조회 전용).</div>
+          <div class="card-foot"><span class="card-perm">roles:read</span><span class="card-route">/studio/admin/resource-map</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/users">
+          <div class="card-head"><span class="card-id">3e</span><span class="card-name">사용자 관리</span></div>
+          <div class="card-desc">사용자 목록에서 역할을 배정합니다.</div>
+          <div class="card-foot"><span class="card-perm">users:read</span><span class="card-route">/studio/admin/users</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/users/detail">
+          <div class="card-head"><span class="card-id">7c</span><span class="card-name">사용자 상세</span></div>
+          <div class="card-desc">개별 추가 권한 부여, 비밀번호 초기화, 비활성화.</div>
+          <div class="card-foot"><span class="card-perm">users:write</span><span class="card-route">/studio/admin/users/detail</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/catalog/hierarchy">
+          <div class="card-head"><span class="card-id">4e</span><span class="card-name">카탈로그 계층</span></div>
+          <div class="card-desc">그룹 → 서브카테고리 → 용어 구조와 노출 순서를 관리합니다.</div>
+          <div class="card-foot"><span class="card-perm">prompt-catalog:write</span><span class="card-route">/studio/admin/catalog/hierarchy</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/catalog/terms">
+          <div class="card-head"><span class="card-id">3d</span><span class="card-name">용어 관리</span></div>
+          <div class="card-desc">개별 용어 CRUD. 4e와 같은 트리에서 이어서 편집합니다.</div>
+          <div class="card-foot"><span class="card-perm">prompt-catalog:write</span><span class="card-route">/studio/admin/catalog/terms</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/catalog/negative-defaults">
+          <div class="card-head"><span class="card-id">4b</span><span class="card-name">Negative 기본값</span></div>
+          <div class="card-desc">모든 워크플로에 공통 적용되는 네거티브 용어를 추가합니다.</div>
+          <div class="card-foot"><span class="card-perm">prompt-catalog:write</span><span class="card-route">/studio/admin/catalog/negative-defaults</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/system-prompt">
+          <div class="card-head"><span class="card-id">7a</span><span class="card-name">시스템 프롬프트</span></div>
+          <div class="card-desc">프롬프트 생성 LLM 지시문 편집, 버전 이력과 되돌리기.</div>
+          <div class="card-foot"><span class="card-perm">prompt-catalog:write</span><span class="card-route">/studio/admin/system-prompt</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/workflows">
+          <div class="card-head"><span class="card-id">4a</span><span class="card-name">워크플로 정의</span></div>
+          <div class="card-desc">등록된 워크플로 조회, Activate/Deactivate.</div>
+          <div class="card-foot"><span class="card-perm">workflows:read</span><span class="card-route">/studio/admin/workflows</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/workflows/register">
+          <div class="card-head"><span class="card-id">4d</span><span class="card-name">워크플로 등록</span></div>
+          <div class="card-desc">신규 워크플로 JSON 등록·갱신 단일 저장 폼.</div>
+          <div class="card-foot"><span class="card-perm">workflows:write</span><span class="card-route">/studio/admin/workflows/register</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/sandbox">
+          <div class="card-head"><span class="card-id">5b</span><span class="card-name">Sandbox Pod</span></div>
+          <div class="card-desc">워크플로 시험 실행용 Pod 시작/정지.</div>
+          <div class="card-foot"><span class="card-perm">sandbox:control</span><span class="card-route">/studio/admin/sandbox</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/metadata">
+          <div class="card-head"><span class="card-id">6d</span><span class="card-name">Metadata</span></div>
+          <div class="card-desc">워크플로 widget metadata 조회·재생성. HELP 소속이라 관리자 화면 전환 없이 접근됩니다.</div>
+          <div class="card-foot"><span class="card-perm">metadata:read</span><span class="card-route">/studio/admin/metadata</span></div>
+        </a>
+        <a class="card admin" href="/studio/admin/audit-log">
+          <div class="card-head"><span class="card-id">A-04</span><span class="card-name">감사 로그</span></div>
+          <div class="card-desc">권한·사용자·카탈로그 변경, Sandbox 제어 이력 조회.</div>
+          <div class="card-foot"><span class="card-perm">roles:read</span><span class="card-route">/studio/admin/audit-log</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="callout">
+  <div class="callout-box">
+    <b>이 안내는 화면마다 실제로 다르게 보입니다.</b> 사이드바에는 지금 로그인한 계정의 권한 범위 안에서만
+    메뉴가 표시됩니다 — 위 카드가 전부 보이지 않아도 정상입니다. 궁금한 항목은 언제든 좌측 사이드바
+    <b>HELP → User Manual</b>에서 문서 내 검색으로 자세히 찾아볼 수 있습니다.
+  </div>
+</div>
+
+<div class="foot">
+  <div class="foot-grid">
+    <div><b>역할 코드</b> · VIEWER / OPERATOR / ADMIN / SUPER_ADMIN</div>
+    <div><b>원본 설계 대비 통합된 화면</b> · 5a+5c → Asset 관리 하나로, 3f/3c → 3a 우측 패널로, 2b+2e → 세그먼트 설정 한 화면으로</div>
+    <div><b>원본 설계에서 제외된 항목</b> · 6e 알림 센터(토스트로 대체), 접근 이력(감사 로그 범위 축소로 제거)</div>
+  </div>
+</div>
+
+</body>
+</html>

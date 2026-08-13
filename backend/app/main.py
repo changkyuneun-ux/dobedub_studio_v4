@@ -113,7 +113,16 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def no_cache_studio_assets(request, call_next):
         response = await call_next(request)
-        if request.url.path.startswith("/studio"):
+        path = request.url.path
+        # Vite build의 hash 파일은 내용이 바뀌면 URL도 바뀐다. 운영에서 매 화면
+        # 진입마다 JS/CSS를 다시 검증하지 않도록 장기 캐시한다.
+        if path.startswith("/studio/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif path.startswith("/docs/manual-assets/"):
+            # 매뉴얼 캡처는 iframe 진입 시 필요한 항목만 lazy load하며, 같은 파일은
+            # 짧은 기간 재사용해 EFS 정적 파일 재검증을 줄인다.
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        elif path.startswith("/studio"):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"

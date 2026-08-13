@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 from backend.app.core.config import get_settings
@@ -12,7 +13,17 @@ def inline_markdown(text: str) -> str:
     escaped = html.escape(text or "")
     escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
-    escaped = re.sub(r"\[([^\]]+)\]\((#[^)]+)\)", r'<a href="\2">\1</a>', escaped)
+    # 매뉴얼 내부 목차 앵커와 앱이 제공하는 정적 문서(/docs/...)를 함께 지원한다.
+    # 정적 문서는 새 탭에서 열어 iframe으로 표시된 매뉴얼 본문을 유지한다.
+    escaped = re.sub(
+        r"\[([^\]]+)\]\((#[^)]+|/docs/[^)]+)\)",
+        lambda match: (
+            f'<a href="{match.group(2)}">{match.group(1)}</a>'
+            if match.group(2).startswith("#")
+            else f'<a href="{match.group(2)}" target="_blank" rel="noreferrer">{match.group(1)}</a>'
+        ),
+        escaped,
+    )
     return escaped
 
 
@@ -138,7 +149,7 @@ def render_manual_markdown(markdown: str) -> str:
             safe_caption = html.escape(caption or source)
             parts.append(
                 "<figure>"
-                f'<img src="/docs/manual-assets/{html.escape(source)}" alt="{safe_caption}" />'
+                f'<img src="/docs/manual-assets/{html.escape(source)}" alt="{safe_caption}" loading="lazy" decoding="async" />'
                 f"<figcaption>{safe_caption}</figcaption>"
                 "</figure>"
             )
@@ -190,9 +201,15 @@ def render_manual_markdown(markdown: str) -> str:
 
 def manual_html_page(manual_path: Path | None = None) -> str:
     settings = get_settings()
-    manual_path = manual_path or settings.project_root / "docs" / "dobedub-studio-user-manual.md"
-    if not manual_path.exists():
-        raise FileNotFoundError(manual_path.name)
+    resolved_path = manual_path or settings.project_root / "docs" / "dobedub-studio-user-manual.md"
+    if not resolved_path.exists():
+        raise FileNotFoundError(resolved_path.name)
+    return _manual_html_page_cached(str(resolved_path), resolved_path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=4)
+def _manual_html_page_cached(manual_path_text: str, _modified_ns: int) -> str:
+    manual_path = Path(manual_path_text)
     markdown = manual_path.read_text(encoding="utf-8")
     modified = datetime.fromtimestamp(manual_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     body = render_manual_markdown(markdown)

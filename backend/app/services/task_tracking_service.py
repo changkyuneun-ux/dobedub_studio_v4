@@ -139,7 +139,6 @@ def list_assets(
         if not asset_ids:
             return []
 
-        assets_by_id = _assets_by_id(session)
         links = session.scalars(
             select(TaskOutputAsset)
             .where(TaskOutputAsset.asset_id.in_(asset_ids))
@@ -165,9 +164,12 @@ def list_assets(
             .where(TaskInputAsset.task_id.in_(task_ids))
             .order_by(TaskInputAsset.task_id, TaskInputAsset.slot_index.asc())
         ).all() if task_ids else []
-        # _assets_by_id(session)는 이미 JSON으로 변환된 dict를 담고 있다(assets
-        # 테이블 전체, 아래 참조) - 입력 이미지 asset_id도 별도 조회 없이 바로
-        # 찾을 수 있고, 다시 _asset_to_json을 호출하지 않는다(이미 dict라 오류남).
+        # 결과 행과 그 행이 참조하는 입력 이미지까지만 읽는다. 이전 구현은 이 화면에
+        # 표시하지 않는 모든 asset을 매번 읽어 RDS 데이터가 늘수록 컬렉션 변경 후
+        # 새로고침이 느려졌다.
+        related_asset_ids = set(asset_ids)
+        related_asset_ids.update(link.asset_id for link in input_links)
+        assets_by_id = _assets_by_ids(session, related_asset_ids)
         inputs_by_task: dict[str, list[dict]] = {}
         for link in input_links:
             asset_json = assets_by_id.get(link.asset_id)
@@ -885,6 +887,21 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
 
 def _assets_by_id(session: Session) -> dict[str, dict]:
     return {_asset.id: _asset_to_json(_asset) for _asset in session.scalars(select(Asset)).all()}
+
+
+def _assets_by_ids(session: Session, asset_ids: set[str] | list[str]) -> dict[str, dict]:
+    """지정된 자산만 JSON으로 변환한다.
+
+    자산 관리 화면은 페이지 단위로 출력 자산과 연결된 입력 이미지만 필요하다. 전체
+    asset 테이블을 읽는 헬퍼는 이력 복원처럼 전체 참조가 필요한 기존 경로에만 남긴다.
+    """
+    ids = sorted({str(asset_id) for asset_id in asset_ids if asset_id})
+    if not ids:
+        return {}
+    return {
+        asset.id: _asset_to_json(asset)
+        for asset in session.scalars(select(Asset).where(Asset.id.in_(ids))).all()
+    }
 
 
 def _prompt_feedback_by_output_id(session: Session, output_ids: list[str | None]) -> dict[str, PromptFeedback]:
