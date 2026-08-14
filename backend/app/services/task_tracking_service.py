@@ -12,16 +12,30 @@ from sqlalchemy.orm import Session, selectinload
 from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
+from backend.app.services.metadata_service import get_workflow_widget_metadata
 
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 REVIEW_FLAG_LABELS = {
-    "intentMatched": "프롬프트 의도 반영 intent matched prompt intent",
-    "identityPreserved": "이미지 정체성 유지 identity preserved",
+    "originalPreserved": "원본 유지 preserve original",
+    # 과거 JSON 리뷰도 새 기준으로 검색 가능해야 한다.
+    "intentMatched": "원본 유지 preserve original",
+    "identityPreserved": "원본 유지 preserve original",
     "naturalMotion": "움직임 자연스러움 natural motion",
     "noDistortion": "왜곡 깨짐 없음 no distortion",
     "backgroundStable": "배경 안정성 background stable",
+    "colorStable": "색감 안정 color stable",
+}
+
+# 이전 리뷰는 JSON 필드로 저장되어 있어 별도 데이터 마이그레이션 없이도 읽을 수
+# 있다. 새 저장 요청에서는 아래 다섯 가지 운영 기준으로 정규화한다.
+LEGACY_REVIEW_FLAG_ALIASES = {
+    "originalPreserved": ("originalPreserved", "intentMatched", "identityPreserved"),
+    "naturalMotion": ("naturalMotion",),
+    "noDistortion": ("noDistortion",),
+    "backgroundStable": ("backgroundStable",),
+    "colorStable": ("colorStable",),
 }
 
 
@@ -684,6 +698,11 @@ def _replace_task_prompts(session: Session, task: WorkflowTask, job: dict) -> No
                 "workflowId": workflow_id,
                 "runpodJobId": job.get("runpodJobId"),
                 "promptSource": segment.get("promptSource") or segment.get("source") or "",
+                # B-08: 신규 Task는 RunPod 제출 직전의 워크플로우를 기준으로
+                # 선택 모델 값을 보관한다. 나중에 workflow JSON이 바뀌어도 이
+                # 작업의 Checkpoint/VAE/LoRA/CLIP/UNet 조회값은 변하지 않는다.
+                "modelReferences": (job.get("patchSummary") or {}).get("modelReferences") or [],
+                "modelReferenceSource": "submission_snapshot",
             },
         ))
 
@@ -982,6 +1001,7 @@ def _task_prompt_to_json(
     output_ids = row.output_asset_ids or []
     task_user = row.task.user if row.task else None
     created_by = (task_user.name if task_user else None) or (row.task.user_id if row.task else None)
+    model_references, model_reference_source = _task_model_references(row)
     return {
         "id": row.id,
         "taskId": row.task_id,
@@ -990,6 +1010,8 @@ def _task_prompt_to_json(
         "createdBy": created_by,
         "modelProfileId": row.model_profile_id,
         "modelName": row.model_name,
+        "modelReferences": model_references,
+        "modelReferenceSource": model_reference_source,
         "promptGenerationOutputId": row.prompt_generation_output_id,
         # B-02: task_prompts의 quality_rating/reviewFlags 등은 "영상 결과 평가"
         # 전용이다. "프롬프트 생성 품질" 평가는 prompt_feedback에 별도로 저장되며,
@@ -1016,16 +1038,99 @@ def _task_prompt_to_json(
     }
 
 
+def _task_model_references(row: TaskPrompt) -> tuple[list[dict], str]:
+    """Resolve a task's selected model files without allowing model reuse.
+
+    New tasks own an immutable submission snapshot in metadata_json. Older rows
+    did not have that snapshot, so they fall back to the currently registered
+    workflow metadata and explicitly report that source to the caller.
+    """
+    metadata = row.metadata_json or {}
+    snapshot = metadata.get("modelReferences")
+    snapshot_items = []
+    if isinstance(snapshot, list):
+        snapshot_items = [item for item in snapshot if isinstance(item, dict) and item.get("bucket") and item.get("value")]
+        if snapshot_items and metadata.get("modelReferenceSource") == "submission_snapshot":
+            # 신규 작업은 제출 직전의 실제 workflow 선택값이므로 이후 workflow
+            # 변경값을 합치지 않는다. 이력이 항상 실행 당시를 재현하도록 한다.
+            return _unique_model_references(snapshot_items), "submission_snapshot"
+
+    current_items = _current_workflow_model_references(row.workflow_id)
+    if snapshot_items:
+        combined = _unique_model_references([*snapshot_items, *current_items])
+        if combined:
+            return combined, "metadata_json_plus_current_workflow"
+    if current_items:
+        return current_items, "current_workflow_metadata"
+    return [], "unavailable"
+
+
+def _current_workflow_model_references(workflow_id: str) -> list[dict]:
+    try:
+        workflow_metadata = get_workflow_widget_metadata(workflow_id)
+    except (FileNotFoundError, OSError, ValueError):
+        return []
+
+    tracked_buckets = {"checkpoints", "vae", "loras", "text_encoders", "unet", "video_models", "models"}
+    items = []
+    for node in workflow_metadata.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        for field in node.get("inputs") or []:
+            if not isinstance(field, dict):
+                continue
+            bucket = str(field.get("modelBucket") or "")
+            value = field.get("value")
+            if bucket not in tracked_buckets or not isinstance(value, str) or not value.strip():
+                continue
+            items.append({
+                "bucket": bucket,
+                "nodeId": str(node.get("nodeId") or ""),
+                "nodeTitle": str(node.get("title") or node.get("classType") or ""),
+                "classType": str(node.get("classType") or ""),
+                "field": str(field.get("field") or ""),
+                "value": value.strip(),
+            })
+    return _unique_model_references(items)
+
+
+def _unique_model_references(items: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+    for item in items:
+        key = (
+            str(item.get("bucket") or ""),
+            str(item.get("nodeId") or ""),
+            str(item.get("field") or ""),
+            str(item.get("value") or ""),
+        )
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
 def _apply_prompt_review(row: TaskPrompt, payload: dict) -> None:
     rating = payload.get("qualityRating")
-    row.quality_rating = None if rating in (None, "") else max(1, min(5, int(rating)))
+    if rating in (None, ""):
+        raise ValueError("평가 등급을 선택하세요.")
+    normalized_rating = int(rating)
+    if normalized_rating not in {1, 2, 3, 4, 5}:
+        raise ValueError("평가 등급은 1부터 5까지 선택할 수 있습니다.")
+    row.quality_rating = normalized_rating
     row.quality_comment = str(payload.get("qualityComment") or payload.get("comment") or "").strip() or None
-    flags = payload.get("reviewFlags") or {}
-    row.review_flags_json = flags if isinstance(flags, dict) else {}
+    submitted_flags = payload.get("reviewFlags") or {}
+    submitted_flags = submitted_flags if isinstance(submitted_flags, dict) else {}
+    row.review_flags_json = {
+        key: any(bool(submitted_flags.get(alias)) for alias in aliases)
+        for key, aliases in LEGACY_REVIEW_FLAG_ALIASES.items()
+    }
     row.reuse_eligible = bool(payload.get("reuseEligible"))
-    if row.reuse_eligible and not any(bool(value) for value in row.review_flags_json.values()):
-        raise ValueError("재사용 가능으로 저장하려면 재사용 사유를 하나 이상 체크해야 합니다.")
-    row.review_status = "reviewed" if row.quality_rating is not None else "unreviewed"
+    has_reason = any(bool(value) for value in row.review_flags_json.values())
+    if not has_reason and not row.quality_comment:
+        raise ValueError("평가 사유를 하나 이상 선택하거나 코멘트를 입력하세요.")
+    row.review_status = "reviewed"
     row.reviewed_by = str(payload.get("reviewedBy") or payload.get("userId") or "").strip() or row.reviewed_by
     row.reviewed_at = datetime.utcnow() if row.review_status == "reviewed" else None
     row.updated_at = datetime.utcnow()

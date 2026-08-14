@@ -590,11 +590,14 @@ export type JobStatusResponse = {
 };
 
 export type TaskPromptReviewFlags = {
-  intentMatched?: boolean;
-  identityPreserved?: boolean;
+  originalPreserved?: boolean;
   naturalMotion?: boolean;
   noDistortion?: boolean;
   backgroundStable?: boolean;
+  colorStable?: boolean;
+  /** 이전 v4 리뷰 데이터 호환용. 저장 시에는 새 평가 사유로 정규화한다. */
+  intentMatched?: boolean;
+  identityPreserved?: boolean;
 };
 
 // B-02: task_prompts(quality_rating 등)는 "영상 결과 평가" 전용이고, 이 필드는
@@ -609,6 +612,15 @@ export type TaskPromptFeedback = {
   createdAt?: string | null;
 };
 
+export type TaskModelReference = {
+  bucket: string;
+  nodeId?: string;
+  nodeTitle?: string;
+  classType?: string;
+  field?: string;
+  value: string;
+};
+
 export type TaskPromptItem = {
   id: number;
   taskId: string;
@@ -617,6 +629,8 @@ export type TaskPromptItem = {
   createdBy?: string | null;
   modelProfileId?: string | null;
   modelName?: string | null;
+  modelReferences?: TaskModelReference[];
+  modelReferenceSource?: "submission_snapshot" | "metadata_json_plus_current_workflow" | "current_workflow_metadata" | "unavailable" | string;
   promptGenerationOutputId?: string | null;
   promptFeedback?: TaskPromptFeedback | null;
   positivePrompt: string;

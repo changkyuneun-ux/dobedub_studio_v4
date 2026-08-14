@@ -216,6 +216,71 @@ def main():
         assert last_status["status"] == "success", last_status
         assert last_status.get("generationSeed") == created_job["generationSeed"]
 
+        # 작업 결과 평가 API: 등급은 필수이고, 사유 또는 코멘트 중 하나가 반드시
+        # 있어야 한다. 정상 저장 시에는 서버가 로그인 사용자를 평가자로 기록한다.
+        response = client.patch(
+            f"/api/jobs/{task_id}/prompts/1/review",
+            headers=admin_headers,
+            json={"qualityRating": 5, "reuseEligible": True},
+        )
+        assert response.status_code == 400, response.text
+        assert "평가 사유" in response.json()["detail"]
+
+        response = client.patch(
+            f"/api/jobs/{task_id}/prompts/1/review",
+            headers=admin_headers,
+            json={
+                "qualityRating": 5,
+                "qualityComment": "smoke review",
+                "reuseEligible": True,
+                "reviewFlags": {"naturalMotion": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        reviewed_prompt = response.json()
+        assert reviewed_prompt["qualityRating"] == 5
+        assert reviewed_prompt["reviewStatus"] == "reviewed"
+        assert reviewed_prompt["reviewFlags"]["naturalMotion"] is True
+        assert reviewed_prompt["reviewedBy"] == "장균은"
+        assert reviewed_prompt["modelReferenceSource"] == "submission_snapshot"
+        assert reviewed_prompt["modelReferences"]
+        assert {item["bucket"] for item in reviewed_prompt["modelReferences"]}.issubset(
+            {"checkpoints", "vae", "loras", "text_encoders", "unet", "video_models", "models"}
+        )
+
+        # 과거 task_prompts에는 제출 시점의 모델 스냅샷이 없다. 그 경우에도
+        # task_id의 workflowId로 현재 메타데이터를 조회해 모델 정보를 보완한다.
+        from backend.app.db.models import TaskPrompt
+        from backend.app.db.session import SessionLocal
+
+        session = SessionLocal()
+        try:
+            legacy_prompt = session.scalar(
+                select(TaskPrompt).where(
+                    TaskPrompt.task_id == task_id,
+                    TaskPrompt.segment_index == 1,
+                )
+            )
+            assert legacy_prompt is not None
+            legacy_prompt.metadata_json = {
+                "modelReferences": [{
+                    "bucket": "vae",
+                    "nodeId": "legacy",
+                    "nodeTitle": "Legacy VAE",
+                    "classType": "VAELoader",
+                    "field": "vae_name",
+                    "value": "legacy-vae.safetensors",
+                }]
+            }
+            session.commit()
+        finally:
+            session.close()
+        response = client.get(f"/api/jobs/{task_id}/prompts", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        legacy_prompt_item = response.json()["items"][0]
+        assert legacy_prompt_item["modelReferenceSource"] == "metadata_json_plus_current_workflow"
+        assert any(item["value"] == "legacy-vae.safetensors" for item in legacy_prompt_item["modelReferences"])
+
         response = client.get("/api/history?page=1&pageSize=10", headers=admin_headers)
         assert response.status_code == 200, response.text
         history = response.json()
@@ -246,6 +311,10 @@ def main():
 
         response = client.get("/api/prompts/reusable?reuseEligible=true", headers=admin_headers)
         assert response.status_code == 200, response.text
+        reusable_items = response.json()["items"]
+        assert any(item.get("taskId") == task_id for item in reusable_items)
+        reused_task_prompt = next(item for item in reusable_items if item.get("taskId") == task_id)
+        assert reused_task_prompt["modelReferences"]
 
         response = client.put(
             "/api/admin/task-execution-policy",

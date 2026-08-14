@@ -177,6 +177,34 @@ def workflow_model_references(workflow, object_info=None):
     return {key: sorted(values) for key, values in sorted(model_map.items())}
 
 
+def workflow_model_reference_items(workflow, object_info=None):
+    """Return selected model files with their owning ComfyUI node.
+
+    `workflow_model_references()` intentionally also collects available widget
+    options for the metadata catalog. Task history needs a different view: only
+    the file value that was selected in the workflow submitted to RunPod.
+    """
+    tracked_buckets = {"checkpoints", "vae", "loras", "text_encoders", "unet", "video_models", "models"}
+    items = []
+    for node_id, node in sorted(workflow.items(), key=lambda item: str(item[0])):
+        class_type = node.get("class_type", "")
+        for field, value in (node.get("inputs") or {}).items():
+            if is_link_value(value):
+                continue
+            bucket = model_bucket_for_field(class_type, field)
+            if bucket not in tracked_buckets or not isinstance(value, str) or not value.strip():
+                continue
+            items.append({
+                "bucket": bucket,
+                "nodeId": str(node_id),
+                "nodeTitle": node_title(node),
+                "classType": class_type,
+                "field": str(field),
+                "value": value.strip(),
+            })
+    return items
+
+
 def target_metadata(workflow, target):
     node_id = str(target.get("node", ""))
     field = target.get("field", "")

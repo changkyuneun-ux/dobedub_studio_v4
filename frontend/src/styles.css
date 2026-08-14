@@ -4128,6 +4128,43 @@ button {
   padding: 0 8px;
 }
 
+/* 메타데이터 탭과 자산 컬렉션은 현재 화면에서만 쓰는 2차 메뉴다. 주 메뉴와
+   같은 선택 규칙을 유지하면서도 별도 영역임을 선명하게 보여준다. */
+.v3-sidebar-context-menu {
+  background: #edf7f1;
+  border: 1px solid #c7e3d2;
+  border-radius: var(--v3-radius-card);
+  box-shadow: 0 1px 2px rgba(15, 122, 85, 0.07);
+  gap: 4px;
+  margin: 0 8px;
+  padding: 10px 7px 7px;
+}
+
+.v3-sidebar-context-menu .v3-label {
+  color: var(--v3-accent-text);
+}
+
+.v3-sidebar-context-menu .v3-segment-nav-item {
+  background: var(--v3-bg-panel);
+  border: 1px solid #dbe8e0;
+}
+
+.v3-sidebar-context-menu .v3-segment-nav-item:hover {
+  background: #edf7f1;
+  border-color: #d5e9dd;
+}
+
+.v3-sidebar-context-menu .v3-segment-nav-item.is-active {
+  background: var(--v3-accent);
+  border-color: var(--v3-accent);
+  box-shadow: inset 3px 0 0 #087a4c;
+}
+
+.v3-sidebar-context-menu .v3-segment-nav-item.is-active .v3-segment-nav-head span {
+  color: #fff;
+  font-weight: 700;
+}
+
 .v3-step {
   align-items: center;
   border-radius: 7px;
@@ -4406,6 +4443,39 @@ button {
 
 .v3-accordion-body {
   padding: 13px 16px;
+}
+
+.v3-model-reference-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.v3-model-reference-item {
+  background: var(--v3-bg-table);
+  border: 1px solid var(--v3-border-inner);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+}
+
+.v3-model-reference-item strong {
+  color: var(--v3-text-body);
+  font-family: var(--v3-font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-model-reference-item small {
+  color: var(--v3-text-label);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .v3-keyframe-row {
@@ -6220,6 +6290,68 @@ button {
   flex-direction: column;
   gap: 10px;
   padding: 14px 16px;
+}
+
+.v3-reuse-reason-list {
+  color: var(--v3-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.v3-reuse-reason-list li + li {
+  margin-top: 2px;
+}
+
+.v3-reuse-model-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.v3-reuse-model-toggle {
+  align-items: center;
+  background: var(--v3-bg-table);
+  border: 1px solid var(--v3-border);
+  border-radius: 6px;
+  color: var(--v3-accent-text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  justify-content: space-between;
+  min-height: 27px;
+  padding: 4px 7px;
+  text-align: left;
+  width: 100%;
+}
+
+.v3-reuse-model-toggle:hover {
+  background: var(--v3-accent-bg);
+  border-color: var(--v3-accent);
+}
+
+.v3-reuse-model-list {
+  display: grid;
+  gap: 3px;
+}
+
+.v3-reuse-model-list > span {
+  color: var(--v3-text-secondary);
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-reuse-model-info b {
+  color: var(--v3-accent-text);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 /* E-03 · 5a 자산 그리드에서도 v3-reuse-card를 재사용하며 선택 상태 표시가

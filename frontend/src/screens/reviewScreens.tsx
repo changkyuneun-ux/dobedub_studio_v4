@@ -5,7 +5,8 @@ import {
   AssetItem,
   CollectionSummary,
   TaskPromptReviewFlags,
-  TaskPromptItem
+  TaskPromptItem,
+  TaskModelReference
 } from "../api/client";
 import { StudioRoute } from "../router";
 import { User } from "../auth";
@@ -124,6 +125,7 @@ export function Create3aScreen({
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     assets: true,
     nodeConfig: false,
+    modelInformation: false,
     promptReview: false
   });
   const toggleSection = (key: string) => setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -151,6 +153,8 @@ export function Create3aScreen({
   const nodeConfigSegments = selectedItem?.wanNodeConfig?.segments?.length
     ? selectedItem.wanNodeConfig.segments
     : selectedItem?.segments || [];
+  const modelReferences = uniqueModelReferences(promptReviewItems.flatMap((prompt) => prompt.modelReferences || []));
+  const modelReferenceSource = promptReviewItems.find((prompt) => prompt.modelReferenceSource)?.modelReferenceSource || "unavailable";
 
   return (
     <AppShell
@@ -262,6 +266,43 @@ export function Create3aScreen({
                       </div>
                     );
                   }) : <p className="v3-muted-text">세그먼트 설정 정보가 없습니다.</p>}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Model Information: task submission snapshot only. Prompt Reuse never applies these values. */}
+            <div className="v3-card">
+              <button type="button" className="v3-card-header v3-accordion-header" aria-expanded={openSections.modelInformation} onClick={() => toggleSection("modelInformation")}>
+                <div className="v3-card-header-title">
+                  <span>Model Information</span>
+                  <span className="v3-card-header-meta">{modelReferences.length} selected</span>
+                </div>
+                <span className="v3-accordion-toggle">{openSections.modelInformation ? "−" : "+"}</span>
+              </button>
+              {openSections.modelInformation ? (
+                <div className="v3-accordion-body">
+                  <p className="v3-muted-text" style={{ marginTop: 0 }}>
+                    {modelReferenceSource === "submission_snapshot"
+                      ? "작업 제출 시점의 모델 스냅샷입니다."
+                      : modelReferenceSource === "metadata_json_plus_current_workflow"
+                      ? "저장된 작업 메타데이터를 우선 표시하고, 누락 항목은 현재 워크플로우 메타데이터로 보완했습니다."
+                      : modelReferenceSource === "current_workflow_metadata"
+                      ? "기존 작업에는 실행 스냅샷이 없어 현재 워크플로우 메타데이터를 표시합니다."
+                      : "모델 정보를 찾지 못했습니다."}
+                    {" 프롬프트 재사용 시 이 값은 적용되지 않습니다."}
+                  </p>
+                  {promptReviewLoading ? <p className="v3-muted-text">모델 정보를 불러오는 중입니다...</p> : null}
+                  {modelReferences.length ? (
+                    <div className="v3-model-reference-grid">
+                      {modelReferences.map((reference) => (
+                        <div className="v3-model-reference-item" key={`${reference.bucket}-${reference.nodeId}-${reference.field}-${reference.value}`}>
+                          <span className="v3-label">{modelBucketLabel(reference.bucket)}</span>
+                          <strong title={reference.value}>{reference.value}</strong>
+                          <small>{reference.nodeTitle || reference.classType || "ComfyUI Node"} · {reference.field || "model"}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : !promptReviewLoading ? <p className="v3-muted-text">수집된 Checkpoint, VAE, LoRA, CLIP, UNet 정보가 없습니다.</p> : null}
                 </div>
               ) : null}
             </div>
@@ -398,13 +439,46 @@ export function Create3aScreen({
   );
 }
 
+function uniqueModelReferences(references: TaskModelReference[]): TaskModelReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const key = [reference.bucket, reference.nodeId, reference.field, reference.value].join("\u0000");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function modelBucketLabel(bucket: string): string {
+  const labels: Record<string, string> = {
+    checkpoints: "CHECKPOINT",
+    vae: "VAE",
+    loras: "LORA",
+    text_encoders: "CLIP",
+    unet: "UNET",
+    video_models: "VIDEO MODEL",
+    models: "MODEL"
+  };
+  return labels[bucket] || bucket.toUpperCase();
+}
+
 export const PROMPT_REVIEW_FLAGS: Array<[keyof TaskPromptReviewFlags, string]> = [
-  ["intentMatched", "프롬프트 의도 반영"],
-  ["identityPreserved", "이미지 정체성 유지"],
-  ["naturalMotion", "움직임 자연스러움"],
-  ["noDistortion", "왜곡/깨짐 없음"],
-  ["backgroundStable", "배경 안정성"]
+  ["originalPreserved", "원본 유지"],
+  ["naturalMotion", "자연스런 동작"],
+  ["noDistortion", "왜곡 없음"],
+  ["backgroundStable", "배경 안정"],
+  ["colorStable", "색감 안정"]
 ];
+
+function normalizeReviewFlags(flags: TaskPromptReviewFlags | undefined): TaskPromptReviewFlags {
+  return {
+    originalPreserved: Boolean(flags?.originalPreserved || flags?.intentMatched || flags?.identityPreserved),
+    naturalMotion: Boolean(flags?.naturalMotion),
+    noDistortion: Boolean(flags?.noDistortion),
+    backgroundStable: Boolean(flags?.backgroundStable),
+    colorStable: Boolean(flags?.colorStable)
+  };
+}
 
 // 3f 전용 v3 평가 카드. 구버전 PromptReviewCard/PromptFeedbackCard(E-06에서 제거)와
 // 저장 로직은 동일(B-02: task_prompts ↔ prompt_feedback 역할 분리)하되 v3 토큰으로
@@ -427,7 +501,7 @@ export function V3PromptReviewGroup({
 }) {
   const [rating, setRating] = useState(String(prompt.qualityRating || ""));
   const [reuseEligible, setReuseEligible] = useState(Boolean(prompt.reuseEligible));
-  const [flags, setFlags] = useState<TaskPromptReviewFlags>(prompt.reviewFlags || {});
+  const [flags, setFlags] = useState<TaskPromptReviewFlags>(() => normalizeReviewFlags(prompt.reviewFlags));
   const [comment, setComment] = useState(prompt.qualityComment || "");
   const existingFeedback = prompt.promptFeedback || null;
   const [feedbackRating, setFeedbackRating] = useState(String(existingFeedback?.rating || ""));
@@ -436,14 +510,15 @@ export function V3PromptReviewGroup({
   useEffect(() => {
     setRating(String(prompt.qualityRating || ""));
     setReuseEligible(Boolean(prompt.reuseEligible));
-    setFlags(prompt.reviewFlags || {});
+    setFlags(normalizeReviewFlags(prompt.reviewFlags));
     setComment(prompt.qualityComment || "");
     setFeedbackRating(String(existingFeedback?.rating || ""));
     setFeedbackNotes(existingFeedback?.notes || "");
   }, [prompt.id]);
 
-  const hasReuseReason = Object.values(flags).some(Boolean);
-  const saveDisabled = loading || !canReview || (reuseEligible && !hasReuseReason);
+  const hasReviewReason = PROMPT_REVIEW_FLAGS.some(([key]) => Boolean(flags[key]));
+  const hasComment = Boolean(comment.trim());
+  const saveDisabled = loading || !canReview || !rating || (!hasReviewReason && !hasComment);
 
   return (
     <div className="v3-review-card">
@@ -452,6 +527,7 @@ export function V3PromptReviewGroup({
         <span className="v3-card-header-meta">{rating ? "reviewed" : "unreviewed"}</span>
       </div>
       <div className="v3-prompt-text-block">{prompt.positivePrompt || "-"}</div>
+      <div className="v3-label">평가 등급 · 필수</div>
       <div className="v3-rating-row">
         {[1, 2, 3, 4, 5].map((value) => (
           <button
@@ -464,6 +540,8 @@ export function V3PromptReviewGroup({
           </button>
         ))}
       </div>
+      {!rating ? <p className="v3-inline-notice">평가 등급을 선택하세요.</p> : null}
+      <div className="v3-label">평가 사유</div>
       <div className="v3-term-chip-row">
         {PROMPT_REVIEW_FLAGS.map(([key, label]) => (
           <button
@@ -480,7 +558,7 @@ export function V3PromptReviewGroup({
         <input type="checkbox" checked={reuseEligible} onChange={(event) => setReuseEligible(event.target.checked)} style={{ marginRight: 4 }} />
         재사용 가능 — Prompt Library에 등록
       </label>
-      {reuseEligible && !hasReuseReason ? <p className="v3-inline-notice">재사용 가능으로 저장하려면 사유를 하나 이상 선택하세요.</p> : null}
+      {!hasReviewReason && !hasComment ? <p className="v3-inline-notice">평가 사유를 하나 이상 선택하거나 코멘트를 입력하세요.</p> : null}
       <textarea className="v3-scene-textarea" rows={2} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="품질 판단, 재사용 조건, 보완점" />
       <button
         className="v3-primary-button"
@@ -567,8 +645,10 @@ export function Create4cScreen({
   onPageChange: (page: number) => void;
   onApply: (prompt: TaskPromptItem) => void;
 }) {
+  const [expandedModelPromptIds, setExpandedModelPromptIds] = useState<Record<number, boolean>>({});
+
   function reviewReasons(prompt: TaskPromptItem) {
-    const flags = prompt.reviewFlags || {};
+    const flags = normalizeReviewFlags(prompt.reviewFlags);
     return PROMPT_REVIEW_FLAGS.filter(([key]) => Boolean(flags[key])).map(([, label]) => label);
   }
 
@@ -579,7 +659,7 @@ export function Create4cScreen({
   // 네거티브 프롬프트/사유/코멘트/레이팅/생성자/모델명 9개로 재구성. "적용"은
   // 한 번 컬럼을 없애고 행 클릭으로 대체했다가, 사용자 요청으로 다시 버튼
   // 컬럼으로 복구했다.
-  const gridColumns = "108px 172px minmax(0,1.3fr) minmax(0,1fr) 108px 130px 54px 88px 108px 64px";
+  const gridColumns = "108px 172px minmax(0,1.3fr) minmax(0,1fr) 140px 130px 54px 88px minmax(160px,0.7fr) 72px";
 
   return (
     <AppShell
@@ -609,7 +689,7 @@ export function Create4cScreen({
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       <div className="v3-card" style={{ overflowX: "auto" }}>
         <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 980 }}>
-          <span>워크플로</span><span>시작 → 다음 이미지</span><span>프롬프트 (Positive)</span><span>프롬프트 (Negative)</span><span>사유</span><span>코멘트</span><span>레이팅</span><span>생성자</span><span>모델명</span><span style={{ textAlign: "right" }}>재사용</span>
+          <span>워크플로</span><span>시작 → 다음 이미지</span><span>프롬프트 (Positive)</span><span>프롬프트 (Negative)</span><span>평가 사유</span><span>코멘트</span><span>레이팅</span><span>생성자</span><span>모델 정보</span><span style={{ textAlign: "center" }}>재사용</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {!loading && !items.length ? (
@@ -619,6 +699,13 @@ export function Create4cScreen({
           const reasons = reviewReasons(prompt);
           const startAsset = (prompt.inputAssets || [])[0];
           const endAsset = (prompt.inputAssets || [])[1];
+          const selectedModelReferences = uniqueModelReferences(prompt.modelReferences || []);
+          const modelReferences = selectedModelReferences.length
+            ? selectedModelReferences
+            : prompt.modelName || prompt.modelProfileId
+            ? [{ bucket: "models", value: prompt.modelName || prompt.modelProfileId || "-" }]
+            : [];
+          const isModelInfoExpanded = Boolean(expandedModelPromptIds[prompt.id]);
           return (
             <div
               className="v3-review-table-row"
@@ -643,10 +730,9 @@ export function Create4cScreen({
               </span>
               <span>
                 {reasons.length ? (
-                  <span className="v3-term-chip-row">
-                    <span className="v3-term-chip is-selected">{reasons[0]}</span>
-                    {reasons.length > 1 ? <span className="v3-muted-text">+{reasons.length - 1}</span> : null}
-                  </span>
+                  <ol className="v3-reuse-reason-list">
+                    {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                  </ol>
                 ) : (
                   <span className="v3-muted-text">사유 없음</span>
                 )}
@@ -663,11 +749,32 @@ export function Create4cScreen({
               <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prompt.createdBy || "-"}>
                 {prompt.createdBy || "-"}
               </span>
-              <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prompt.modelName || prompt.modelProfileId || "-"}>
-                {prompt.modelName || prompt.modelProfileId || "-"}
+              <span className="v3-reuse-model-info">
+                {modelReferences.length ? (
+                  <>
+                    <button
+                      className="v3-reuse-model-toggle"
+                      type="button"
+                      aria-expanded={isModelInfoExpanded}
+                      onClick={() => setExpandedModelPromptIds((current) => ({ ...current, [prompt.id]: !current[prompt.id] }))}
+                    >
+                      <span>모델 {modelReferences.length}개</span>
+                      <span aria-hidden="true">{isModelInfoExpanded ? "−" : "+"}</span>
+                    </button>
+                    {isModelInfoExpanded ? (
+                      <span className="v3-reuse-model-list">
+                        {modelReferences.map((reference) => (
+                          <span key={`${reference.bucket}-${reference.nodeId}-${reference.field}-${reference.value}`} title={`${modelBucketLabel(reference.bucket)}: ${reference.value}`}>
+                            <b>{modelBucketLabel(reference.bucket)}</b> {reference.value}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
+                  </>
+                ) : <span className="v3-muted-text">-</span>}
               </span>
-              <span style={{ textAlign: "right" }}>
-                <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>프롬프트 재사용</button>
+              <span style={{ textAlign: "center" }}>
+                <button className="v3-text-link-button" type="button" onClick={() => onApply(prompt)}>재사용</button>
               </span>
             </div>
           );
@@ -774,7 +881,7 @@ export function Create5aScreen({
       headerEyebrow="ASSETS"
       headerTitle={`Asset 관리 · 전체 ${total}개`}
       sidebarExtra={
-        <div className="v3-step-tracker">
+        <div className="v3-step-tracker v3-sidebar-context-menu">
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>COLLECTION · {collections.length}</div>
           <button
             type="button"

@@ -421,7 +421,7 @@ export function Create6dScreen({
         </>
       }
       sidebarExtra={
-        <div className="v3-step-tracker">
+        <div className="v3-step-tracker v3-sidebar-context-menu">
           {/* 2026-08-12: 사용자 요청 - sidebarExtra 표준화, 라벨 없던 화면에 추가 */}
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>METADATA · {METADATA_TABS.length}</div>
           {METADATA_TABS.map(([tab, label]) => (

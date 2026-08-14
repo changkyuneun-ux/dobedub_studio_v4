@@ -66,9 +66,21 @@ def update_job_prompt_quality(task_id: str, segment_index: int, payload: dict, _
 
 
 @router.patch("/{task_id}/prompts/{segment_index}/review")
-def update_job_prompt_review(task_id: str, segment_index: int, payload: dict, _: CurrentUser = Depends(require_permission("prompts:review"))):
+def update_job_prompt_review(
+    task_id: str,
+    segment_index: int,
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("prompts:review")),
+):
     try:
-        return studio_api_service.update_job_prompt_review(task_id, segment_index, payload)
+        # 평가자는 브라우저가 아닌 인증된 서버 세션으로 확정한다. 클라이언트가
+        # reviewedBy/userId를 임의로 보내도 다른 사용자 이름으로 저장되지 않는다.
+        review_payload = {
+            **(payload if isinstance(payload, dict) else {}),
+            "reviewedBy": current_user.name or current_user.id,
+            "userId": current_user.id,
+        }
+        return studio_api_service.update_job_prompt_review(task_id, segment_index, review_payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Job prompt not found: {task_id}/{segment_index}") from exc
     except (TypeError, ValueError) as exc:

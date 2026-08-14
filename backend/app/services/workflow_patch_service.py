@@ -315,4 +315,7 @@ def prepare_workflow_for_job(
 
     patch_summary["nodeConfig"] = apply_node_config_to_workflow(workflow, workflow_id, segment_payloads, workflows_dir)
     patch_summary["seed"] = apply_automatic_generation_seed(workflow, segments)
+    # 실행 제출 직전의 워크플로우에서 선택된 모델 파일만 스냅샷한다. 메타데이터
+    # 카탈로그의 전체 옵션과 달리 이 값은 task_id의 재현/조회 전용이다.
+    patch_summary["modelReferences"] = metadata_loader.workflow_model_reference_items(workflow)
     return workflow, images, patch_summary
