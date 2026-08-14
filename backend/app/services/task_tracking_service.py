@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from backend.app.core.timezone_utils import epoch_to_seoul_naive, format_seoul_datetime, now_seoul_naive, seoul_naive_to_epoch
 from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
@@ -336,7 +337,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
             if output_assets
             else ""
         )
-        created_at = task.created_at.timestamp() if task.created_at else datetime.utcnow().timestamp()
+        created_at = seoul_naive_to_epoch(task.created_at) if task.created_at else seoul_naive_to_epoch(now_seoul_naive())
         return {
             "taskId": task.id,
             "runpodJobId": task.runpod_job_id or "",
@@ -411,7 +412,7 @@ def update_task_prompt_quality(task_id: str, segment_index: int, payload: dict) 
         rating = payload.get("qualityRating")
         row.quality_rating = None if rating in (None, "") else max(1, min(5, int(rating)))
         row.quality_comment = str(payload.get("qualityComment") or payload.get("comment") or "").strip() or None
-        row.updated_at = datetime.utcnow()
+        row.updated_at = now_seoul_naive()
         session.commit()
         feedback_by_output_id = _prompt_feedback_by_output_id(session, [row.prompt_generation_output_id])
         return _task_prompt_to_json(row, feedback_by_output_id=feedback_by_output_id)
@@ -578,7 +579,7 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
         raise ValueError("job.taskId is required")
 
     task = session.get(WorkflowTask, task_id)
-    now = datetime.utcnow()
+    now = now_seoul_naive()
     if not task:
         task = WorkflowTask(id=task_id, created_at=_from_epoch(job.get("createdAt")) or now, updated_at=now)
         session.add(task)
@@ -720,7 +721,7 @@ def _sync_task_prompt_outputs(session: Session, task: WorkflowTask, job: dict) -
             and asset.get("assetId")
         ]
         prompt.output_asset_ids = segment_ids or final_ids
-        prompt.updated_at = datetime.utcnow()
+        prompt.updated_at = now_seoul_naive()
 
 
 def _ensure_user(session: Session, user_payload: dict) -> User | None:
@@ -730,7 +731,7 @@ def _ensure_user(session: Session, user_payload: dict) -> User | None:
     user = session.get(User, user_id)
     is_new_user = user is None
     if not user:
-        user = User(id=user_id, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+        user = User(id=user_id, created_at=now_seoul_naive(), updated_at=now_seoul_naive())
         session.add(user)
     user.name = user_payload.get("name") or user_id
     user.email = user_payload.get("email")
@@ -742,7 +743,7 @@ def _ensure_user(session: Session, user_payload: dict) -> User | None:
     if is_new_user:
         user.role = user_payload.get("role") or "OPERATOR"
         user.permissions_json = user_payload.get("permissions") or []
-    user.updated_at = datetime.utcnow()
+    user.updated_at = now_seoul_naive()
     return user
 
 
@@ -783,7 +784,7 @@ def _ensure_asset(
         for key, value in payload.items()
         if key not in {"assetId", "id", "type", "assetType", "fileName", "filename", "mimeType", "sizeBytes", "path", "storageKey", "storageBackend", "publicUrl", "createdAt"}
     }
-    asset.created_at = _parse_datetime(payload.get("createdAt")) or asset.created_at or datetime.utcnow()
+    asset.created_at = _parse_datetime(payload.get("createdAt")) or asset.created_at or now_seoul_naive()
     return asset
 
 
@@ -826,14 +827,14 @@ def _elapsed_seconds(job: dict) -> int | None:
     if job.get("createdAt") is None:
         return None
     try:
-        return max(0, int(datetime.utcnow().timestamp() - float(job["createdAt"])))
+        return max(0, int(seoul_naive_to_epoch(now_seoul_naive()) - float(job["createdAt"])))
     except (TypeError, ValueError):
         return None
 
 
 def _from_epoch(value: Any) -> datetime | None:
     try:
-        return datetime.fromtimestamp(float(value))
+        return epoch_to_seoul_naive(float(value))
     except (TypeError, ValueError):
         return None
 
@@ -989,7 +990,7 @@ def _history_status_label(status: Any) -> str:
 
 
 def _format_datetime(value: datetime | None) -> str:
-    return (value or datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S")
+    return format_seoul_datetime(value)
 
 
 def _task_prompt_to_json(
@@ -1132,8 +1133,8 @@ def _apply_prompt_review(row: TaskPrompt, payload: dict) -> None:
         raise ValueError("평가 사유를 하나 이상 선택하거나 코멘트를 입력하세요.")
     row.review_status = "reviewed"
     row.reviewed_by = str(payload.get("reviewedBy") or payload.get("userId") or "").strip() or row.reviewed_by
-    row.reviewed_at = datetime.utcnow() if row.review_status == "reviewed" else None
-    row.updated_at = datetime.utcnow()
+    row.reviewed_at = now_seoul_naive() if row.review_status == "reviewed" else None
+    row.updated_at = now_seoul_naive()
 
 
 def _prompt_assets(asset_ids: list, assets_by_id: dict[str, dict] | None) -> list[dict]:

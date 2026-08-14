@@ -3,8 +3,9 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Callable
+
+from backend.app.core.timezone_utils import now_seoul_naive
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
@@ -54,7 +55,8 @@ def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
 
 
 def create_job(runtime: JobRuntime, payload: dict) -> dict:
-    task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    now_seoul = now_seoul_naive()
+    task_id = f"task_{now_seoul.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     now = time.time()
     workflow_id = payload.get("workflowId") or "unknown"
     segments = payload.get("segments") or []
@@ -81,7 +83,7 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
         "status": "queued",
         "progress": 0,
         "createdAt": now,
-        "startedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "startedAt": now_seoul.strftime("%Y-%m-%d %H:%M:%S"),
         "payload": payload,
         "firstConfig": first_config,
         "generationSeed": generation_seed_from_patch_summary(runpod_data.get("patchSummary")),
@@ -148,7 +150,7 @@ def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
     job["status"] = "CANCELLED"
     job["progress"] = 100
     job["cancelRequested"] = True
-    job["cancelledAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    job["cancelledAt"] = now_seoul_naive().strftime("%Y-%m-%d %H:%M:%S")
     job["runpodCancel"] = cancel_response
     job["runpodStatus"] = {"status": "CANCELLED", "cancel": cancel_response}
     job["historySaved"] = True
