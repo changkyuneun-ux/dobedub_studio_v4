@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.app.core.security import CurrentUser, create_access_token, current_user_from_headers
+from backend.app.core.security import ASSET_SESSION_COOKIE, CurrentUser, create_access_token, current_user_from_headers
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 from backend.app.services.admin_service import admin_login, admin_user_payload
@@ -17,13 +17,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # 사용자 요청으로 제거했다 - 감사 로그는 "어드민 정보 수정사항"만 남기기로
 # 범위를 좁혔고, 로그인 자체는 정보 변경이 아니다. 기존에 쌓여 있던 login
 # 레코드는 마이그레이션 20260812_0018로 별도 삭제했다.
-def login(payload: dict, db: Session = Depends(get_db)):
+def login(payload: dict, request: Request, response: Response, db: Session = Depends(get_db)):
     try:
         result = admin_login(db, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Login failed: {exc}") from exc
+    _set_asset_session_cookie(response, str(result.get("accessToken") or ""), request)
     return result
 
 
@@ -43,7 +44,7 @@ def session(current_user: CurrentUser = Depends(current_user_from_headers), db: 
 # 만료/위조 토큰을 401로 막는다) 같은 사용자에게 새 만료시각의 토큰을 재발급한다.
 # 응답 형태는 login과 동일(user, accessToken, expiresAt) - 프론트가 세션을 그대로
 # 교체하면 된다. 비활성화된 사용자는 연장하지 않는다.
-def refresh(current_user: CurrentUser = Depends(current_user_from_headers), db: Session = Depends(get_db)):
+def refresh(request: Request, response: Response, current_user: CurrentUser = Depends(current_user_from_headers), db: Session = Depends(get_db)):
     user = db.get(User, current_user.id)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -51,6 +52,27 @@ def refresh(current_user: CurrentUser = Depends(current_user_from_headers), db: 
         raise HTTPException(status_code=403, detail="User is inactive")
     try:
         payload = admin_user_payload(db, user)
-        return {"user": payload, **create_access_token(payload)}
+        result = {"user": payload, **create_access_token(payload)}
+        _set_asset_session_cookie(response, str(result.get("accessToken") or ""), request)
+        return result
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Session refresh failed: {exc}") from exc
+
+
+@router.post("/logout", status_code=204)
+def logout(response: Response):
+    response.delete_cookie(ASSET_SESSION_COOKIE, path="/api/files", httponly=True, samesite="lax")
+
+
+def _set_asset_session_cookie(response: Response, access_token: str, request: Request) -> None:
+    if not access_token:
+        return
+    host = (request.url.hostname or "").lower()
+    response.set_cookie(
+        key=ASSET_SESSION_COOKIE,
+        value=access_token,
+        httponly=True,
+        secure=host not in {"localhost", "127.0.0.1", "::1"},
+        samesite="lax",
+        path="/api/files",
+    )

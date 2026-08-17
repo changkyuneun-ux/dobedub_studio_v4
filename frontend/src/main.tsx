@@ -111,6 +111,8 @@ function App() {
   }
 
   function handleLogout() {
+    // The asset-session cookie is HttpOnly and must be cleared by the server.
+    void apiClient.logout().catch(() => undefined);
     clearLoginSession();
     setUser(null);
     setSessionExpiresAt(undefined);

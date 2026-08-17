@@ -1,47 +1,15 @@
-import { useEffect, useState } from "react";
-import { apiClient } from "../api/client";
+import { useEffect, useRef, useState } from "react";
 
 export function useProtectedAssetUrl(rawUrl: string): string {
-  const [mediaUrl, setMediaUrl] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    let objectUrl = "";
-    if (!rawUrl) {
-      setMediaUrl("");
-      return undefined;
-    }
-    if (!rawUrl.startsWith("/api/files/")) {
-      setMediaUrl(rawUrl);
-      return undefined;
-    }
-    apiClient.assetBlob(rawUrl)
-      .then((blob) => {
-        if (!active) {
-          return;
-        }
-        objectUrl = URL.createObjectURL(blob);
-        setMediaUrl(objectUrl);
-      })
-      .catch(() => {
-        if (active) {
-          setMediaUrl("");
-        }
-      });
-    return () => {
-      active = false;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-    };
-  }, [rawUrl]);
-
-  return mediaUrl;
+  // Login creates a HttpOnly cookie scoped to /api/files. Native image/video
+  // requests then retain browser caching and video byte-range streaming
+  // without loading each source file into a JavaScript Blob first.
+  return rawUrl;
 }
 
 export function ProtectedImage({ src, alt }: { src: string; alt: string }) {
   const mediaUrl = useProtectedAssetUrl(src);
-  return mediaUrl ? <img src={mediaUrl} alt={alt} /> : null;
+  return mediaUrl ? <img src={mediaUrl} alt={alt} decoding="async" loading="lazy" /> : null;
 }
 
 // 2026-08-12: "미리보기" 열 썸네일에 이미지만 있고 영상은 텍스트 배지("MP4" 등)만
@@ -52,7 +20,32 @@ export function ProtectedImage({ src, alt }: { src: string; alt: string }) {
 // 모달을 연다 - 이 컴포넌트 자체는 클릭 핸들러를 갖지 않는다).
 export function ProtectedVideoThumb({ src, alt }: { src: string; alt: string }) {
   const mediaUrl = useProtectedAssetUrl(src);
-  return mediaUrl ? <video src={mediaUrl} muted playsInline preload="metadata" aria-label={alt} /> : null;
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isNearViewport, setIsNearViewport] = useState(false);
+
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element || !mediaUrl) {
+      return undefined;
+    }
+    if (typeof IntersectionObserver === "undefined") {
+      setIsNearViewport(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setIsNearViewport(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "240px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [mediaUrl]);
+
+  return mediaUrl ? <video ref={videoRef} src={isNearViewport ? mediaUrl : undefined} muted playsInline preload="metadata" aria-label={alt} /> : null;
 }
 
 export function ProtectedAssetPreview({ src, isVideo, alt }: { src: string; isVideo?: boolean; alt: string }) {
@@ -62,5 +55,5 @@ export function ProtectedAssetPreview({ src, isVideo, alt }: { src: string; isVi
   }
   return isVideo
     ? <video src={mediaUrl} controls playsInline preload="metadata" />
-    : <img src={mediaUrl} alt={alt} />;
+    : <img src={mediaUrl} alt={alt} decoding="async" />;
 }

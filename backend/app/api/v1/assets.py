@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import mimetypes
+from email.utils import formatdate
+from pathlib import Path
+from typing import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from backend.app.core.security import CurrentUser, require_any_permission, require_permission
+from backend.app.core.security import CurrentUser, current_user_from_asset_session, has_permission, require_permission
 from backend.app.services import studio_api_service
 
 router = APIRouter(tags=["assets"])
@@ -59,7 +62,14 @@ def create_upload(payload: dict, _: CurrentUser = Depends(require_permission("jo
 
 
 @router.get("/files/{asset_id}")
-def get_file(asset_id: str, request: Request, download: str = "0", _: CurrentUser = Depends(require_any_permission(("jobs:run", "history:read")))):
+def get_file(
+    asset_id: str,
+    request: Request,
+    download: str = "0",
+    current_user: CurrentUser = Depends(current_user_from_asset_session),
+):
+    if not any(has_permission(current_user.permissions, permission) for permission in ("jobs:run", "history:read")):
+        raise HTTPException(status_code=403, detail="One of permissions is required: jobs:run, history:read")
     try:
         asset, asset_path = studio_api_service.get_asset(asset_id)
     except KeyError as exc:
@@ -68,15 +78,27 @@ def get_file(asset_id: str, request: Request, download: str = "0", _: CurrentUse
         raise HTTPException(status_code=404, detail=f"File not found: {asset_id}") from exc
 
     content_type = asset.get("mimeType") or mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
-    file_size = asset_path.stat().st_size
+    stat_result = asset_path.stat()
+    file_size = stat_result.st_size
     file_name = str(asset.get("fileName") or asset_path.name).replace('"', "")
     disposition = "attachment" if download == "1" else "inline"
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        # Keep an authenticated browser cache, but require validation before
+        # reuse. This avoids serving a previously cached asset after logout
+        # while still allowing a cheap 304 response instead of retransferring
+        # a large EFS-backed video.
+        "Cache-Control": "private, no-cache",
+        "ETag": f'W/"{file_size:x}-{stat_result.st_mtime_ns:x}"',
+        "Last-Modified": formatdate(stat_result.st_mtime, usegmt=True),
     }
     range_header = request.headers.get("range", "")
+    if not range_header and _etag_matches(request.headers.get("if-none-match", ""), headers["ETag"]):
+        return Response(status_code=304, headers=headers)
     if range_header.startswith("bytes="):
+        if file_size <= 0:
+            return Response(status_code=416, headers={**headers, "Content-Range": "bytes */0"})
         start_text, _, end_text = range_header.removeprefix("bytes=").partition("-")
         try:
             start = int(start_text) if start_text else 0
@@ -86,10 +108,31 @@ def get_file(asset_id: str, request: Request, download: str = "0", _: CurrentUse
         except ValueError:
             start, end = 0, file_size - 1
         length = end - start + 1
-        with asset_path.open("rb") as stream:
-            stream.seek(start)
-            data = stream.read(length)
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-        return Response(data, status_code=206, media_type=content_type, headers=headers)
+        headers["Content-Length"] = str(length)
+        return StreamingResponse(
+            _iter_file_range(asset_path, start=start, length=length),
+            status_code=206,
+            media_type=content_type,
+            headers=headers,
+        )
 
-    return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers)
+    return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers, stat_result=stat_result)
+
+
+def _iter_file_range(path: Path, *, start: int, length: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    """Stream a byte range without buffering a large EFS-backed video."""
+    remaining = length
+    with path.open("rb") as stream:
+        stream.seek(start)
+        while remaining > 0:
+            chunk = stream.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _etag_matches(if_none_match: str, etag: str) -> bool:
+    """Return whether an If-None-Match header contains this asset ETag."""
+    return if_none_match.strip() == "*" or etag in {item.strip() for item in if_none_match.split(",")}

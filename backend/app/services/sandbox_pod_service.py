@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 from backend.app.core.config import Settings
-from backend.app.core.timezone_utils import SEOUL_TIMEZONE, timestamp_fields
+from backend.app.core.timezone_utils import UTC_TIMEZONE, parse_timestamp, timestamp_fields, utc_now
 
 
 def sandbox_pod_is_configured(settings: Settings) -> bool:
@@ -35,7 +37,7 @@ def start_sandbox_pod(settings: Settings) -> dict:
     if str(pod.get("desiredStatus") or "").upper() in {"EXITED", "TERMINATED"}:
         return _deploy_sandbox_pod(settings)
     response = _request(settings, "POST", f"/pods/{pod['id']}/start")
-    status = _present_pod(settings, response or pod, resolved_by)
+    status = _present_pod(settings, _hydrate_pod(settings, response or pod, strict=False), resolved_by)
     status["message"] = "Sandbox Pod 시작을 요청했습니다. RUNNING 상태와 HTTP 서비스 준비 여부를 새로고침으로 확인하세요."
     return status
 
@@ -44,7 +46,7 @@ def stop_sandbox_pod(settings: Settings) -> dict:
     _require_configuration(settings)
     pod, resolved_by = _resolve_pod(settings)
     response = _request(settings, "POST", f"/pods/{pod['id']}/stop")
-    status = _present_pod(settings, response or pod, resolved_by)
+    status = _present_pod(settings, _hydrate_pod(settings, response or pod, strict=False), resolved_by)
     status["message"] = "Sandbox Pod 중지를 요청했습니다."
     return status
 
@@ -140,7 +142,27 @@ def _resolve_pod(settings: Settings) -> tuple[dict, str]:
         ("template-id", template_id),
         ("pod-name-prefix", pod_name_prefix if not (volume_id or template_id) else ""),
     ) if value)
-    return candidates[0], resolved_by
+    # The list response is sufficient to select the migration-safe Pod, but it
+    # does not consistently include lifecycle fields such as lastStartedAt.
+    # Always hydrate the chosen Pod from its detail endpoint before presenting
+    # its operational status.
+    return _hydrate_pod(settings, candidates[0]), resolved_by
+
+
+def _hydrate_pod(settings: Settings, pod: dict, *, strict: bool = True) -> dict:
+    pod_id = str(pod.get("id") or "").strip()
+    if not pod_id:
+        return pod
+    try:
+        detail = _request(settings, "GET", f"/pods/{pod_id}")
+    except RuntimeError:
+        if strict:
+            raise
+        return pod
+    if not isinstance(detail, dict):
+        return pod
+    # Keep list-only values when a detail response omits an optional field.
+    return {**pod, **{key: value for key, value in detail.items() if value is not None}}
 
 
 def _most_recent_pod(pods: list[dict]) -> dict:
@@ -210,6 +232,8 @@ def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
         message = "Sandbox Pod는 실행 중이며 ComfyUI HTTP 8188 서비스 준비를 확인 중입니다. 잠시 후 Refresh Status를 누르세요."
     else:
         message = "Sandbox Pod 상태를 조회했습니다."
+    lifecycle_event = str(pod.get("lastStatusChange") or "").strip() or None
+    lifecycle_event_at = _lifecycle_event_timestamp(lifecycle_event)
     return {
         "configured": True,
         "podId": pod_id,
@@ -217,27 +241,59 @@ def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
         "resolvedBy": resolved_by,
         "desiredStatus": status,
         "runtimeStatus": runtime_status,
-        # RunPod Pod lifecycle timestamps are provided in KST by the configured
-        # sandbox environment. Preserve their raw source timezone while also
-        # returning a UTC equivalent for operations and audit comparison.
+        # RunPod's Pod API documents lastStartedAt as UTC. Explicit offsets in
+        # the source still take precedence in timestamp_fields.
         **timestamp_fields(
             "lastStartedAt",
             pod.get("lastStartedAt"),
-            naive_timezone=SEOUL_TIMEZONE,
-            source_timezone="Asia/Seoul",
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
             source="runpod-sandbox",
         ),
         **timestamp_fields(
             "lastStatusChange",
-            pod.get("lastStatusChange"),
-            naive_timezone=SEOUL_TIMEZONE,
-            source_timezone="Asia/Seoul",
-            source="runpod-sandbox",
+            lifecycle_event_at,
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="runpod-sandbox-lifecycle-event",
+        ),
+        "lastLifecycleEvent": lifecycle_event,
+        **timestamp_fields(
+            "checkedAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="ecs-application",
         ),
         "locked": bool(pod.get("locked")),
         "httpServices": services,
         "message": message,
     }
+
+
+def _lifecycle_event_timestamp(value: str | None) -> datetime | None:
+    """Extract a timestamp from RunPod's descriptive lifecycle event safely.
+
+    `lastStatusChange` is not a guaranteed timestamp field. Current RunPod
+    responses use strings such as ``Rented by User: Fri Aug 07 2026 07:51:24
+    GMT+0000 (...)``. We only normalize the date when it can be parsed; the
+    original event text remains available to the UI either way.
+    """
+    if not value:
+        return None
+    parsed = parse_timestamp(value, naive_timezone=UTC_TIMEZONE)
+    if parsed is not None:
+        return parsed
+    matched = re.search(
+        r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}",
+        value,
+    )
+    if not matched:
+        return None
+    try:
+        return datetime.strptime(matched.group(0), "%a %b %d %Y %H:%M:%S GMT%z")
+    except ValueError:
+        return None
 
 
 def _runtime_status(settings: Settings, pod_id: str, desired_status: str, services: list[dict]) -> str:

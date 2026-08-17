@@ -525,7 +525,9 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
             <div className="v3-summary-row"><span>Status</span><strong>{sandboxPod.desiredStatus || "UNKNOWN"}</strong></div>
             <div className="v3-summary-row"><span>Service Status</span><strong>{sandboxPod.runtimeStatus || "NOT CHECKED"}</strong></div>
             <div className="v3-summary-row"><span>Last Started</span><strong>{formatTimestamp(sandboxPod.lastStartedAtKst || sandboxPod.lastStartedAt, sandboxPod.lastStartedAtUtc).replace(/\n/g, " ")}</strong></div>
-            <div className="v3-summary-row"><span>Last Status Change</span><strong>{formatTimestamp(sandboxPod.lastStatusChangeKst || sandboxPod.lastStatusChange, sandboxPod.lastStatusChangeUtc).replace(/\n/g, " ")}</strong></div>
+            <div className="v3-summary-row"><span>Lifecycle Event Time</span><strong>{formatTimestamp(sandboxPod.lastStatusChangeKst || sandboxPod.lastStatusChange, sandboxPod.lastStatusChangeUtc).replace(/\n/g, " ")}</strong></div>
+            <div className="v3-summary-row"><span>Last Lifecycle Event</span><strong>{sandboxPod.lastLifecycleEvent || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Status Checked</span><strong>{formatTimestamp(sandboxPod.checkedAtKst || sandboxPod.checkedAt, sandboxPod.checkedAtUtc).replace(/\n/g, " ")}</strong></div>
           </div>
         ) : null}
       </div>

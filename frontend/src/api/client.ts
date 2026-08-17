@@ -196,6 +196,10 @@ export type SandboxPodStatus = {
   lastStatusChange?: string | null;
   lastStatusChangeUtc?: string | null;
   lastStatusChangeKst?: string | null;
+  lastLifecycleEvent?: string | null;
+  checkedAt?: string | null;
+  checkedAtUtc?: string | null;
+  checkedAtKst?: string | null;
   locked?: boolean;
   httpServices: Array<{
     internalPort: number;
@@ -807,6 +811,12 @@ async function requestBlob(path: string): Promise<Blob> {
 
 export const apiClient = {
   assetBlob: (path: string) => requestBlob(path),
+  logout: async () => {
+    const response = await fetch(`${API_BASE}/auth/logout`, { method: "POST" });
+    if (!response.ok) {
+      throw new Error(friendlyApiErrorMessage(await response.text(), response, "/api/auth/logout"));
+    }
+  },
   health: () => requestJson<HealthResponse>("/api/health"),
   systemStatus: () => requestJson<SystemStatusResponse>("/api/system/status"),
   runpodConnection: () => requestJson<RunpodConnectionResponse>("/api/runpod/connection"),
