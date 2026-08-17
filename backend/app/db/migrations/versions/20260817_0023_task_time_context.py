@@ -26,10 +26,18 @@ def _columns() -> set[str]:
 
 def upgrade() -> None:
     if "time_context_json" not in _columns():
+        # MySQL does not permit server defaults on JSON columns. Add the
+        # nullable column first, backfill existing rows, then enforce it.
         op.add_column(
             "workflow_tasks",
-            sa.Column("time_context_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+            sa.Column("time_context_json", sa.JSON(), nullable=True),
         )
+        op.execute("UPDATE workflow_tasks SET time_context_json = '{}' WHERE time_context_json IS NULL")
+        if op.get_bind().dialect.name == "sqlite":
+            with op.batch_alter_table("workflow_tasks") as batch_op:
+                batch_op.alter_column("time_context_json", existing_type=sa.JSON(), nullable=False)
+        else:
+            op.alter_column("workflow_tasks", "time_context_json", existing_type=sa.JSON(), nullable=False)
 
 
 def downgrade() -> None:
