@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.core.security import create_access_token, ensure_admin_user, hash_password, normalize_permissions, normalize_role, user_payload
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import User
 from backend.app.services.metadata_loader import ensure_metadata_current, read_json_if_exists
 from backend.app.services.metadata_service import metadata_paths
@@ -72,7 +73,7 @@ def upsert_admin_user(session: Session, payload: dict, user_id: str | None = Non
     password = str(payload.get("password") or "").strip()
     if password:
         user.password_hash = hash_password(password)
-    user.updated_at = datetime.utcnow()
+    user.updated_at = utc_now().replace(tzinfo=None)
     session.commit()
     return {"user": admin_user_payload(session, user), **list_admin_users(session)}
 
@@ -84,7 +85,7 @@ def deactivate_admin_user(session: Session, user_id: str) -> dict:
     if user.id == "dobedub":
         raise ValueError("Default super admin cannot be deactivated")
     user.is_active = False
-    user.updated_at = datetime.utcnow()
+    user.updated_at = utc_now().replace(tzinfo=None)
     session.commit()
     return list_admin_users(session)
 
@@ -97,7 +98,7 @@ def reset_admin_user_password(session: Session, user_id: str, password: str) -> 
     if not user:
         raise ValueError("User not found")
     user.password_hash = hash_password(cleaned_password)
-    user.updated_at = datetime.utcnow()
+    user.updated_at = utc_now().replace(tzinfo=None)
     session.commit()
     return {"user": admin_user_payload(session, user)}
 
@@ -117,8 +118,8 @@ def admin_login(session: Session, payload: dict) -> dict:
         from backend.app.core.security import verify_password
         if not verify_password(password, user.password_hash):
             raise ValueError("Invalid credentials")
-    user.last_login_at = datetime.utcnow()
-    user.updated_at = datetime.utcnow()
+    user.last_login_at = utc_now().replace(tzinfo=None)
+    user.updated_at = utc_now().replace(tzinfo=None)
     session.commit()
     payload = admin_user_payload(session, user)
     return {"user": payload, **create_access_token(payload)}
@@ -238,8 +239,8 @@ def list_admin_workflows() -> dict:
             "active": bool(meta.get("active", True)),
             "status": meta.get("status") or ("ACTIVE" if meta.get("active", True) else "INACTIVE"),
             "description": meta.get("description") or "",
-            "registeredAt": meta.get("registeredAt"),
-            "updatedAt": meta.get("updatedAt"),
+            **timestamp_fields("registeredAt", meta.get("registeredAt"), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="workflow-registry"),
+            **timestamp_fields("updatedAt", meta.get("updatedAt"), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="workflow-registry"),
             "fileExists": path.exists(),
             "paramConfigExists": param_path.exists(),
             "paramConfigGenerated": bool(meta.get("paramConfigGenerated")),
@@ -273,7 +274,7 @@ def register_admin_workflow(payload: dict) -> dict:
         param_config_generated = True
     registry = load_workflow_registry()
     items = registry.setdefault("items", {})
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat().replace("+00:00", "Z")
     existing = dict(items.get(workflow_id) or {})
     items[workflow_id] = {
         **existing,
@@ -312,7 +313,7 @@ def set_admin_workflow_active(workflow_id: str, active: bool) -> dict:
     item = dict(items.get(workflow_id) or {})
     item["active"] = bool(active)
     item["status"] = "ACTIVE" if active else "INACTIVE"
-    item["updatedAt"] = datetime.utcnow().isoformat()
+    item["updatedAt"] = utc_now().isoformat().replace("+00:00", "Z")
     item.setdefault("registeredAt", item["updatedAt"])
     items[workflow_id] = item
     save_workflow_registry(registry)

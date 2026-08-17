@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import func, select
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import Asset, Collection, CollectionItem
 from backend.app.db.session import SessionLocal
-from backend.app.services.task_tracking_service import _asset_to_json, _format_datetime
+from backend.app.services.task_tracking_service import _asset_to_json
 
 
 class CollectionNotEmptyError(ValueError):
@@ -23,7 +22,7 @@ def _collection_payload(collection: Collection, item_count: int) -> dict:
         "id": collection.id,
         "name": collection.name,
         "createdBy": collection.created_by,
-        "createdAt": _format_datetime(collection.created_at),
+        **timestamp_fields("createdAt", collection.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="collection"),
         "itemCount": item_count,
     }
 
@@ -57,7 +56,7 @@ def create_collection(name: str, created_by: str | None = None) -> dict:
         raise ValueError("name is required")
     session = SessionLocal()
     try:
-        collection = Collection(name=clean_name, created_by=created_by, created_at=datetime.utcnow())
+        collection = Collection(name=clean_name, created_by=created_by, created_at=utc_now().replace(tzinfo=None))
         session.add(collection)
         session.commit()
         session.refresh(collection)
@@ -118,7 +117,7 @@ def add_collection_item(collection_id: int, asset_id: str) -> dict:
                     collection_id=collection_id,
                     asset_id=asset_id,
                     sort_order=next_order + 10,
-                    created_at=datetime.utcnow(),
+                    created_at=utc_now().replace(tzinfo=None),
                 )
             )
             session.commit()

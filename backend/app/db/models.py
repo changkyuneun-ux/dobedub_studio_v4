@@ -208,6 +208,9 @@ class WorkflowTask(Base):
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     runpod_submit_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     runpod_status_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # External-provider raw timestamps and their normalized UTC/KST pairs.
+    # Existing rows keep an empty object and are reported as legacy/unknown.
+    time_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 

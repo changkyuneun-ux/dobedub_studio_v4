@@ -199,7 +199,7 @@ export function Create3aScreen({
               <div className="v3-summary-row"><span>워크플로</span><strong>{selectedItem.workflowName || selectedItem.workflow || selectedItem.workflowId || "-"}</strong></div>
               <div className="v3-summary-row"><span>Task ID</span><strong style={{ fontFamily: "var(--v3-font-mono)", fontSize: 11 }}>{selectedItem.taskId}</strong></div>
               <div className="v3-summary-row"><span>runpod_job_id</span><strong style={{ fontFamily: "var(--v3-font-mono)", fontSize: 11 }}>{selectedItem.runpodJobId || "-"}</strong></div>
-              <div className="v3-summary-row"><span>실행자 · 시각</span><strong>{selectedItem.workerName || selectedItem.user?.name || "-"} · {formatTimestamp(selectedItem.timestamp).replace("\n", " ")}</strong></div>
+              <div className="v3-summary-row"><span>실행자 · 시각</span><strong>{selectedItem.workerName || selectedItem.user?.name || "-"} · {formatTimestamp(selectedItem.timestampKst || selectedItem.timestamp, selectedItem.timestampUtc).replace(/\n/g, " ")}</strong></div>
               <div className="v3-summary-row"><span>Segments · Seed</span><strong>{selectedItem.segmentCount || selectedItem.segments?.length || 1} · {selectedItem.generationSeed || selectedItem.seed || "-"}</strong></div>
               {isActiveSelected ? <div className="v3-summary-row"><span>진행률</span><strong>{Math.min(100, Math.max(0, Number(selectedItem.progress || 0)))}%</strong></div> : null}
             </div>
@@ -346,7 +346,7 @@ export function Create3aScreen({
       }
     >
       <div className="v3-card">
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: "40px 118px 90px minmax(0,1fr) minmax(0,1fr) 84px 56px" }}>
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: "40px 218px 80px minmax(160px,1fr) minmax(160px,1fr) 84px 56px", minWidth: 920 }}>
           <span>No</span><span>Timestamp</span><span>Worker</span><span>Positive Prompt</span><span>Negative Prompt</span><span>Status</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
@@ -360,11 +360,11 @@ export function Create3aScreen({
             <div
               key={item.taskId}
               className={`v3-review-table-row v3-history-row ${isSelected ? "is-selected" : ""}`}
-              style={{ gridTemplateColumns: "40px 118px 90px minmax(0,1fr) minmax(0,1fr) 84px 56px", cursor: "pointer" }}
+              style={{ gridTemplateColumns: "40px 218px 80px minmax(160px,1fr) minmax(160px,1fr) 84px 56px", minWidth: 920, cursor: "pointer" }}
               onClick={() => onSelect(item)}
             >
               <span className="v3-review-seg-name">{rowNo}</span>
-              <span style={{ color: "var(--v3-text-secondary)", fontSize: 11.5 }}>{formatTimestamp(item.timestamp).replace("\n", " ")}</span>
+              <span className="v3-timestamp-cell">{formatTimestamp(item.timestampKst || item.timestamp, item.timestampUtc)}</span>
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
               <div className="v3-review-prompt" style={{ minWidth: 0 }}>{promptSnippet}</div>
               <div className="v3-review-prompt" style={{ minWidth: 0 }}>{negativeSnippet}</div>
@@ -410,7 +410,7 @@ export function Create3aScreen({
             <h2 id="v3DeleteHistoryTitle" className="v3-modal-title">작업 내역 삭제</h2>
             <div className="v3-summary-card">
               <div className="v3-summary-row"><span>작업</span><strong>#{deleteTarget.taskId.slice(0, 8)} · {deleteTarget.workflowName || deleteTarget.workflow || deleteTarget.workflowId || "-"}</strong></div>
-              <div className="v3-summary-row"><span>실행</span><strong>{formatTimestamp(deleteTarget.timestamp).replace("\n", " ")} · {deleteTarget.workerName || deleteTarget.user?.name || "-"}</strong></div>
+              <div className="v3-summary-row"><span>실행</span><strong>{formatTimestamp(deleteTarget.timestampKst || deleteTarget.timestamp, deleteTarget.timestampUtc).replace(/\n/g, " ")} · {deleteTarget.workerName || deleteTarget.user?.name || "-"}</strong></div>
               <div className="v3-summary-row"><span>결과물</span><strong>{(deleteTarget.outputAssets || []).length || (deleteTarget.outputUrl ? 1 : 0)}건</strong></div>
             </div>
             <p className="v3-modal-body-text">이력에서 제거되면 이 작업의 프롬프트 평가와 재사용 등록도 함께 사라집니다. 결과물 파일은 Assets에 남습니다.</p>
@@ -868,7 +868,9 @@ export function Create5aScreen({
   // 이름·생성일·생성자보다 앞)으로 옮기고, 클릭하면 큰 미리보기 모달을 연다
   // (이미지는 확대 이미지, 영상 출력은 controls 있는 <video>로 재생 - 목록
   // 썸네일에서는 <img>가 영상을 못 그려 배지만 보이던 문제도 여기서 해소됨).
-  const gridColumns = "168px 108px 62px minmax(0,1fr) 96px 88px 176px 68px";
+  // Asset 이름은 한 줄 말줄임으로 충분하므로 폭을 제한하고, KST/UTC를 모두
+  // 표시하는 생성일 열에 공간을 우선 배분한다. 입력 썸네일도 셀 안에서 유지된다.
+  const gridColumns = "148px 104px 62px minmax(140px, 0.55fr) 198px 82px 148px 68px";
   const [previewItem, setPreviewItem] = useState<AssetItem | null>(null);
   const previewIsImage = previewItem ? (previewItem.mimeType || "").startsWith("image/") : false;
 
@@ -953,7 +955,7 @@ export function Create5aScreen({
         </div>
       </section>
       <div className="v3-card" style={{ overflowX: "auto" }}>
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }}>
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns, minWidth: 1080 }}>
           <span>Collection</span><span>Asset ID</span><span>미리보기</span><span>Asset 이름</span><span>생성일</span><span>생성자</span><span>입력 이미지</span><span style={{ textAlign: "right" }}>다운로드</span>
         </div>
         {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
@@ -964,7 +966,7 @@ export function Create5aScreen({
           const isImage = (item.mimeType || "").startsWith("image/");
           const isVideo = (item.mimeType || "").startsWith("video/");
           return (
-            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns, minWidth: 900 }} key={item.assetId}>
+            <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns, minWidth: 1080 }} key={item.assetId}>
               <span>
                 <div className="v3-asset-collection-chips">
                   {(item.collections || []).length ? (item.collections || []).map((c) => (
@@ -1018,7 +1020,7 @@ export function Create5aScreen({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.fileName}>
                 {item.fileName}
               </span>
-              <span style={{ fontSize: 11.5 }}>{item.createdAt || "-"}</span>
+              <span className="v3-timestamp-cell">{formatTimestamp(item.createdAtKst || item.createdAt, item.createdAtUtc)}</span>
               <span style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.createdBy || "-"}>
                 {item.createdBy || "-"}
               </span>

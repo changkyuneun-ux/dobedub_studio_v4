@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import PromptSystemPrompt, PromptSystemPromptVersion
 
 
@@ -138,7 +137,7 @@ def save_prompt_system_prompt(
             model_family=prompt.model_family,
             prompt_text=prompt.prompt_text,
             created_by=created_by,
-            created_at=datetime.utcnow(),
+            created_at=utc_now().replace(tzinfo=None),
         )
     )
     session.commit()
@@ -169,7 +168,7 @@ def _version_payload(row: PromptSystemPromptVersion) -> dict:
         "modelFamily": row.model_family,
         "promptText": row.prompt_text,
         "createdBy": row.created_by,
-        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        **timestamp_fields("createdAt", row.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="prompt-system"),
     }
 
 
@@ -211,6 +210,6 @@ def _prompt_payload(prompt: PromptSystemPrompt) -> dict:
         "modelFamily": prompt.model_family,
         "promptText": prompt.prompt_text,
         "isActive": prompt.is_active,
-        "createdAt": prompt.created_at.isoformat() if prompt.created_at else None,
-        "updatedAt": prompt.updated_at.isoformat() if prompt.updated_at else None,
+        **timestamp_fields("createdAt", prompt.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="prompt-system"),
+        **timestamp_fields("updatedAt", prompt.updated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="prompt-system"),
     }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiClient, AuditLogItem } from "../api/client";
+import { formatTimestamp } from "../helpers/format";
 
 // 2026-08-12: 사용자 요청 - "작업" 칸이 원본 action 문자열(예:
 // "prompt_catalog.category_group.update")을 그대로 보여줘 폭을 넓게 잡아야
@@ -90,15 +91,9 @@ export function AuditLogTable({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
-  // 2026-08-12: 원래 "작업" 칸이 minmax(0,1fr)로 남는 공간을 다 먹어서, 원본
-  // action 문자열이 길 때 "상세"(80px, JSON 보기) 칸이 지나치게 좁아 JSON이
-  // 가로 스크롤까지 생겼다. 작업은 위 한글 라벨로 짧아졌으니 고정폭으로 줄임
-  // (시각도 지역 시간 포맷이 두 줄로 안 잘리게 살짝 넓힘). 처음엔 "상세"를
-  // minmax(280px,1fr)로 과하게 넓혔더니 이번엔 "대상"(targetType·targetId,
-  // 예: "history_item · task_20260805_112339_f5def9")이 160px 고정에
-  // 갇혀 줄바꿈됐다 - "대상"을 유동폭으로, "상세"는 접힌 상태 "▶ 보기"
-  // 텍스트만 필요하니 고정 160px로 되돌린다(펼쳤을 때 JSON도 무리 없는 폭).
-  const gridColumns = "170px 110px 100px minmax(220px,1fr) 160px";
+  // 시각은 KST와 UTC를 한 줄로 함께 표시한다. 가변 길이가 큰 대상·상세에는
+  // 화면의 남는 폭을 더 배정해 넓은 관리 화면을 실제 정보 표시에 활용한다.
+  const gridColumns = "minmax(420px,1.65fr) minmax(112px,0.55fr) minmax(140px,0.8fr) minmax(220px,1.15fr) minmax(260px,2.1fr)";
 
   return (
     <div className="v3-card">
@@ -108,7 +103,7 @@ export function AuditLogTable({
       </div>
       {notice ? <p className="v3-inline-notice is-warning">{notice}</p> : null}
       <div className="v3-table-scroll" aria-label={`${title} 표`}>
-        <div style={{ minWidth: 820 }}>
+        <div className="v3-audit-table-content">
           <div className="v3-review-table-head" style={{ gridTemplateColumns: gridColumns }}>
             <span>시각</span><span>행위자</span><span>작업</span><span>대상</span><span>상세</span>
           </div>
@@ -116,10 +111,10 @@ export function AuditLogTable({
           {!loading && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 감사 로그가 없습니다.</p> : null}
           {!loading && items.map((item) => (
             <div className="v3-review-table-row" style={{ gridTemplateColumns: gridColumns }} key={item.id}>
-              <span className="v3-review-seg-name">{formatAuditLogTimestamp(item.createdAt)}</span>
+              <span className="v3-review-seg-name v3-audit-timestamp-cell">{formatAuditLogTimestamp(item.createdAtKst || item.createdAt, item.createdAtUtc)}</span>
               <span>{item.actorId || "-"}</span>
               <span title={item.action}>{auditActionLabel(item.action)}</span>
-              <span>{[item.targetType, item.targetId].filter(Boolean).join(" · ") || "-"}</span>
+              <span className="v3-audit-target-cell" title={[item.targetType, item.targetId].filter(Boolean).join(" · ") || "-"}>{[item.targetType, item.targetId].filter(Boolean).join(" · ") || "-"}</span>
               <span>
                 {item.beforeJson || item.afterJson ? (
                   <details>
@@ -149,10 +144,6 @@ export function AuditLogTable({
   );
 }
 
-function formatAuditLogTimestamp(value: string) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value || "-";
-  }
-  return parsed.toLocaleString();
+function formatAuditLogTimestamp(value?: string | null, utcValue?: string | null) {
+  return formatTimestamp(value, utcValue).replace(/\n/g, " · ");
 }

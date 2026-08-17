@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import TaskExecutionPolicy, WorkflowTask
 
 
@@ -37,7 +36,7 @@ def task_execution_policy_payload(session: Session) -> dict:
         "maxActiveTasksPerUser": int(policy.max_active_tasks_per_user),
         "maxActiveTasksTotal": int(policy.max_active_tasks_total),
         "updatedBy": policy.updated_by,
-        "updatedAt": policy.updated_at.isoformat() if policy.updated_at else None,
+        **timestamp_fields("updatedAt", policy.updated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="task-policy"),
     }
 
 
@@ -56,7 +55,7 @@ def update_task_execution_policy(
     policy.max_active_tasks_per_user = per_user
     policy.max_active_tasks_total = total
     policy.updated_by = updated_by
-    policy.updated_at = datetime.utcnow()
+    policy.updated_at = utc_now().replace(tzinfo=None)
     session.commit()
     return task_execution_policy_payload(session)
 

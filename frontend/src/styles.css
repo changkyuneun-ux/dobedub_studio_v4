@@ -5409,6 +5409,39 @@ button {
   border-bottom: none;
 }
 
+/* 시간 원본을 감추지 않는다. 첫 두 줄은 KST 날짜/시각, 마지막 줄은 UTC 원본이다. */
+.v3-timestamp-cell {
+  color: var(--v3-text-secondary);
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.v3-audit-timestamp-cell {
+  color: var(--v3-text-secondary);
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-audit-target-cell {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.v3-audit-table-content {
+  box-sizing: border-box;
+  min-width: 1230px;
+  width: 100%;
+}
+
 .v3-preflight-review-head,
 .v3-preflight-review-row {
   display: grid;

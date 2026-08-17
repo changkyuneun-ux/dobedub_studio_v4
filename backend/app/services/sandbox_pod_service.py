@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 
 from backend.app.core.config import Settings
+from backend.app.core.timezone_utils import SEOUL_TIMEZONE, timestamp_fields
 
 
 def sandbox_pod_is_configured(settings: Settings) -> bool:
@@ -216,8 +217,23 @@ def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
         "resolvedBy": resolved_by,
         "desiredStatus": status,
         "runtimeStatus": runtime_status,
-        "lastStartedAt": pod.get("lastStartedAt"),
-        "lastStatusChange": pod.get("lastStatusChange"),
+        # RunPod Pod lifecycle timestamps are provided in KST by the configured
+        # sandbox environment. Preserve their raw source timezone while also
+        # returning a UTC equivalent for operations and audit comparison.
+        **timestamp_fields(
+            "lastStartedAt",
+            pod.get("lastStartedAt"),
+            naive_timezone=SEOUL_TIMEZONE,
+            source_timezone="Asia/Seoul",
+            source="runpod-sandbox",
+        ),
+        **timestamp_fields(
+            "lastStatusChange",
+            pod.get("lastStatusChange"),
+            naive_timezone=SEOUL_TIMEZONE,
+            source_timezone="Asia/Seoul",
+            source="runpod-sandbox",
+        ),
         "locked": bool(pod.get("locked")),
         "httpServices": services,
         "message": message,

@@ -11,6 +11,9 @@ export type HealthResponse = {
 export type SystemStatusResponse = {
   ok: boolean;
   checkedAt?: string;
+  checkedAtUtc?: string | null;
+  checkedAtKst?: string | null;
+  checkedAtSourceTimezone?: string | null;
   executionMode?: string;
   dryRun?: boolean;
   runpod?: {
@@ -97,8 +100,14 @@ export type AdminUser = {
   effectivePermissionCodes?: string[];
   isActive?: boolean;
   lastLoginAt?: string | null;
+  lastLoginAtUtc?: string | null;
+  lastLoginAtKst?: string | null;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
 };
 
 export type PermissionGovernance = {
@@ -142,7 +151,11 @@ export type AdminWorkflow = WorkflowItem & {
   status?: string;
   description?: string;
   registeredAt?: string | null;
+  registeredAtUtc?: string | null;
+  registeredAtKst?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
   fileExists?: boolean;
   paramConfigExists?: boolean;
   paramConfigGenerated?: boolean;
@@ -178,7 +191,11 @@ export type SandboxPodStatus = {
   desiredStatus?: string;
   runtimeStatus?: string;
   lastStartedAt?: string | null;
+  lastStartedAtUtc?: string | null;
+  lastStartedAtKst?: string | null;
   lastStatusChange?: string | null;
+  lastStatusChangeUtc?: string | null;
+  lastStatusChangeKst?: string | null;
   locked?: boolean;
   httpServices: Array<{
     internalPort: number;
@@ -346,7 +363,11 @@ export type PromptSystemPromptResponse = {
   promptText: string;
   isActive?: boolean;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
 };
 
 // B-08: 시스템 지시문 버전 이력(7a 되돌리기).
@@ -359,6 +380,8 @@ export type SystemPromptVersion = {
   promptText: string;
   createdBy?: string | null;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
 };
 
 export type SystemPromptVersionsResponse = { items: SystemPromptVersion[] };
@@ -437,6 +460,12 @@ export type HistorySegment = {
 export type HistoryItem = {
   taskId: string;
   timestamp?: string;
+  timestampUtc?: string | null;
+  timestampKst?: string | null;
+  completedAt?: string | null;
+  completedAtUtc?: string | null;
+  completedAtKst?: string | null;
+  timeContext?: Record<string, unknown>;
   workflowId?: string;
   workflowName?: string;
   workflow?: string;
@@ -491,6 +520,8 @@ export type AuditLogItem = {
   afterJson: Record<string, unknown> | null;
   ip: string | null;
   createdAt: string;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
 };
 
 export type AuditLogResponse = {
@@ -524,6 +555,9 @@ export type AssetItem = {
   storageBackend?: string;
   publicUrl?: string | null;
   createdAt?: string;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
+  createdAtSourceTimezone?: string | null;
   downloadUrl: string;
   taskId?: string;
   outputRole?: string;
@@ -548,6 +582,8 @@ export type CollectionSummary = {
   name: string;
   createdBy?: string | null;
   createdAt?: string;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
   itemCount: number;
 };
 
@@ -571,6 +607,8 @@ export type TaskExecutionPolicy = {
   activeTotal?: number;
   updatedBy?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
 };
 
 export type JobStatusResponse = {
@@ -610,6 +648,8 @@ export type TaskPromptFeedback = {
   editedPositivePrompt?: string | null;
   editedNegativePrompt?: string | null;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
 };
 
 export type TaskModelReference = {
@@ -646,10 +686,16 @@ export type TaskPromptItem = {
   reviewFlags?: TaskPromptReviewFlags;
   reviewedBy?: string | null;
   reviewedAt?: string | null;
+  reviewedAtUtc?: string | null;
+  reviewedAtKst?: string | null;
   reuseCount?: number;
   metadata?: Record<string, unknown>;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
 };
 
 export type TaskPromptResponse = {

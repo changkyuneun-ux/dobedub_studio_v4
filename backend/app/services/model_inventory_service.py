@@ -3,9 +3,9 @@ from __future__ import annotations
 import csv
 import json
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.services.metadata_loader import is_link_value, node_title
 from backend.app.services.workflow_parser import workflow_files
 
@@ -193,7 +193,7 @@ def build_model_inventory(workflows_dir: Path, models_dir: Path | None = None) -
         bucket_summary[candidate["bucket"]]["unusedBytes"] += candidate["sizeBytes"]
 
     return {
-        "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        **timestamp_fields("generatedAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="model-inventory"),
         "workflowsDir": str(workflows_dir),
         "modelsDir": str(models_dir) if models_dir else "",
         "inventoryAvailable": inventory_available,

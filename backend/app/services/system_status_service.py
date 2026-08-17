@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
 
 from backend.app.core.config import get_settings
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.services.metadata_service import get_metadata_status
 from backend.app.services.prompt_llm_client import prompt_llm_status
 from backend.app.services.runpod_client import mask_secret, runpod_is_configured
@@ -75,7 +75,8 @@ def system_status() -> dict:
     )
     return {
         "ok": bool(ready),
-        "checkedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **timestamp_fields("checkedAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="ecs-application"),
+        "displayTimezone": "Asia/Seoul",
         "executionMode": "dry-run" if settings.dry_run else "runpod",
         "dryRun": settings.dry_run,
         "runpod": {

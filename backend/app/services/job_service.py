@@ -3,9 +3,10 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
-from backend.app.core.timezone_utils import now_seoul_naive
+from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, timestamp_fields
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
@@ -75,6 +76,17 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
         # submission, otherwise an empty-image task can slip into history.
         _workflow, _images, patch_summary = runtime.prepare_workflow_for_job(payload)
         runpod_data["patchSummary"] = patch_summary
+    created_at_utc = datetime.fromtimestamp(now, tz=UTC_TIMEZONE)
+    created_at_fields = timestamp_fields(
+        "createdAt",
+        created_at_utc,
+        naive_timezone=UTC_TIMEZONE,
+        source_timezone="UTC",
+        source="ecs-application",
+    )
+    # Runtime elapsed-time calculations require this field to remain an epoch.
+    # The formatted UTC/KST pair is carried in the companion fields below.
+    created_at_fields.pop("createdAt", None)
     runtime.jobs[task_id] = {
         "taskId": task_id,
         "runpodJobId": runpod_data["runpodJobId"],
@@ -83,7 +95,10 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
         "status": "queued",
         "progress": 0,
         "createdAt": now,
+        "createdAtEpoch": now,
         "startedAt": now_seoul.strftime("%Y-%m-%d %H:%M:%S"),
+        **created_at_fields,
+        **timestamp_fields("startedAt", now_seoul, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="ecs-application"),
         "payload": payload,
         "firstConfig": first_config,
         "generationSeed": generation_seed_from_patch_summary(runpod_data.get("patchSummary")),
@@ -150,7 +165,8 @@ def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
     job["status"] = "CANCELLED"
     job["progress"] = 100
     job["cancelRequested"] = True
-    job["cancelledAt"] = now_seoul_naive().strftime("%Y-%m-%d %H:%M:%S")
+    cancelled_at = now_seoul_naive()
+    job.update(timestamp_fields("cancelledAt", cancelled_at, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="ecs-application"))
     job["runpodCancel"] = cancel_response
     job["runpodStatus"] = {"status": "CANCELLED", "cancel": cancel_response}
     job["historySaved"] = True
@@ -182,7 +198,7 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         job["historySaved"] = True
         record_job(runtime, job)
 
-    return {
+    result = {
         "taskId": task_id,
         "runpodJobId": job["runpodJobId"],
         "status": api_job_status(job),
@@ -197,6 +213,19 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         "outputAssets": job.get("outputAssets", []),
         "cancelRequested": bool(job.get("cancelRequested")),
     }
+    for field_name in ("createdAt", "startedAt", "completedAt", "cancelledAt"):
+        if field_name == "createdAt":
+            # `createdAt` remains an epoch in the in-memory job.  Publish the
+            # explicit display pair without changing that runtime value.
+            for suffix in ("Utc", "Kst", "SourceTimezone", "Source"):
+                result[f"{field_name}{suffix}"] = job.get(f"{field_name}{suffix}")
+        else:
+            for suffix in ("", "Utc", "Kst", "SourceTimezone", "Source"):
+                key = f"{field_name}{suffix}"
+                if key in job:
+                    result[key] = job.get(key)
+    result["runpodTimeContext"] = _runpod_time_context(job)
+    return result
 
 
 def api_job_status(job: dict) -> str:
@@ -212,6 +241,14 @@ def api_job_status(job: dict) -> str:
     if status in {"IN_QUEUE", "QUEUED"}:
         return "queued"
     return "running"
+
+
+def _runpod_time_context(job: dict) -> dict:
+    """Keep RunPod's original timestamp payload alongside application times."""
+    return {
+        "submit": job.get("runpodSubmit") or {},
+        "status": job.get("runpodStatus") or {},
+    }
 
 
 def display_job_status(job: dict) -> str:

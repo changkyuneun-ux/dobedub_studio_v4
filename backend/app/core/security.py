@@ -13,6 +13,7 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 
@@ -67,9 +68,9 @@ def user_payload(user: User) -> dict:
         "role": normalize_role(user.role),
         "permissions": normalize_permissions(user.permissions_json),
         "isActive": bool(user.is_active),
-        "lastLoginAt": user.last_login_at.isoformat() if user.last_login_at else None,
-        "createdAt": user.created_at.isoformat() if user.created_at else None,
-        "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+        **timestamp_fields("lastLoginAt", user.last_login_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+        **timestamp_fields("createdAt", user.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+        **timestamp_fields("updatedAt", user.updated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
     }
 
 
@@ -141,7 +142,7 @@ def ensure_admin_user(session: Session) -> User:
         if not user.is_active or normalize_role(user.role) != "SUPER_ADMIN":
             user.is_active = True
             user.role = "SUPER_ADMIN"
-            user.updated_at = datetime.utcnow()
+            user.updated_at = utc_now().replace(tzinfo=None)
             session.commit()
         return user
     user = User(

@@ -5,9 +5,9 @@ import mimetypes
 import re
 import threading
 import uuid
-from datetime import datetime
 from pathlib import Path
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.services.asset_storage import (
     asset_record,
     decode_data_url,
@@ -294,7 +294,7 @@ def create_upload(assets_path: Path, uploads_dir: Path, payload: dict) -> dict:
         "mimeType": payload.get("mimeType") or mime_type,
         "sizeBytes": len(raw),
         "path": str(path),
-        "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **timestamp_fields("createdAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="legacy-json-repository"),
     }
     image_width, image_height = image_dimensions(raw, item["mimeType"])
     if image_width and image_height:

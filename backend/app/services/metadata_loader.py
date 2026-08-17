@@ -4,9 +4,10 @@ import hashlib
 import json
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.services.workflow_parser import (
     PARAM_DESCRIPTIONS,
     PARAM_LABELS,
@@ -85,11 +86,12 @@ def metadata_fingerprint(workflows_dir: Path, data_dir: Path, bundled_defaults_p
         file_hash = file_sha256(path)
         digest.update(relative.encode("utf-8"))
         digest.update(file_hash.encode("utf-8"))
+        modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         sources.append({
             "path": relative,
             "sha256": file_hash,
             "sizeBytes": path.stat().st_size,
-            "modifiedAt": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+            **timestamp_fields("modifiedAt", modified_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="filesystem"),
         })
     return digest.hexdigest(), sources
 
@@ -345,7 +347,7 @@ def rebuild_metadata(project_root: Path, workflows_dir: Path, data_dir: Path, me
         workflows[path.name] = build_workflow_widget_metadata(path.name, workflow, workflows_dir, object_info)
     models = merge_model_metadata(workflows)
     manifest = {
-        "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        **timestamp_fields("generatedAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="metadata-loader"),
         "source": "workflow-json",
         "workflowDirectory": relative_path(workflows_dir, project_root),
         "fingerprint": fingerprint,

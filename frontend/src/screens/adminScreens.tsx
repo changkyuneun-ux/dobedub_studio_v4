@@ -22,7 +22,7 @@ import {
 } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { AuditLogTable } from "../components/AuditLogTable";
-import { qwenStatusLabel } from "../helpers/format";
+import { formatTimestamp, qwenStatusLabel } from "../helpers/format";
 import {
   adminPermissionsFromText,
   adminPermissionOptions,
@@ -125,7 +125,7 @@ export function Create7aScreen({
             <div className="v3-summary-card" key={version.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 600, fontSize: 12 }}>
-                  {index === 0 ? "현재 버전" : `버전 #${version.id}`} · {version.createdAt || "-"}
+                  {index === 0 ? "현재 버전" : `버전 #${version.id}`} · {formatTimestamp(version.createdAtKst || version.createdAt, version.createdAtUtc).replace(/\n/g, " ")}
                   {version.createdBy ? ` · ${version.createdBy}` : ""}
                 </div>
                 <div className="v3-muted-text" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version.promptText}</div>
@@ -235,7 +235,7 @@ export function Create6cScreen({
           <button className="v3-primary-button" type="button" disabled={loading} onClick={onRefresh}>Refresh</button>
         </>
       }
-      sidebarFooter={<p className="v3-muted-text">Last checked: {status?.checkedAt || "-"}</p>}
+      sidebarFooter={<p className="v3-muted-text">Last checked: {formatTimestamp(status?.checkedAtKst || status?.checkedAt, status?.checkedAtUtc).replace(/\n/g, " ")}</p>}
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       {connection ? <p className={`v3-inline-notice ${connection.ok ? "" : "is-warning"}`}>{connection.message || "ComfyUI RunPod checked."}</p> : null}
@@ -282,7 +282,7 @@ export function renderMetadataTabV3(
           <div className="v3-summary-row"><span>Workflow ID</span><strong>{metadata?.workflowId || "-"}</strong></div>
           <div className="v3-summary-row"><span>Node Count</span><strong>{metadata?.nodeCount ?? "-"}</strong></div>
           <div className="v3-summary-row"><span>Subgraphs</span><strong>{metadata?.segments?.length || 0}</strong></div>
-          <div className="v3-summary-row"><span>Generated At</span><strong>{String(manifest.generatedAt || "-")}</strong></div>
+          <div className="v3-summary-row"><span>Generated At</span><strong>{formatTimestamp(String(manifest.generatedAtKst || manifest.generatedAt || "-"), typeof manifest.generatedAtUtc === "string" ? manifest.generatedAtUtc : undefined).replace(/\n/g, " ")}</strong></div>
           <div className="v3-summary-row"><span>Object Info Snapshot</span><strong>{manifest.hasObjectInfoSnapshot ? "YES" : "NO"}</strong></div>
           <div className="v3-summary-row"><span>Fingerprint</span><strong>{String(manifest.fingerprint || "-").slice(0, 32)}</strong></div>
         </div>
@@ -524,8 +524,8 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
             <div className="v3-summary-row"><span>Resolved By</span><strong>{sandboxPod.resolvedBy || "Pod ID (legacy)"}</strong></div>
             <div className="v3-summary-row"><span>Status</span><strong>{sandboxPod.desiredStatus || "UNKNOWN"}</strong></div>
             <div className="v3-summary-row"><span>Service Status</span><strong>{sandboxPod.runtimeStatus || "NOT CHECKED"}</strong></div>
-            <div className="v3-summary-row"><span>Last Started</span><strong>{sandboxPod.lastStartedAt || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Last Status Change</span><strong>{sandboxPod.lastStatusChange || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Last Started</span><strong>{formatTimestamp(sandboxPod.lastStartedAtKst || sandboxPod.lastStartedAt, sandboxPod.lastStartedAtUtc).replace(/\n/g, " ")}</strong></div>
+            <div className="v3-summary-row"><span>Last Status Change</span><strong>{formatTimestamp(sandboxPod.lastStatusChangeKst || sandboxPod.lastStatusChange, sandboxPod.lastStatusChangeUtc).replace(/\n/g, " ")}</strong></div>
           </div>
         ) : null}
       </div>
@@ -544,8 +544,6 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
           </div>
         </div>
       ) : null}
-
-      <AuditLogTable targetType="sandbox_pod" pageSize={5} title="Pod 제어 이력" />
 
       {sandboxPodPendingAction ? (
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3SandboxConfirmTitle">
@@ -648,7 +646,7 @@ function TaskPolicySettings({ user }: { user: User }) {
           </label>
         </div>
         <p className="v3-muted-text" style={{ marginTop: 12 }}>한도 계산 대상: `QUEUED`, `IN_QUEUE`, `IN_PROGRESS`, `RUNNING` · 완료·실패·취소·시간초과 Task는 즉시 제외</p>
-        {taskPolicy?.updatedAt ? <p className="v3-muted-text" style={{ marginTop: 10 }}>마지막 변경: {taskPolicy.updatedAt}{taskPolicy.updatedBy ? ` · ${taskPolicy.updatedBy}` : ""}</p> : null}
+        {taskPolicy?.updatedAt ? <p className="v3-muted-text" style={{ marginTop: 10 }}>마지막 변경: {formatTimestamp(taskPolicy.updatedAtKst || taskPolicy.updatedAt, taskPolicy.updatedAtUtc).replace(/\n/g, " ")}{taskPolicy.updatedBy ? ` · ${taskPolicy.updatedBy}` : ""}</p> : null}
         {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       </div>
       <div className="v3-inline-actions" style={{ padding: "0 16px 16px" }}>
@@ -670,7 +668,6 @@ export function TaskPolicyScreen({ user, onGoTo }: { user: User; onGoTo: (route:
       sidebarFooter={<p className="v3-muted-text">Serverless 작업 제출량을 제어하는 운영 정책입니다. Sandbox Pod의 시작·중지 상태와는 독립적으로 적용됩니다.</p>}
     >
       <TaskPolicySettings user={user} />
-      <AuditLogTable targetType="task_execution_policy" pageSize={10} title="Task Policy 변경 이력" />
     </AppShell>
   );
 }
@@ -1187,8 +1184,8 @@ export function Create4aScreen({
             <div className="v3-summary-row"><span>Param Config Source</span><strong>{selected.paramConfigGenerated ? "AUTO-GENERATED" : selected.paramConfigExists ? "UPLOADED / EXISTING" : "-"}</strong></div>
             <div className="v3-summary-row"><span>Metadata</span><strong>{selected.metadataExists ? `READY · ${selected.metadataNodeCount ?? "-"} nodes · ${selected.metadataSubgraphCount ?? "-"} subgraphs` : "MISSING"}</strong></div>
             <div className="v3-summary-row"><span>Description</span><strong>{selected.description || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Registered At</span><strong>{selected.registeredAt || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Updated At</span><strong>{selected.updatedAt || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Registered At</span><strong>{formatTimestamp(selected.registeredAtKst || selected.registeredAt, selected.registeredAtUtc).replace(/\n/g, " ")}</strong></div>
+            <div className="v3-summary-row"><span>Updated At</span><strong>{formatTimestamp(selected.updatedAtKst || selected.updatedAt, selected.updatedAtUtc).replace(/\n/g, " ")}</strong></div>
           </div>
           <div className="v3-inline-actions" style={{ padding: "0 16px 16px" }}>
             {canActivate ? <button className="v3-primary-button" type="button" disabled={loading || selected.active} onClick={() => onActivate(selected.id)}>Activate</button> : null}

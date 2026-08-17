@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
 from pathlib import Path
 from threading import RLock
 
 from backend.app.core.config import get_settings
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
 from backend.app.services import job_service, output_service, workflow_patch_service
 from backend.app.services.asset_storage import encode_file_base64, safe_filename
@@ -118,10 +118,11 @@ def create_config_snapshot(payload: dict) -> dict:
     source = payload.get("source") or "studio"
     snapshot = payload.get("snapshot") or {}
     workflow_id = snapshot.get("workflowId") or payload.get("workflowId") or "unknown"
-    config_id = f"config_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    created_at = utc_now()
+    config_id = f"config_{created_at.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     item = {
         "configId": config_id,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **timestamp_fields("timestamp", created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="config-snapshot"),
         "source": source,
         "workflowId": workflow_id,
         "user": payload.get("user") or snapshot.get("user") or {},
@@ -396,10 +397,11 @@ def report_markdown(payload: dict) -> str:
     if segments:
         config = segments[0].get("config") or config
 
+    created_at = timestamp_pair(utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="report")
     lines = [
         "# DOBEDUB STUDIO 작업 리포트",
         "",
-        f"- 생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- 생성일시: {created_at['kst']} / UTC {created_at['utc']}",
         f"- Task ID: {item.get('taskId', '-')}",
         f"- Workflow: {item.get('workflowId') or item.get('workflow') or item.get('workflowName') or '-'}",
         f"- Status: {item.get('status', '-')}",
@@ -425,7 +427,8 @@ def report_markdown(payload: dict) -> str:
 
 
 def create_report(payload: dict) -> dict:
-    report_id = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    created_at = utc_now()
+    report_id = f"report_{created_at.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     markdown = report_markdown(payload)
     reports_dir = data_paths()["reports"]
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -435,6 +438,7 @@ def create_report(payload: dict) -> dict:
         "reportId": report_id,
         "downloadUrl": f"/api/reports/{report_id}",
         "markdown": markdown,
+        **timestamp_fields("createdAt", created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="report"),
     }
 
 

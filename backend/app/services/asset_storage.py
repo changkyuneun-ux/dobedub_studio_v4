@@ -4,8 +4,9 @@ import base64
 import mimetypes
 import re
 import uuid
-from datetime import datetime
 from pathlib import Path
+
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm"}
@@ -128,7 +129,13 @@ def asset_record(file_path: Path, asset_type: str, mime_type: str | None = None,
         "mimeType": resolved_mime_type,
         "path": str(path),
         "sizeBytes": path.stat().st_size if path.exists() else 0,
-        "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        **timestamp_fields(
+            "createdAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="asset-storage",
+        ),
     }
     if resolved_mime_type.startswith("image/") and path.exists():
         image_width, image_height = image_dimensions(path.read_bytes(), resolved_mime_type)

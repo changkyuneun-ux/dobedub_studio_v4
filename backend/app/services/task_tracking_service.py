@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +9,17 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from backend.app.core.timezone_utils import epoch_to_seoul_naive, format_seoul_datetime, now_seoul_naive, seoul_naive_to_epoch
+from backend.app.core.timezone_utils import (
+    SEOUL_TIMEZONE,
+    UTC_TIMEZONE,
+    epoch_to_seoul_naive,
+    format_seoul_datetime,
+    now_seoul_naive,
+    parse_timestamp,
+    seoul_naive_to_epoch,
+    timestamp_fields,
+    timestamp_pair,
+)
 from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
@@ -18,6 +28,10 @@ from backend.app.services.metadata_service import get_workflow_widget_metadata
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
+RUNPOD_TIMESTAMP_KEYS = {
+    "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
+    "cancelledat", "updatedat", "laststartedat", "laststatuschange", "statuschangedat",
+}
 REVIEW_FLAG_LABELS = {
     "originalPreserved": "원본 유지 preserve original",
     # 과거 JSON 리뷰도 새 기준으로 검색 가능해야 한다.
@@ -338,7 +352,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
             else ""
         )
         created_at = seoul_naive_to_epoch(task.created_at) if task.created_at else seoul_naive_to_epoch(now_seoul_naive())
-        return {
+        result = {
             "taskId": task.id,
             "runpodJobId": task.runpod_job_id or "",
             "executionMode": task.execution_mode or "dry-run",
@@ -361,6 +375,14 @@ def restore_job_from_task(task_id: str) -> dict | None:
             "historySaved": str(task.status or "").upper() in TERMINAL_STATES,
             "restoredFromDb": True,
         }
+        created_at_fields = _task_timestamp_fields(task, "createdAt", task.created_at)
+        # Keep the restored in-memory job invariant: createdAt is an epoch used
+        # by JobService to calculate elapsed time and monitor progress.
+        created_at_fields.pop("createdAt", None)
+        result.update(created_at_fields)
+        result.update(_task_timestamp_fields(task, "startedAt", task.started_at or task.created_at))
+        result.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
+        return result
     finally:
         session.close()
 
@@ -622,6 +644,7 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
     task.payload_json = stored_payload
     task.runpod_submit_json = job.get("runpodSubmit") or {}
     task.runpod_status_json = job.get("runpodStatus") or {}
+    task.time_context_json = _time_context(task, job, now)
     task.updated_at = now
     session.flush()
     return task
@@ -779,12 +802,25 @@ def _ensure_asset(
     asset.storage_backend = payload.get("storageBackend") or "local"
     asset.storage_key = payload.get("path") or payload.get("storageKey") or asset.storage_key or ""
     asset.public_url = payload.get("publicUrl")
-    asset.metadata_json = {
+    asset_metadata = {
         key: value
         for key, value in payload.items()
-        if key not in {"assetId", "id", "type", "assetType", "fileName", "filename", "mimeType", "sizeBytes", "path", "storageKey", "storageBackend", "publicUrl", "createdAt"}
+        if key not in {
+            "assetId", "id", "type", "assetType", "fileName", "filename", "mimeType", "sizeBytes",
+            "path", "storageKey", "storageBackend", "publicUrl", "createdAt", "createdAtUtc",
+            "createdAtKst", "createdAtSourceTimezone", "createdAtSource",
+        }
     }
-    asset.created_at = _parse_datetime(payload.get("createdAt")) or asset.created_at or now_seoul_naive()
+    asset_time = {
+        "utc": payload.get("createdAtUtc"),
+        "kst": payload.get("createdAtKst") or payload.get("createdAt"),
+        "sourceTimezone": payload.get("createdAtSourceTimezone"),
+        "source": payload.get("createdAtSource"),
+    }
+    if any(asset_time.values()):
+        asset_metadata["timeContext"] = {"createdAt": asset_time}
+    asset.metadata_json = asset_metadata
+    asset.created_at = _asset_created_at(payload) or asset.created_at or now_seoul_naive()
     return asset
 
 
@@ -840,17 +876,8 @@ def _from_epoch(value: Any) -> datetime | None:
 
 
 def _parse_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    text = str(value or "").strip()
-    if not text:
-        return None
-    for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
-        try:
-            return datetime.strptime(text.removesuffix("Z"), pattern)
-        except ValueError:
-            continue
-    return None
+    parsed = parse_timestamp(value, naive_timezone=SEOUL_TIMEZONE)
+    return parsed.astimezone(SEOUL_TIMEZONE).replace(tzinfo=None) if parsed else None
 
 
 def _to_int(value: Any) -> int | None:
@@ -865,7 +892,7 @@ def _to_int(value: Any) -> int | None:
 def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> dict:
     item = dict(task.payload_json or {})
     item.setdefault("taskId", task.id)
-    item.setdefault("timestamp", _format_datetime(task.started_at or task.created_at))
+    item.update(_task_timestamp_fields(task, "timestamp", task.started_at or task.created_at))
     item.setdefault("workflowId", task.workflow_id)
     item.setdefault("workflowName", task.workflow_id)
     item.setdefault("runpodJobId", task.runpod_job_id or "")
@@ -878,6 +905,12 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     item.setdefault("configJson", task.config_json or {})
     item.setdefault("wanNodeConfig", task.wan_node_config or {})
     item.setdefault("patchSummary", task.patch_summary or {})
+    # Keeps application and provider time origins inspectable in Task History.
+    item["timeContext"] = task.time_context_json or {
+        "contractVersion": 0,
+        "legacy": True,
+        "message": "Stored timezone is unknown for this legacy task.",
+    }
     item.setdefault(
         "generationSeed",
         ((task.patch_summary or {}).get("seed") or {}).get("value"),
@@ -900,7 +933,7 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
         ))
     item["outputAssets"] = output_assets or item.get("outputAssets", [])
     item.setdefault("outputUrl", _first_output_url(item["outputAssets"]))
-    item.setdefault("completedAt", _format_datetime(task.completed_at) if task.completed_at else "")
+    item.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
     item.setdefault("elapsedSeconds", task.elapsed_seconds)
     return item
 
@@ -944,18 +977,44 @@ def _prompt_feedback_by_output_id(session: Session, output_ids: list[str | None]
 def _prompt_feedback_to_json(feedback: PromptFeedback | None) -> dict | None:
     if not feedback:
         return None
-    return {
+    result = {
         "id": feedback.id,
         "rating": feedback.rating,
         "notes": feedback.notes,
         "editedPositivePrompt": feedback.edited_positive_prompt,
         "editedNegativePrompt": feedback.edited_negative_prompt,
-        "createdAt": feedback.created_at.isoformat() if feedback.created_at else None,
+        **timestamp_fields("createdAt", feedback.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
     }
+    return result
 
 
 def _asset_to_json(asset: Asset) -> dict:
     item = dict(asset.metadata_json or {})
+    time_context = item.pop("timeContext", {})
+    created_context = time_context.get("createdAt") if isinstance(time_context, dict) else None
+    if isinstance(created_context, dict) and created_context.get("utc") and created_context.get("kst"):
+        created_at_fields = {
+            "createdAt": created_context.get("kst") or created_context.get("utc"),
+            "createdAtUtc": created_context.get("utc"),
+            "createdAtKst": created_context.get("kst"),
+            "createdAtSourceTimezone": created_context.get("sourceTimezone") or "UTC",
+            "createdAtSource": created_context.get("source") or "asset-storage",
+        }
+    else:
+        # Before the timestamp contract, uploads were created by the local
+        # application clock (KST), while RunPod output assets were persisted by
+        # the UTC storage path. Keep the DB value untouched, but make the
+        # historical source assumption visible in the API response.
+        is_input = str(asset.asset_type or "").lower().startswith("input")
+        naive_timezone = SEOUL_TIMEZONE if is_input else UTC_TIMEZONE
+        source_timezone = "Asia/Seoul" if is_input else "UTC"
+        created_at_fields = timestamp_fields(
+            "createdAt",
+            asset.created_at,
+            naive_timezone=naive_timezone,
+            source_timezone=source_timezone,
+            source="legacy-input-asset" if is_input else "legacy-output-asset",
+        )
     item.update({
         "assetId": asset.id,
         "type": asset.asset_type,
@@ -967,7 +1026,7 @@ def _asset_to_json(asset: Asset) -> dict:
         "path": asset.storage_key,
         "storageBackend": asset.storage_backend,
         "publicUrl": asset.public_url,
-        "createdAt": _format_datetime(asset.created_at),
+        **created_at_fields,
     })
     item.setdefault("downloadUrl", f"/api/files/{asset.id}")
     return item
@@ -1003,7 +1062,7 @@ def _task_prompt_to_json(
     task_user = row.task.user if row.task else None
     created_by = (task_user.name if task_user else None) or (row.task.user_id if row.task else None)
     model_references, model_reference_source = _task_model_references(row)
-    return {
+    result = {
         "id": row.id,
         "taskId": row.task_id,
         "workflowId": row.workflow_id,
@@ -1031,12 +1090,154 @@ def _task_prompt_to_json(
         "reviewStatus": row.review_status or "unreviewed",
         "reviewFlags": row.review_flags_json or {},
         "reviewedBy": row.reviewed_by,
-        "reviewedAt": row.reviewed_at.isoformat() if row.reviewed_at else None,
+        **timestamp_fields("reviewedAt", row.reviewed_at, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="task-review"),
         "reuseCount": row.reuse_count,
         "metadata": row.metadata_json or {},
-        "createdAt": row.created_at.isoformat() if row.created_at else None,
-        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+        **timestamp_fields("createdAt", row.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+        **timestamp_fields("updatedAt", row.updated_at, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="task-review"),
     }
+    return result
+
+
+def _asset_created_at(payload: dict) -> datetime | None:
+    value = payload.get("createdAtUtc") or payload.get("createdAt")
+    source_timezone = str(payload.get("createdAtSourceTimezone") or "").strip()
+    naive_timezone = SEOUL_TIMEZONE if source_timezone == "Asia/Seoul" or payload.get("createdAtKst") else UTC_TIMEZONE
+    parsed = parse_timestamp(value, naive_timezone=naive_timezone)
+    return parsed.astimezone(UTC_TIMEZONE).replace(tzinfo=None) if parsed else None
+
+
+def _task_timestamp_fields(task: WorkflowTask, field_name: str, value: datetime | None) -> dict:
+    context = task.time_context_json or {}
+    application = context.get("application") if isinstance(context.get("application"), dict) else {}
+    existing = application.get(field_name) if isinstance(application.get(field_name), dict) else None
+    if existing and (existing.get("utc") or existing.get("kst")):
+        return {
+            field_name: existing.get("kst") or existing.get("utc"),
+            f"{field_name}Utc": existing.get("utc"),
+            f"{field_name}Kst": existing.get("kst"),
+            f"{field_name}SourceTimezone": existing.get("sourceTimezone"),
+            f"{field_name}Source": existing.get("source"),
+        }
+    naive_timezone, source_timezone, source = _task_stored_timestamp_source(task, field_name, value)
+    return timestamp_fields(
+        field_name,
+        value,
+        naive_timezone=naive_timezone,
+        source_timezone=source_timezone,
+        source=source,
+    )
+
+
+def _task_stored_timestamp_source(
+    task: WorkflowTask,
+    field_name: str,
+    value: datetime | None,
+) -> tuple[object, str, str]:
+    """Classify legacy naive task values without rewriting their DB rows.
+
+    Task tracking historically stored application timestamps in KST. A short
+    period of RunPod status synchronization, however, wrote a UTC `startedAt`
+    into the same column. A task start/completion more than two hours before
+    its KST creation time is therefore the UTC variant and can be normalized
+    safely for the API response.
+    """
+    if value and field_name in {"timestamp", "startedAt", "completedAt"} and task.created_at:
+        if value < task.created_at - timedelta(hours=2):
+            return UTC_TIMEZONE, "UTC", "legacy-runpod-status"
+    return SEOUL_TIMEZONE, "Asia/Seoul", "legacy-task-tracking"
+
+
+def _timestamp_pair_or_task_value(
+    task: WorkflowTask,
+    field_name: str,
+    candidate: Any,
+    fallback: datetime | None,
+) -> dict[str, str | None]:
+    """Use a provider timestamp only when it is parseable; otherwise fallback."""
+    if parse_timestamp(candidate, naive_timezone=SEOUL_TIMEZONE):
+        return timestamp_pair(
+            candidate,
+            naive_timezone=SEOUL_TIMEZONE,
+            source_timezone="Asia/Seoul",
+            source="ecs-application",
+        )
+    naive_timezone, source_timezone, source = _task_stored_timestamp_source(task, field_name, fallback)
+    return timestamp_pair(
+        fallback,
+        naive_timezone=naive_timezone,
+        source_timezone=source_timezone,
+        source=source,
+    )
+
+
+def _time_context(task: WorkflowTask, job: dict, now: datetime) -> dict:
+    previous = dict(task.time_context_json or {})
+    application = dict(previous.get("application") or {})
+    application["createdAt"] = timestamp_pair(
+        job.get("createdAt"),
+        naive_timezone=UTC_TIMEZONE,
+        source_timezone="UTC",
+        source="ecs-application",
+    )
+    application["startedAt"] = _timestamp_pair_or_task_value(
+        task,
+        "startedAt",
+        job.get("startedAt"),
+        task.started_at or task.created_at,
+    )
+    application["timestamp"] = application["startedAt"]
+    application["updatedAt"] = timestamp_pair(
+        now,
+        naive_timezone=SEOUL_TIMEZONE,
+        source_timezone="Asia/Seoul",
+        source="ecs-application",
+    )
+    if task.completed_at:
+        application["completedAt"] = timestamp_pair(
+            task.completed_at,
+            naive_timezone=SEOUL_TIMEZONE,
+            source_timezone="Asia/Seoul",
+            source="ecs-application",
+        )
+
+    runpod = dict(previous.get("runpod") or {})
+    for source_name, payload in (("submit", job.get("runpodSubmit")), ("status", job.get("runpodStatus"))):
+        runpod[source_name] = _extract_runpod_timestamps(payload)
+    return {
+        **previous,
+        "contractVersion": 1,
+        "application": application,
+        "runpod": runpod,
+    }
+
+
+def _extract_runpod_timestamps(payload: Any) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+
+    def visit(value: Any, path: str = "", depth: int = 0) -> None:
+        if depth > 4:
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_text = str(key)
+                normalized = "".join(character for character in key_text.lower() if character.isalnum())
+                next_path = f"{path}.{key_text}" if path else key_text
+                if normalized in RUNPOD_TIMESTAMP_KEYS and item not in (None, ""):
+                    pair = timestamp_pair(
+                        item,
+                        naive_timezone=SEOUL_TIMEZONE,
+                        source_timezone="Asia/Seoul",
+                        source="runpod",
+                    )
+                    result[next_path] = {"raw": str(item), **pair}
+                visit(item, next_path, depth + 1)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]", depth + 1)
+
+    visit(payload)
+    return result
 
 
 def _task_model_references(row: TaskPrompt) -> tuple[list[dict], str]:

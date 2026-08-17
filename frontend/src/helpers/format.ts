@@ -46,8 +46,13 @@ export function compactText(value: string, maxLength: number) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
-export function formatTimestamp(value?: string) {
-  return String(value || "-").replace(" ", "\n");
+export function formatTimestamp(value?: string | null, utcValue?: string | null) {
+  const kst = String(value || "-");
+  const utc = String(utcValue || "").trim();
+  if (!utc) {
+    return kst.replace(" ", "\n");
+  }
+  return `${kst.replace(" ", "\n")}\nUTC ${utc.replace("T", " ")}`;
 }
 
 export function isSuccessStatus(status?: string) {
@@ -82,4 +87,3 @@ export function formatElapsed(totalSeconds: number) {
 export function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-

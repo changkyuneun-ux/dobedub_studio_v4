@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import AuditLog
 
 
@@ -38,7 +38,7 @@ def record_audit_log(
                 before_json=before,
                 after_json=after,
                 ip=ip,
-                created_at=datetime.utcnow(),
+                created_at=utc_now().replace(tzinfo=None),
             )
         )
         session.commit()
@@ -97,5 +97,5 @@ def _audit_log_payload(row: AuditLog) -> dict:
         "beforeJson": row.before_json,
         "afterJson": row.after_json,
         "ip": row.ip,
-        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        **timestamp_fields("createdAt", row.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="audit-log"),
     }
