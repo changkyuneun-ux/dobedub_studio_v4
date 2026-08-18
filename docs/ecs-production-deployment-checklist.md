@@ -21,6 +21,7 @@
 - [ ] image만 새 immutable tag로 교체하고, task role/execution role, log group, port `7860`, EFS volume과 mount `/data/outputs`는 유지한다.
 - [ ] 환경값을 확인한다: `PERSISTENCE_BACKEND=db`, `STORAGE_BACKEND=local`, `STUDIO_DATA_DIR=/data/outputs/dobedub-studio`, `OUTPUTS_DIR=/data/outputs/dobedub-studio/outputs`, `WORKFLOW_SEED_DIR=/app/workflows`, `WORKFLOWS_DIR=/data/outputs/dobedub-studio/workflows`, `METADATA_DIR=/data/outputs/dobedub-studio/metadata`, `RUN_SERVER_AUTO_MIGRATE=0`, `RUNPOD_DRY_RUN=0`.
 - [ ] `RUN_SERVER_SKIP_ENV_LOAD=1`, `TASK_MONITOR_INTERVAL_SECONDS=5`, `PROMPT_LLM_COLD_START_RETRY_DELAYS_SECONDS=5,10,20,30,30`을 명시하거나, 이미지 기본값을 사용한다는 운영 판단을 기록한다.
+- [ ] 관측성은 `OBSERVABILITY_ENABLED=1`, `OBSERVABILITY_ENVIRONMENT=production`, `OBSERVABILITY_SLOW_REQUEST_MS=500`으로 유지한다. 이 변경은 DB migration 대상이 아니다.
 - [ ] `DATABASE_URL`, `RUNPOD_API_KEY`, `PROMPT_LLM_API_KEY`, `AUTH_JWT_SECRET`는 Secrets Manager 참조인지 확인한다.
 - [ ] Sandbox Pod 운영을 사용하는 경우 `RUNPOD_SANDBOX_POD_API_KEY`도 Secrets Manager 참조인지 확인하고, `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`, `RUNPOD_SANDBOX_TEMPLATE_ID`, GPU type/count를 현재 RunPod Sandbox 구성과 일치시킨다.
 - [ ] `DATABASE_SSL_CA=/app/certs/global-bundle.pem`, `DATABASE_SSL_VERIFY_IDENTITY=1`을 확인한다.

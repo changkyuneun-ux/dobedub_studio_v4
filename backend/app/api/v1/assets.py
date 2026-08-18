@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import mimetypes
+from time import perf_counter
 from email.utils import formatdate
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.app.core.security import CurrentUser, current_user_from_asset_session, has_permission, require_permission
+from backend.app.core.observability import observe_asset_stream, request_timing
 from backend.app.services import studio_api_service
 
 router = APIRouter(tags=["assets"])
@@ -16,6 +18,7 @@ router = APIRouter(tags=["assets"])
 
 @router.get("/assets")
 def list_assets(
+    request: Request,
     type: str = "",
     workflowId: str = "",
     from_: str = Query("", alias="from"),
@@ -30,16 +33,17 @@ def list_assets(
     # `from`은 Python 예약어라 쿼리 파라미터 이름은 그대로 두고 함수 인자만 `from_`로 받는다.
     # 2026-08-11: Asset 관리 화면 통합 - collectionId(특정 컬렉션만)/uncategorized
     # (어느 컬렉션에도 없는 자산만) 필터 추가.
-    return studio_api_service.paginated_assets(
-        page,
-        pageSize,
-        asset_type=type,
-        workflow_id=workflowId,
-        date_from=from_,
-        date_to=to,
-        collection_id=collectionId or None,
-        uncategorized=uncategorized,
-    )
+    with request_timing(request, "db"):
+        return studio_api_service.paginated_assets(
+            page,
+            pageSize,
+            asset_type=type,
+            workflow_id=workflowId,
+            date_from=from_,
+            date_to=to,
+            collection_id=collectionId or None,
+            uncategorized=uncategorized,
+        )
 
 
 @router.post("/uploads", status_code=201)
@@ -71,14 +75,16 @@ def get_file(
     if not any(has_permission(current_user.permissions, permission) for permission in ("jobs:run", "history:read")):
         raise HTTPException(status_code=403, detail="One of permissions is required: jobs:run, history:read")
     try:
-        asset, asset_path = studio_api_service.get_asset(asset_id)
+        with request_timing(request, "db"):
+            asset, asset_path = studio_api_service.get_asset(asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}") from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"File not found: {asset_id}") from exc
 
     content_type = asset.get("mimeType") or mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
-    stat_result = asset_path.stat()
+    with request_timing(request, "file_stat"):
+        stat_result = asset_path.stat()
     file_size = stat_result.st_size
     file_name = str(asset.get("fileName") or asset_path.name).replace('"', "")
     disposition = "attachment" if download == "1" else "inline"
@@ -111,7 +117,17 @@ def get_file(
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
         headers["Content-Length"] = str(length)
         return StreamingResponse(
-            _iter_file_range(asset_path, start=start, length=length),
+            _iter_file_range(
+                asset_path,
+                start=start,
+                length=length,
+                on_complete=lambda duration_ms, bytes_sent: observe_asset_stream(
+                    request,
+                    duration_ms=duration_ms,
+                    bytes_sent=bytes_sent,
+                    status_code=206,
+                ),
+            ),
             status_code=206,
             media_type=content_type,
             headers=headers,
@@ -120,17 +136,31 @@ def get_file(
     return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers, stat_result=stat_result)
 
 
-def _iter_file_range(path: Path, *, start: int, length: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+def _iter_file_range(
+    path: Path,
+    *,
+    start: int,
+    length: int,
+    chunk_size: int = 1024 * 1024,
+    on_complete: Callable[[float, int], None] | None = None,
+) -> Iterator[bytes]:
     """Stream a byte range without buffering a large EFS-backed video."""
+    started_at = perf_counter()
+    bytes_sent = 0
     remaining = length
-    with path.open("rb") as stream:
-        stream.seek(start)
-        while remaining > 0:
-            chunk = stream.read(min(chunk_size, remaining))
-            if not chunk:
-                break
-            remaining -= len(chunk)
-            yield chunk
+    try:
+        with path.open("rb") as stream:
+            stream.seek(start)
+            while remaining > 0:
+                chunk = stream.read(min(chunk_size, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                bytes_sent += len(chunk)
+                yield chunk
+    finally:
+        if on_complete:
+            on_complete((perf_counter() - started_at) * 1000, bytes_sent)
 
 
 def _etag_matches(if_none_match: str, etag: str) -> bool:

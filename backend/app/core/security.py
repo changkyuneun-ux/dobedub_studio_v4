@@ -9,10 +9,11 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from time import time
-from fastapi import Cookie, Depends, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
+from backend.app.core.observability import request_timing
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import User
 from backend.app.db.session import get_db
@@ -161,28 +162,32 @@ def ensure_admin_user(session: Session) -> User:
 
 
 def current_user_from_headers(
+    request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
     db: Session = Depends(get_db),
 ) -> CurrentUser:
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        claims = decode_access_token(token)
-        return _current_user_from_claims(db, claims)
-    raise HTTPException(status_code=401, detail="Authentication is required")
+    with request_timing(request, "auth"):
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            claims = decode_access_token(token)
+            return _current_user_from_claims(db, claims)
+        raise HTTPException(status_code=401, detail="Authentication is required")
 
 
 def current_user_from_asset_session(
+    request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
     asset_session: str | None = Cookie(default=None, alias=ASSET_SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> CurrentUser:
     """Authenticate native media without exposing a bearer token in its URL."""
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        return _current_user_from_claims(db, decode_access_token(token))
-    if asset_session:
-        return _current_user_from_claims(db, decode_access_token(asset_session))
-    raise HTTPException(status_code=401, detail="Authentication is required")
+    with request_timing(request, "auth"):
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            return _current_user_from_claims(db, decode_access_token(token))
+        if asset_session:
+            return _current_user_from_claims(db, decode_access_token(asset_session))
+        raise HTTPException(status_code=401, detail="Authentication is required")
 
 
 def _current_user_from_claims(session: Session, claims: dict) -> CurrentUser:

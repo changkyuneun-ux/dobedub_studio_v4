@@ -56,6 +56,9 @@ PROMPT_LLM_POLL_INTERVAL=3
 AUTH_JWT_SECRET=<strong-random-secret>
 AUTH_TOKEN_TTL_MINUTES=480
 TASK_MONITOR_INTERVAL_SECONDS=5
+OBSERVABILITY_ENABLED=1
+OBSERVABILITY_ENVIRONMENT=production
+OBSERVABILITY_SLOW_REQUEST_MS=500
 RUN_SERVER_AUTO_MIGRATE=0
 RUN_SERVER_SKIP_ENV_LOAD=1
 ```
@@ -65,6 +68,24 @@ RUN_SERVER_SKIP_ENV_LOAD=1
 Sandbox Pod 운영을 사용할 때는 `RUNPOD_SANDBOX_POD_API_KEY`를 Secrets Manager 참조로 주입합니다. 현재 RunPod API key와 같은 키를 사용하더라도 별도 환경변수 이름으로 주입해야 하며, Pod ID나 Pod 이름은 migration에 따라 바뀔 수 있으므로 고정 selector로 사용하지 않습니다. `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`를 기본 selector로, `RUNPOD_SANDBOX_TEMPLATE_ID`를 보조 selector로 사용합니다.
 
 인증은 `Authorization: Bearer <JWT>`만 허용합니다. `AUTH_TRUST_PROXY_HEADERS` 및 `X-User-*` 헤더 기반 인증은 지원하지 않으므로, ECS task definition에서도 해당 환경변수를 제거합니다.
+
+## Asset/Manual 관측성
+
+`OBSERVABILITY_ENABLED=1`이면 앱은 `GET /api/assets`, `GET /api/files/{assetId}`, `/manual`, `/docs/manual-assets/*` 요청을 표준 출력 JSON으로 기록합니다. ECS CloudWatch Logs가 이 로그를 수집하면 Embedded Metric Format(EMF)을 통해 `DOBEDUB/Studio` namespace에 별도 에이전트 없이 지표가 생성됩니다.
+
+- CloudWatch Metrics: `ApiLatencyMs`, `ApiRequestCount`, `ApiErrorCount`, `AssetRangeRequestCount`, `AssetStreamReadMs`, `AssetStreamBytes`
+- 공통 dimension: `Environment`, `Operation`, `StatusFamily`만 사용합니다. user ID, asset ID, request ID는 지표 dimension으로 넣지 않아 고카디널리티 비용을 방지합니다.
+- Browser Network 탭: 응답의 `Server-Timing`에서 `auth`, `db`, `file_stat`, `render`, `app` 시간을 밀리초로 확인합니다. 실제 byte stream 시간은 응답 전송 뒤 확정되므로 `AssetStreamReadMs` EMF 지표와 구조화 로그에서 확인합니다.
+- 운영 task definition: `OBSERVABILITY_ENVIRONMENT=production`, `OBSERVABILITY_SLOW_REQUEST_MS=500`을 명시합니다. 이 변경은 DB migration이 필요 없습니다.
+
+CloudWatch Logs Insights의 `/aws/ecs/default/dobedub-app-cf8b`에서 초기 병목을 확인할 때는 아래 query를 사용합니다.
+
+```text
+fields @timestamp, operation, status, totalMs, authMs, dbMs, fileStatMs, renderMs, rangeRequest, requestId
+| filter event = "request_timing" and operation in ["asset_list", "asset_file", "manual_html", "manual_asset"]
+| sort totalMs desc
+| limit 100
+```
 
 ## RDS/MySQL 운영 기준
 

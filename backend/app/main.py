@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import logging
 import os
+from time import perf_counter
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ from backend.app.api.v1.segment_defaults import router as segment_defaults_route
 from backend.app.api.v1.system import router as system_router
 from backend.app.api.v1.workflows import router as workflows_router
 from backend.app.core.config import get_settings
+from backend.app.core.observability import ensure_request_id, observe_response
 from backend.app.db.session import engine
 from backend.app.services.prompt_builder_service import monitor_active_prompt_generations
 from backend.app.services.studio_api_service import ensure_storage_dirs, monitor_active_jobs
@@ -111,8 +113,14 @@ def create_app() -> FastAPI:
     )
 
     @app.middleware("http")
-    async def no_cache_studio_assets(request, call_next):
-        response = await call_next(request)
+    async def response_headers_and_observability(request, call_next):
+        started_at = perf_counter()
+        ensure_request_id(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            observe_response(request, None, (perf_counter() - started_at) * 1000, status_code=500)
+            raise
         path = request.url.path
         # Vite build의 hash 파일은 내용이 바뀌면 URL도 바뀐다. 운영에서 매 화면
         # 진입마다 JS/CSS를 다시 검증하지 않도록 장기 캐시한다.
@@ -126,6 +134,7 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+        observe_response(request, response, (perf_counter() - started_at) * 1000)
         return response
 
     api_routers = [

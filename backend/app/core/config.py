@@ -63,6 +63,9 @@ class Settings:
     auth_jwt_secret: str = "dobedub-studio-local-dev-secret"
     auth_token_ttl_minutes: int = 480
     task_monitor_interval_seconds: int = 5
+    observability_enabled: bool = True
+    observability_environment: str = "local"
+    observability_slow_request_ms: int = 500
 
 
 def get_settings() -> Settings:
@@ -123,6 +126,10 @@ def get_settings() -> Settings:
         task_monitor_interval_seconds = min(60, max(1, int(os.environ.get("TASK_MONITOR_INTERVAL_SECONDS", "5"))))
     except ValueError:
         task_monitor_interval_seconds = 5
+    try:
+        observability_slow_request_ms = min(60_000, max(1, int(os.environ.get("OBSERVABILITY_SLOW_REQUEST_MS", "500"))))
+    except ValueError:
+        observability_slow_request_ms = 500
     return Settings(
         workflow_seed_dir=Path(os.environ.get("WORKFLOW_SEED_DIR", PROJECT_ROOT / "workflows")),
         workflows_dir=Path(os.environ.get("WORKFLOWS_DIR", PROJECT_ROOT / "workflows")),
@@ -170,6 +177,9 @@ def get_settings() -> Settings:
         auth_jwt_secret=os.environ.get("AUTH_JWT_SECRET", "dobedub-studio-local-dev-secret"),
         auth_token_ttl_minutes=auth_token_ttl_minutes,
         task_monitor_interval_seconds=task_monitor_interval_seconds,
+        observability_enabled=os.environ.get("OBSERVABILITY_ENABLED", "1") not in {"0", "false", "FALSE", "no", "NO"},
+        observability_environment=os.environ.get("OBSERVABILITY_ENVIRONMENT", "local").strip() or "local",
+        observability_slow_request_ms=observability_slow_request_ms,
     )
 
 
