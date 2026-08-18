@@ -443,6 +443,25 @@ export function Create6dScreen({
   );
 }
 
+function formatSandboxPercent(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "-";
+}
+
+function formatSandboxUptime(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "-";
+  const totalSeconds = Math.floor(value);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatSandboxCapacity(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? `${value} GB` : "-";
+}
+
 // E-04 · 5b "Sandbox Pod" — 구버전 AdminConsoleModal의 Sandbox 탭은 관리자
 // 전용 상태(users/roles/workflows 등)를 전부 한 컴포넌트 안에 갖고 있어 그대로
 // 재사용할 수 없다. 그 탭이 쓰던 sandboxPod/sandboxPodLoading/
@@ -537,13 +556,50 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
             <div className="v3-card-header-title">HTTP Services</div>
             <span className="v3-card-header-meta">{sandboxPod.httpServices.length}</span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 16 }}>
+          <div className="v3-sandbox-service-list">
             {sandboxPod.httpServices.length ? sandboxPod.httpServices.map((service) => (
-              <a className="v3-text-link-button" style={{ padding: 0 }} href={service.url} key={service.url} rel="noreferrer" target="_blank">
-                {service.label || `HTTP ${service.internalPort}`} · {service.url}
+              <a className="v3-sandbox-service-link" href={service.url} key={service.url} rel="noreferrer" target="_blank">
+                <span className="v3-sandbox-service-name">{service.label || `HTTP ${service.internalPort}`}</span>
+                <span className="v3-sandbox-service-port">HTTP {service.internalPort}</span>
+                <span className="v3-sandbox-service-url">{service.url}</span>
               </a>
             )) : <p className="v3-muted-text">{sandboxPod.message || "노출된 HTTP 서비스가 없습니다."}</p>}
           </div>
+        </div>
+      ) : null}
+      {sandboxPod ? (
+        <div className="v3-card">
+          <div className="v3-card-header">
+            <div className="v3-card-header-title">RunPod System Status</div>
+            <span className="v3-card-header-meta">{sandboxPod.systemStatus?.mode === "live" ? "LIVE" : "CONFIGURATION"}</span>
+          </div>
+          {sandboxPod.systemStatus?.available ? (
+            <div className="v3-sandbox-metric-grid">
+              <div className="v3-sandbox-metric"><span>Uptime</span><strong>{formatSandboxUptime(sandboxPod.systemStatus.uptimeSeconds)}</strong></div>
+              <div className="v3-sandbox-metric"><span>CPU</span><strong>{formatSandboxPercent(sandboxPod.systemStatus.cpuPercent)}</strong></div>
+              <div className="v3-sandbox-metric"><span>Memory</span><strong>{formatSandboxPercent(sandboxPod.systemStatus.memoryPercent)}</strong></div>
+              <div className="v3-sandbox-metric"><span>GPU</span><strong>{sandboxPod.systemStatus.gpus.length || sandboxPod.systemStatus.gpuCount || "-"}</strong></div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide">
+                <span>GPU Utilization</span>
+                <strong>{sandboxPod.systemStatus.gpus.length
+                  ? sandboxPod.systemStatus.gpus.map((gpu, index) => `GPU ${index + 1} ${formatSandboxPercent(gpu.gpuUtilPercent)} / VRAM ${formatSandboxPercent(gpu.memoryUtilPercent)}`).join(" · ")
+                  : "-"}
+                </strong>
+              </div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide">
+                <span>Storage</span>
+                <strong>Container {formatSandboxCapacity(sandboxPod.systemStatus.storage?.containerDiskInGb)} · Volume {formatSandboxCapacity(sandboxPod.systemStatus.storage?.volumeInGb)}</strong>
+              </div>
+            </div>
+          ) : (
+            <div className="v3-sandbox-metric-grid">
+              <div className="v3-sandbox-metric"><span>GPU</span><strong>{sandboxPod.systemStatus?.gpuCount || "-"}</strong></div>
+              <div className="v3-sandbox-metric"><span>Memory</span><strong>{formatSandboxCapacity(sandboxPod.systemStatus?.memoryInGb)}</strong></div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide"><span>GPU Type</span><strong>{sandboxPod.systemStatus?.gpuType || "-"}</strong></div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide"><span>Storage</span><strong>Container {formatSandboxCapacity(sandboxPod.systemStatus?.storage?.containerDiskInGb)} · Volume {formatSandboxCapacity(sandboxPod.systemStatus?.storage?.volumeInGb)}</strong></div>
+              <p className="v3-muted-text v3-sandbox-status-message">{sandboxPod.systemStatus?.message || "RunPod 런타임 상태 정보가 아직 준비되지 않았습니다."}</p>
+            </div>
+          )}
         </div>
       ) : null}
 

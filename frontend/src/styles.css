@@ -4424,6 +4424,91 @@ button {
   font-weight: 500;
 }
 
+.v3-sandbox-service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.v3-sandbox-service-link {
+  align-items: center;
+  border: 1px solid var(--v3-border);
+  border-radius: 8px;
+  color: var(--v3-accent-text);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(96px, auto) auto minmax(0, 1fr);
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.v3-sandbox-service-link:hover {
+  background: var(--v3-accent-bg);
+  border-color: var(--v3-accent);
+}
+
+.v3-sandbox-service-name {
+  color: var(--v3-text-body);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.v3-sandbox-service-port,
+.v3-sandbox-service-url {
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+}
+
+.v3-sandbox-service-port {
+  color: var(--v3-text-label);
+}
+
+.v3-sandbox-service-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-sandbox-metric-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 14px 16px;
+}
+
+.v3-sandbox-metric {
+  background: var(--v3-bg-subtle);
+  border: 1px solid var(--v3-border-inner);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 58px;
+  padding: 10px 11px;
+}
+
+.v3-sandbox-metric span {
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: 10px;
+}
+
+.v3-sandbox-metric strong {
+  color: var(--v3-text-body);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.v3-sandbox-metric-wide {
+  grid-column: span 2;
+}
+
+.v3-sandbox-status-message {
+  margin: 0;
+  padding: 14px 16px;
+}
+
 /* 2026-08-11: 3a 우측 패널 아코디언(Assets/Node Config/Prompt Review) - 폐지된
    Run 상세(3f/3c) 화면 내용을 목록 화면 안으로 흡수하면서 추가. .v3-card-header를
    버튼으로 써서 기존 카드 헤더 스타일을 그대로 재사용한다. */

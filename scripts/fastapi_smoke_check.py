@@ -132,7 +132,7 @@ def main():
             "v4-10-admin-catalog-tree-expanded.jpg",
             "v4-11-admin-negative-defaults.jpg",
             "v4-12-admin-workflows.jpg",
-            "v4-13-admin-sandbox-pod.jpg",
+            "v4-13-admin-sandbox-pod-current.png",
             "v4-14-admin-system-status.jpg",
             "v4-15-admin-metadata.jpg",
             "v4-16-admin-audit-log.jpg",

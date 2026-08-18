@@ -12,6 +12,7 @@
 
 | 일자 | 변경 전 | 변경 후 | 비고 |
 | --- | --- | --- | --- |
+| 2026-08-18 | Sandbox Pod 접속 링크와 저장소 관리 절차가 간략함 | FileBrowser·JupyterLab·터미널·Network Volume 사용량 조회 및 정리 절차 추가 | Sandbox Pod 운영 |
 | 2026-08-05 | 구버전 캡처 이미지 사용 | v3 현재 화면 14장 신규 캡처 후 전면 재작성 | 당시 문서 기준 |
 | ~2026-08-11 | (여러 차례 부분 수정) | Sandbox Pod, Node Config Seed, 해상도/영상길이 등 개별 반영 | 이전 개정 이력 |
 | 2026-08-12 | 모달 기반 UI(Admin Console/Prompt Builder/Metadata View 등) 설명, 구버전(v3 이전) 화면 캡처 다수 잔존 | **전면 재작성.** GNB·모달이 모두 사라지고 좌측 사이드바 + 라우트 기반 화면으로 전환된 현재 구조(v4)를 기준으로 목차·화면 설명·캡처 이미지를 새로 작성 | 아래 내용부터 현재 앱과 1:1로 대응 |
@@ -57,6 +58,9 @@
    - [프롬프트 카탈로그 관리](#12-프롬프트-카탈로그-관리)
    - [워크플로 정의 관리](#13-워크플로-정의-관리)
    - [Sandbox Pod](#14-sandbox-pod)
+     - [FileBrowser로 파일 확인](#filebrowser로-파일-확인)
+     - [JupyterLab과 터미널 사용](#jupyterlab과-터미널-사용)
+     - [Network Volume 사용량 조회와 정리](#network-volume-사용량-조회와-정리)
    - [Task Policy](#15-task-policy)
    - [System Status](#16-system-status)
    - [Metadata](#17-metadata)
@@ -418,11 +422,76 @@ STEP 1 화면의 오른쪽 `Run Summary`와 좌측 진행 체크리스트에서 
 
 `Sandbox Pod` 메뉴입니다. 일상적인 영상 생성용 RunPod Serverless와는 분리된 전용 Pod로, 개발/디버깅 목적의 HTTP 서비스(ComfyUI 등)에 접근할 때 사용합니다.
 
-![Sandbox Pod 화면](v4-13-admin-sandbox-pod.jpg)
+![Sandbox Pod 화면 - ComfyUI, FileBrowser, JupyterLab 및 RunPod System Status](manual-assets/v4-13-admin-sandbox-pod-current.png)
 
-Pod ID/이름은 Network Volume ID와 Template ID로 매 요청마다 재해결됩니다(고정 값이 아님 — RunPod 측 마이그레이션에 대응하기 위함). `Deploy Sandbox Pod`/`Stop Pod`/`Refresh Status`로 제어하며, 상태는 ComfyUI `8188` 서비스 주소와 `INITIALIZING`/`READY`/`EXITED` 등으로 표시됩니다. 하단 `Pod 제어 이력`은 감사 로그와 연동되어 있습니다.
+Pod ID/이름은 Network Volume ID와 Template ID로 매 요청마다 재해결됩니다(고정 값이 아님 — RunPod 측 마이그레이션에 대응하기 위함). `Deploy Sandbox Pod`/`Stop Pod`/`Refresh Status`로 제어하며, 상태는 ComfyUI `8188` 서비스 주소와 `INITIALIZING`/`READY`/`EXITED` 등으로 표시됩니다.
+
+- **ComfyUI**: HTTP `8188` 링크로 ComfyUI 화면을 엽니다. `READY` 판정은 이 포트의 응답을 기준으로 합니다.
+- **FileBrowser**: Pod 템플릿에서 HTTP `8080`을 노출한 경우 링크가 함께 표시됩니다. Studio는 FileBrowser의 ID/비밀번호를 생성·저장·표시·변경하지 않습니다. 인증 설정은 RunPod Pod 또는 FileBrowser 자체에서 관리합니다.
+- **JupyterLab**: Pod 템플릿에서 HTTP `8888`을 노출한 경우 FileBrowser 아래에 링크가 표시됩니다.
+- **RunPod System Status**: Refresh Status 시점의 컨테이너 CPU/메모리, GPU/VRAM 사용률, 업타임과 할당된 저장소 용량을 표시합니다. 실시간 사용률은 GraphQL 읽기 권한이 있는 `RUNPOD_SANDBOX_POD_GRAPHQL_API_KEY`가 있을 때 표시됩니다. 권한이 없거나 런타임 API가 준비 중이면 Pod 제어는 유지되며 GPU/메모리/저장소 구성 정보만 표시됩니다.
 
 Sandbox Pod는 Pod 상태와 HTTP 서비스만 관리합니다. 동시 작업 제출 정책은 별도 **Task Policy** 메뉴에서 확인·수정합니다.
+
+### FileBrowser로 파일 확인
+
+1. Sandbox Pod 상태가 `READY`인지 확인합니다.
+2. `HTTP Services`의 **FileBrowser · HTTP 8080** 링크를 새 탭으로 엽니다.
+3. FileBrowser 화면에서 `/workspace`를 열어 Network Volume의 모델, 워크플로, 결과 파일 구조를 확인합니다.
+4. 파일을 내려받거나 이동하기 전에 대상 경로와 파일명을 확인합니다. Studio는 FileBrowser의 ID/비밀번호를 생성·저장·표시·변경하지 않으므로, 로그인 요구 여부와 인증정보는 RunPod Pod 또는 FileBrowser 설정을 따릅니다.
+
+FileBrowser는 파일을 눈으로 검토하거나 소수의 파일을 이동하는 용도에 적합합니다. 여러 GB 단위 모델을 대량 이동·삭제하거나 사용량을 분석할 때는 아래 JupyterLab 터미널 절차를 사용합니다.
+
+### JupyterLab과 터미널 사용
+
+1. Sandbox Pod가 `READY` 상태인지 확인합니다.
+2. **JupyterLab · HTTP 8888** 링크를 엽니다. 이 링크는 Pod 템플릿에 `8888/http`가 노출된 경우에만 보입니다.
+3. JupyterLab 왼쪽 Launcher에서 **Terminal**을 선택합니다.
+4. 명령은 기본적으로 `/workspace` 기준에서 실행합니다. Network Volume은 Pod 재시작·교체 후에도 유지되는 저장소이므로, 삭제 명령을 실행하기 전 경로를 반드시 재확인합니다.
+
+```bash
+cd /workspace
+pwd
+ls -lah
+```
+
+JupyterLab에서 코드를 실행하거나 파일을 관리하는 작업은 Sandbox Pod 전용입니다. 일상적인 영상 생성은 Studio의 RunPod Serverless 작업 흐름을 계속 사용합니다.
+
+### Network Volume 사용량 조회와 정리
+
+Studio의 `RunPod System Status`에 보이는 Storage 값은 **할당 용량**입니다. 실제 사용량은 Pod 내부에서 다음 명령으로 조회합니다.
+
+```bash
+# /workspace 전체·사용·여유 공간을 GB와 사용률로 확인
+df -h /workspace
+
+# 최상위 폴더별 용량을 큰 순서대로 확인
+du -sh /workspace/* 2>/dev/null | sort -h
+
+# models 하위의 큰 폴더를 확인
+du -sh /workspace/models/* 2>/dev/null | sort -h
+
+# 5GB 이상 파일을 찾아 정리 후보를 검토
+find /workspace -type f -size +5G -print
+```
+
+권장 관리 순서:
+
+1. `df -h /workspace`로 전체 사용률을 먼저 확인합니다.
+2. `du -sh` 결과에서 큰 폴더를 확인하고, `find` 결과에서 파일명·경로·최종 수정시각을 검토합니다.
+3. 등록된 Workflow가 사용하는 checkpoint, VAE, LoRA, CLIP, UNet 등은 삭제 전에 **Metadata와 Workflow 모델 인벤토리**로 참조 여부를 확인합니다.
+4. 불필요한 임시 결과물, 중복 다운로드 파일, 이전 테스트 산출물부터 정리합니다. 모델 파일은 참조 여부를 확인하기 전 삭제하지 않습니다.
+5. 삭제가 필요한 경우 대상 파일을 한 번 더 `ls -lh <경로>`로 확인한 뒤 수행하고, 다시 `df -h /workspace`로 결과를 검증합니다.
+
+```bash
+# 예시: 삭제 전 대상 확인. 실제 삭제는 경로를 검토한 뒤에만 실행합니다.
+ls -lh /workspace/outputs/example.mp4
+
+# 확인된 불필요 파일만 삭제합니다.
+rm /workspace/outputs/example.mp4
+```
+
+`rm -rf /workspace/models`처럼 상위 모델 디렉터리를 한 번에 삭제하는 명령은 사용하지 마세요. Network Volume은 Pod와 독립적으로 유지되므로, 잘못 삭제한 파일은 Pod를 다시 시작해도 복구되지 않습니다.
 
 ## 15. Task Policy
 

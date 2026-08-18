@@ -206,6 +206,27 @@ export type SandboxPodStatus = {
     url: string;
     label?: string;
   }>;
+  systemStatus?: {
+    available: boolean;
+    mode?: "live" | "configuration" | "unavailable";
+    uptimeSeconds?: number | null;
+    cpuPercent?: number | null;
+    memoryPercent?: number | null;
+    gpuCount?: number | null;
+    gpuType?: string | null;
+    memoryInGb?: number | null;
+    gpus: Array<{
+      id?: string;
+      gpuUtilPercent?: number | null;
+      memoryUtilPercent?: number | null;
+    }>;
+    storage?: {
+      containerDiskInGb?: number | null;
+      volumeInGb?: number | null;
+      networkVolumeId?: string | null;
+    };
+    message?: string;
+  };
 };
 
 export type ConfigControl = {

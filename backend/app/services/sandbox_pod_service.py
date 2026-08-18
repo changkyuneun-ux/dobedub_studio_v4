@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -206,25 +207,43 @@ def _request(settings: Settings, method: str, path: str, body: dict | None = Non
         raise RuntimeError(f"Sandbox Pod API 연결 실패: {exc.reason}") from exc
 
 
+def _graphql_request(settings: Settings, query: str, variables: dict[str, str]) -> dict:
+    """Query RunPod's Pod runtime fields without exposing the API key to clients."""
+    api_key = settings.sandbox_pod_graphql_api_key.strip() or settings.sandbox_pod_api_key
+    query_string = urllib.parse.urlencode({"api_key": api_key})
+    url = f"{settings.sandbox_pod_graphql_url.rstrip('/')}?{query_string}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=settings.sandbox_pod_timeout) as response:
+            payload = response.read().decode("utf-8")
+            parsed = json.loads(payload) if payload.strip() else {}
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Sandbox Pod runtime API HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Sandbox Pod runtime API 연결 실패: {exc.reason}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Sandbox Pod runtime API 응답 형식이 올바르지 않습니다.")
+    errors = parsed.get("errors")
+    if errors:
+        raise RuntimeError("Sandbox Pod runtime API가 상태 정보를 반환하지 않았습니다.")
+    data = parsed.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Sandbox Pod runtime API 응답 데이터가 없습니다.")
+    return data
+
+
 def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
     pod_id = str(pod.get("id") or settings.sandbox_pod_id).strip()
-    services = []
-    for item in pod.get("ports") or []:
-        try:
-            raw_port, protocol = str(item).split("/", 1)
-            port = int(raw_port)
-        except (TypeError, ValueError):
-            continue
-        if protocol.lower() != "http" or port != 8188:
-            continue
-        services.append({
-            "internalPort": port,
-            "url": f"https://{pod_id}-{port}.proxy.runpod.net",
-            "label": f"HTTP {port}",
-        })
+    services = _http_services(pod_id, pod.get("ports") or [])
     status = str(pod.get("desiredStatus") or pod.get("status") or "UNKNOWN").upper()
     runtime_status = _runtime_status(settings, pod_id, status, services)
-    if not services:
+    system_status = _runtime_metrics(settings, pod_id, pod)
+    if not any(service["internalPort"] == 8188 for service in services):
         message = "ComfyUI HTTP 8188 포트가 노출되지 않았습니다. RunPod Pod 설정을 확인하세요."
     elif runtime_status == "READY":
         message = "Sandbox Pod와 ComfyUI HTTP 8188 서비스가 준비되었습니다."
@@ -267,8 +286,117 @@ def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
         ),
         "locked": bool(pod.get("locked")),
         "httpServices": services,
+        "systemStatus": system_status,
         "message": message,
     }
+
+
+def _http_services(pod_id: str, ports: list[object]) -> list[dict]:
+    service_labels = {8188: "ComfyUI", 8080: "FileBrowser", 8888: "JupyterLab"}
+    services: list[dict] = []
+    for item in ports:
+        try:
+            raw_port, protocol = str(item).split("/", 1)
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            continue
+        if protocol.lower() != "http" or port not in service_labels:
+            continue
+        services.append({
+            "internalPort": port,
+            "url": f"https://{pod_id}-{port}.proxy.runpod.net",
+            "label": service_labels[port],
+        })
+    # The readiness source is presented first; the other links are supplementary
+    # access points and do not participate in the READY decision.
+    display_order = {8188: 0, 8080: 1, 8888: 2}
+    return sorted(services, key=lambda service: display_order[service["internalPort"]])
+
+
+def _runtime_metrics(settings: Settings, pod_id: str, pod: dict) -> dict:
+    """Return best-effort runtime metrics. A metrics outage must not block Pod control."""
+    storage = {
+        "containerDiskInGb": _number_or_none(pod.get("containerDiskInGb")),
+        "volumeInGb": _number_or_none(pod.get("volumeInGb")),
+        "networkVolumeId": _network_volume_id(pod) or None,
+    }
+    fallback = {
+        "gpuCount": _number_or_none(pod.get("gpuCount")),
+        "gpuType": _gpu_type_name(pod),
+        "memoryInGb": _number_or_none(pod.get("memoryInGb")),
+    }
+    query = """
+        query SandboxPodRuntime($podId: String!) {
+          pod(input: { podId: $podId }) {
+            runtime {
+              uptimeInSeconds
+              container { cpuPercent memoryPercent }
+              gpus { id gpuUtilPercent memoryUtilPercent }
+            }
+          }
+        }
+    """
+    try:
+        response = _graphql_request(settings, query, {"podId": pod_id})
+        pod_data = response.get("pod") if isinstance(response, dict) else None
+        runtime = pod_data.get("runtime") if isinstance(pod_data, dict) else None
+        if not isinstance(runtime, dict):
+            raise RuntimeError("Sandbox Pod runtime 정보가 아직 준비되지 않았습니다.")
+        container = runtime.get("container") if isinstance(runtime.get("container"), dict) else {}
+        gpus = runtime.get("gpus") if isinstance(runtime.get("gpus"), list) else []
+        return {
+            "available": True,
+            "mode": "live",
+            "uptimeSeconds": _number_or_none(runtime.get("uptimeInSeconds")),
+            "cpuPercent": _number_or_none(container.get("cpuPercent")),
+            "memoryPercent": _number_or_none(container.get("memoryPercent")),
+            "gpus": [
+                {
+                    "id": str(gpu.get("id") or f"GPU {index + 1}"),
+                    "gpuUtilPercent": _number_or_none(gpu.get("gpuUtilPercent")),
+                    "memoryUtilPercent": _number_or_none(gpu.get("memoryUtilPercent")),
+                }
+                for index, gpu in enumerate(gpus)
+                if isinstance(gpu, dict)
+            ],
+            **fallback,
+            "storage": storage,
+        }
+    except RuntimeError as exc:
+        return {
+            "available": False,
+            "mode": "configuration",
+            "gpus": [],
+            **fallback,
+            "storage": storage,
+            "message": _runtime_metric_fallback_message(exc),
+        }
+
+
+def _number_or_none(value: object) -> float | int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _gpu_type_name(pod: dict) -> str | None:
+    values = pod.get("gpuTypeIds") or pod.get("gpuTypes") or []
+    if isinstance(values, list) and values:
+        return ", ".join(str(value) for value in values if value)
+    value = pod.get("gpuTypeId")
+    return str(value) if value else None
+
+
+def _runtime_metric_fallback_message(error: RuntimeError) -> str:
+    message = str(error)
+    if "HTTP 403" in message:
+        return "실시간 CPU·메모리·GPU 사용률은 GraphQL 조회 권한이 있는 RunPod API 키가 필요합니다. 현재 Pod 구성 및 저장소 정보만 표시합니다."
+    return "실시간 런타임 상태를 불러오지 못했습니다. 현재 Pod 구성 및 저장소 정보만 표시합니다."
 
 
 def _lifecycle_event_timestamp(value: str | None) -> datetime | None:
@@ -299,9 +427,10 @@ def _lifecycle_event_timestamp(value: str | None) -> datetime | None:
 def _runtime_status(settings: Settings, pod_id: str, desired_status: str, services: list[dict]) -> str:
     if desired_status != "RUNNING":
         return desired_status
-    if not services:
+    service = next((item for item in services if item["internalPort"] == 8188), None)
+    if service is None:
         return "INITIALIZING"
-    service_url = services[0]["url"]
+    service_url = service["url"]
     request = urllib.request.Request(service_url, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=min(settings.sandbox_pod_timeout, 5)) as response:

@@ -43,6 +43,8 @@ class Settings:
     sandbox_pod_deploy_name: str = "dobedub_comfyUI_Sandbox"
     sandbox_pod_api_key: str = ""
     sandbox_pod_rest_url: str = "https://rest.runpod.io/v1"
+    sandbox_pod_graphql_url: str = "https://api.runpod.io/graphql"
+    sandbox_pod_graphql_api_key: str = ""
     sandbox_pod_timeout: int = 20
     prompt_llm_provider: str = "mock"
     prompt_llm_api_key: str = ""
@@ -148,6 +150,8 @@ def get_settings() -> Settings:
         sandbox_pod_deploy_name=os.environ.get("RUNPOD_SANDBOX_DEPLOY_NAME", "dobedub_comfyUI_Sandbox"),
         sandbox_pod_api_key=os.environ.get("RUNPOD_SANDBOX_POD_API_KEY", ""),
         sandbox_pod_rest_url=os.environ.get("RUNPOD_SANDBOX_POD_REST_URL", "https://rest.runpod.io/v1"),
+        sandbox_pod_graphql_url=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_URL", "https://api.runpod.io/graphql"),
+        sandbox_pod_graphql_api_key=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_API_KEY", ""),
         sandbox_pod_timeout=sandbox_pod_timeout,
         prompt_llm_provider=os.environ.get("PROMPT_LLM_PROVIDER", "mock").strip().lower() or "mock",
         prompt_llm_api_key=os.environ.get("PROMPT_LLM_API_KEY", ""),
