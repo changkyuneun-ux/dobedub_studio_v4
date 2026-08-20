@@ -74,7 +74,7 @@ def set_prompt_text(workflow: dict, node_id: str | None, text: str | None) -> st
     if not node_id or text is None:
         return node_id
     inputs = workflow.get(node_id, {}).setdefault("inputs", {})
-    inputs["text"] = str(text).strip()
+    inputs[workflow_parser.prompt_input_field(workflow, node_id)] = str(text).strip()
     return node_id
 
 
@@ -91,7 +91,7 @@ def apply_segment_prompts(
         positive_text = positive_texts[index] if index < len(positive_texts) else ""
         negative_text = negative_additions[index] if index < len(negative_additions) else ""
         if segment.get("positive_node") and str(positive_text).strip():
-            workflow[segment["positive_node"]]["inputs"]["text"] = str(positive_text).strip()
+            set_prompt_text(workflow, segment["positive_node"], positive_text)
             applied.append({"segment": index + 1, "node": segment["positive_node"], "field": "positive"})
         if segment.get("negative_node") and str(negative_text).strip():
             set_prompt_text(workflow, segment["negative_node"], negative_text)
@@ -104,7 +104,7 @@ def apply_single_prompt(workflow: dict, positive_text: str | None, negative_text
     positive_node = workflow_parser.find_prompt_node(workflow, "Positive")
     negative_node = workflow_parser.find_prompt_node(workflow, "Negative")
     if positive_node and str(positive_text or "").strip():
-        workflow[positive_node]["inputs"]["text"] = str(positive_text).strip()
+        set_prompt_text(workflow, positive_node, positive_text)
         applied.append({"node": positive_node, "field": "positive"})
     if negative_node and str(negative_text or "").strip():
         set_prompt_text(workflow, negative_node, negative_text)

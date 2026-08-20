@@ -5,7 +5,11 @@ import re
 from pathlib import Path
 
 
-VIDEO_NODE_TYPES = {"WanFirstLastFrameToVideo", "WanImageToVideo"}
+VIDEO_NODE_TYPES = {
+    "WanFirstLastFrameToVideo",
+    "WanImageToVideo",
+    "MiniMaxH3ReferenceToVideo",
+}
 
 PARAM_UI_KEYS = {
     "width": "width",
@@ -202,7 +206,19 @@ def find_image_slots(workflow: dict) -> dict:
 def prompt_text(workflow: dict, node_id: str | None) -> str:
     if not node_id:
         return ""
-    return workflow.get(node_id, {}).get("inputs", {}).get("text", "") or ""
+    inputs = workflow.get(node_id, {}).get("inputs", {})
+    field = prompt_input_field(workflow, node_id)
+    return inputs.get(field, "") or ""
+
+
+def prompt_input_field(workflow: dict, node_id: str | None) -> str:
+    """Return the editable prompt field for common ComfyUI text nodes."""
+    inputs = workflow.get(node_id or "", {}).get("inputs", {})
+    if "text" in inputs:
+        return "text"
+    if "value" in inputs:
+        return "value"
+    return "text"
 
 
 def find_prompt_node(workflow: dict, label: str) -> str | None:
@@ -212,6 +228,18 @@ def find_prompt_node(workflow: dict, label: str) -> str | None:
         title = node.get("_meta", {}).get("title", "")
         if label in title:
             return node_id
+
+    if label != "Positive":
+        return None
+
+    # MiniMax H3 stores the positive prompt in a PrimitiveStringMultiline node
+    # linked to the generation node's ``prompt`` input, not CLIPTextEncode.
+    for _video_node_id, node in workflow.items():
+        if node.get("class_type") not in VIDEO_NODE_TYPES:
+            continue
+        prompt_node = link_node(node.get("inputs") or {}, "prompt")
+        if prompt_node and prompt_input_field(workflow, prompt_node) in {"text", "value"}:
+            return prompt_node
     return None
 
 
