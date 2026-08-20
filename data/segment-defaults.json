@@ -302,5 +302,48 @@
         }
       }
     ]
+  },
+  "video_minimax_h3_r2v.json": {
+    "workflowName": "video_minimax_h3_r2v",
+    "segments": [
+      {
+        "id": "segment-1",
+        "name": "Subgraph_1",
+        "config": {
+          "durationSeconds": 10,
+          "fps": 24,
+          "outputFps": 24,
+          "bitDepth": 8,
+          "videoFormat": "auto",
+          "videoCodec": "auto",
+          "frames": 81,
+          "steps": 20,
+          "cfgScale": 5.0,
+          "motionShift": 1.0
+        }
+      }
+    ]
+  },
+  "video_wan2_2_14B_flf2v_2-images-1.json": {
+    "workflowName": "video_wan2_2_14B_flf2v_2-images-1",
+    "segments": [
+      {
+        "id": "segment-1",
+        "name": "WanFirstLastFrameToVideo_1",
+        "config": {
+          "steps": 20,
+          "cfgScale": 4,
+          "motionShift": 8.000000000000002,
+          "width": 640,
+          "height": 640,
+          "frames": 81,
+          "fps": 16,
+          "outputFps": 16,
+          "bitDepth": 8,
+          "videoFormat": "auto",
+          "videoCodec": "auto"
+        }
+      }
+    ]
   }
 }

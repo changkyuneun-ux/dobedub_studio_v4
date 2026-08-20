@@ -29,6 +29,8 @@ from backend.app.services.workflow_parser import (
 
 
 WORKFLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.json$")
+WORKFLOW_ID_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+WORKFLOW_ID_REPEATED_SEPARATORS = re.compile(r"[-_]{2,}")
 
 
 def list_admin_users(session: Session) -> dict:
@@ -321,9 +323,14 @@ def set_admin_workflow_active(workflow_id: str, active: bool) -> dict:
 
 
 def normalize_workflow_id(value: object) -> str:
-    workflow_id = Path(str(value or "").strip()).name
-    if not workflow_id.endswith(".json"):
-        workflow_id = f"{workflow_id}.json"
+    raw_name = Path(str(value or "").strip()).name
+    if raw_name.lower().endswith(".json"):
+        raw_name = raw_name[:-5]
+    # Workflow JSON files are often exported with spaces, parentheses, or a
+    # browser-generated copy suffix. Store them under a predictable safe ID.
+    base_name = WORKFLOW_ID_UNSAFE_CHARS.sub("-", raw_name).strip("._-")
+    base_name = WORKFLOW_ID_REPEATED_SEPARATORS.sub("-", base_name)
+    workflow_id = f"{base_name}.json" if base_name else ""
     if not WORKFLOW_ID_PATTERN.match(workflow_id) or workflow_id.endswith(".paramconfig.json"):
         raise ValueError("Invalid workflowId")
     return workflow_id

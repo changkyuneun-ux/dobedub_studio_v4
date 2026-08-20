@@ -1,0 +1,92 @@
+{
+  "_comment": "Admin workflow registration에서 workflow JSON을 기준으로 자동 생성한 paramconfig입니다. 필요 시 Admin에서 별도 paramconfig JSON을 업로드해 덮어쓸 수 있습니다.",
+  "workflow": "video_minimax_h3_r2v.json",
+  "segments": [
+    {
+      "segment_index": 1,
+      "params": {
+        "duration_seconds": {
+          "targets": [
+            {
+              "node": "132",
+              "field": "value"
+            }
+          ],
+          "type": "float",
+          "default": 10,
+          "min": 1.0,
+          "max": 10.0,
+          "note": "duration 기반 workflow입니다. 실제 length는 workflow 내부 수식으로 계산됩니다."
+        },
+        "fps": {
+          "targets": [
+            {
+              "node": "130",
+              "field": "fps"
+            }
+          ],
+          "type": "int",
+          "default": 24,
+          "min": 8,
+          "max": 30
+        },
+        "output_fps": {
+          "targets": [
+            {
+              "node": "130",
+              "field": "fps"
+            }
+          ],
+          "type": "int",
+          "default": 24,
+          "min": 8,
+          "max": 60,
+          "description": "최종 출력 CreateVideo 노드의 FPS입니다. 세그먼트 FPS와 별도로 최종 결합 영상에 적용됩니다."
+        },
+        "bit_depth": {
+          "targets": [
+            {
+              "node": "130",
+              "field": "bit_depth"
+            }
+          ],
+          "type": "int",
+          "default": 8,
+          "min": 8,
+          "max": 16,
+          "description": "최종 출력 CreateVideo 노드의 bit_depth입니다. 기본값 8을 권장합니다."
+        },
+        "video_format": {
+          "targets": [
+            {
+              "node": "92",
+              "field": "format"
+            }
+          ],
+          "type": "string",
+          "default": "auto",
+          "options": [
+            "auto",
+            "mp4"
+          ],
+          "description": "최종 출력 SaveVideo 노드의 format입니다. ComfyUI에서 지원하는 값을 입력합니다."
+        },
+        "video_codec": {
+          "targets": [
+            {
+              "node": "92",
+              "field": "codec"
+            }
+          ],
+          "type": "string",
+          "default": "auto",
+          "options": [
+            "auto",
+            "h264"
+          ],
+          "description": "최종 출력 SaveVideo 노드의 codec입니다. ComfyUI에서 지원하는 값을 입력합니다."
+        }
+      }
+    }
+  ]
+}

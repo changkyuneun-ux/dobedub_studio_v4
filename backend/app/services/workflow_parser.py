@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -107,6 +108,41 @@ def load_image_ref(workflow: dict, inputs: dict, role: str) -> str | None:
     return None
 
 
+def image_input_order(field: str) -> tuple[int, int | str]:
+    """Keep standard I2V inputs and indexed reference images in run order."""
+    if field == "start_image":
+        return (0, 0)
+    if field == "end_image":
+        return (0, 1)
+    reference_match = re.search(r"(?:^|\\.)ref_image_(\\d+)$", field)
+    if reference_match:
+        return (1, int(reference_match.group(1)))
+    if field == "image":
+        return (2, 0)
+    return (3, field)
+
+
+def linked_load_image_inputs(workflow: dict) -> list[tuple[str, str]]:
+    """Return only LoadImage nodes wired into an image-to-video node.
+
+    Some workflows, including MiniMax H3, expose reference images as indexed
+    inputs such as ``ref_images.ref_image_0`` instead of ``start_image`` and
+    ``end_image``.  Graph links are the source of truth, not the node title or
+    the order in which LoadImage nodes happen to be serialized.
+    """
+    linked: list[tuple[str, str]] = []
+    seen_node_ids: set[str] = set()
+    for _video_node_id, node in workflow.items():
+        if node.get("class_type") not in VIDEO_NODE_TYPES:
+            continue
+        for field in sorted((node.get("inputs") or {}).keys(), key=image_input_order):
+            node_id = load_image_ref(workflow, node.get("inputs") or {}, field)
+            if node_id and node_id not in seen_node_ids:
+                linked.append((field, node_id))
+                seen_node_ids.add(node_id)
+    return linked
+
+
 def find_segments(workflow: dict) -> list[dict]:
     video_nodes = [
         node_id for node_id, node in workflow.items()
@@ -152,17 +188,13 @@ def find_segments(workflow: dict) -> list[dict]:
 
 
 def find_image_slots(workflow: dict) -> dict:
-    for _node_id, node in workflow.items():
-        if node.get("class_type") not in VIDEO_NODE_TYPES:
-            continue
-        inputs = node.get("inputs", {})
+    linked_inputs = linked_load_image_inputs(workflow)
+    if linked_inputs:
         slots = {}
-        for role in ("start_image", "end_image"):
-            ref = load_image_ref(workflow, inputs, role)
-            if ref:
-                slots[role] = ref
-        if slots:
-            return slots
+        for index, (field, node_id) in enumerate(linked_inputs, start=1):
+            role = field if field in {"start_image", "end_image", "image"} else f"image_{index}"
+            slots[role] = node_id
+        return slots
     nodes = find_load_image_nodes(workflow)
     return {"image": nodes[0]} if nodes else {}
 
@@ -192,7 +224,7 @@ def keyframe_count(workflow: dict, segments: list[dict]) -> int:
                 if node_id and node_id not in ordered:
                     ordered.append(node_id)
         return len(ordered)
-    return len(find_image_slots(workflow))
+    return len(find_keyframe_images_ordered(workflow, segments))
 
 
 def find_keyframe_images_ordered(workflow: dict, segments: list[dict] | None = None) -> list[str]:
@@ -205,11 +237,11 @@ def find_keyframe_images_ordered(workflow: dict, segments: list[dict] | None = N
                 ordered.append(node_id)
     if ordered:
         return ordered
-    slots = find_image_slots(workflow)
-    for role in ("start_image", "end_image", "image"):
-        node_id = slots.get(role)
+    for _field, node_id in linked_load_image_inputs(workflow):
         if node_id and node_id not in ordered:
             ordered.append(node_id)
+    if ordered:
+        return ordered
     for node_id in find_load_image_nodes(workflow):
         if node_id not in ordered:
             ordered.append(node_id)
