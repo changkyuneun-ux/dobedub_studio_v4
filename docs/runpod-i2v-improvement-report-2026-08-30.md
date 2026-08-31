@@ -4,6 +4,7 @@
 - 대상: DOBEDUB Studio v4 / RunPod Serverless i2v 파이프라인
 - 분석 데이터: 운영 RDS `workflow_tasks` 109건(타이밍 보유 89건), `task_prompts` 111건, 운영 EFS 워크플로우 13개 — 2026-08-06 ~ 08-21
 - 상세 설계: [A 성능](superpowers/specs/2026-08-30-runpod-performance-design.md) · [B·C 품질](superpowers/specs/2026-08-30-quality-and-template-governance-design.md)
+- 이력 분석: [작업 이력 분석 — 사용자·일자·워크플로우](task-history-analysis-2026-08-31.md)
 
 ---
 
@@ -84,7 +85,7 @@ exec(실행)   p50=229.6s  p90=469.7s   p95=516.9s   max=541s
 
 ### 2.6 실패는 시스템이 아니라 사용 방식에 붙어 있습니다 (2026-08-31 추가)
 
-전체 이력을 사용자·일자·워크플로우 축으로 다시 집계한 결과, 앞서 인용한 실패율의 성격이 달라졌습니다.
+전체 이력을 사용자·일자·워크플로우 축으로 다시 집계한 결과, 앞서 인용한 실패율의 성격이 달라졌습니다. 전체 분석은 [작업 이력 분석](task-history-analysis-2026-08-31.md)에 있습니다.
 
 **정책 도입 전후**
 
