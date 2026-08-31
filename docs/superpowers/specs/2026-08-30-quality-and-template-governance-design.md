@@ -5,6 +5,9 @@
 - 범위: B(결과 품질)와 C(템플릿 품질). 둘은 뿌리를 공유하므로 한 스펙으로 묶는다. A(성능)는 [2026-08-30-runpod-performance-design.md](2026-08-30-runpod-performance-design.md) 참조.
 - 근거 데이터: 운영 RDS `workflow_tasks` 109건, `task_prompts` 111건, 운영 EFS `WORKFLOWS_DIR` 13개 워크플로우, 리포지토리 워크플로우 JSON 전수
 
+
+> **우선순위 안내 (2026-08-31)**: 이 문서의 측정 결과와 기술 설계는 유효하나, **무엇을 먼저 할지는 [우선순위 재편 로드맵](2026-08-31-priority-roadmap.md)을 따른다.** 특히 Idle Timeout 상향은 폐기됐고, 큐 관리가 최우선으로 올라왔다.
+
 ## 1. 공통 뿌리
 
 paramconfig가 세 가지를 동시에 잘못하고 있다.
