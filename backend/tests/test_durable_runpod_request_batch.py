@@ -288,6 +288,53 @@ def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_
     assert dashboard["totals"]["requestWaiting"] == 1
 
 
+def test_success_request_item_is_not_counted_as_incomplete_queue_data(db_session):
+    """Dirty legacy SUCCESS item rows must not make queue totals diverge from the dashboard."""
+    db_session.add_all([
+        _asset("asset_success_item"),
+        RunpodRequestBatch(
+            id="rpb_success_item",
+            workflow_id="1-images.json",
+            requested_count=1,
+            completed_count=1,
+            status="QUEUED",
+            created_by="operator",
+            submitted_by="operator",
+        ),
+        RunpodRequestItem(
+            id="rpi_success_item",
+            request_batch_id="rpb_success_item",
+            sequence_no=1,
+            prompt_draft_id=None,
+            asset_id="asset_success_item",
+            workflow_id="1-images.json",
+            positive_prompt="already done",
+            requested_frames=81,
+            status="SUCCESS",
+            task_id="task_success_item",
+        ),
+        WorkflowTask(
+            id="task_success_item",
+            workflow_id="1-images.json",
+            status="SUCCESS",
+        ),
+    ])
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator")
+    dashboard = request_batch_dashboard(db_session, created_by="operator")
+
+    assert queue["total"] == 0
+    assert queue["items"] == []
+    assert dashboard["totals"] == {
+        "incomplete": 0,
+        "requestWaiting": 0,
+        "runpodQueued": 0,
+        "inProgress": 0,
+        "failed": 0,
+    }
+
+
 def test_request_batch_summary_follows_persisted_task_status(db_session):
     db_session.add_all([
         _asset("asset_request_status"),

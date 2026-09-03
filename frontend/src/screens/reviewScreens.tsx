@@ -8,7 +8,8 @@ import {
   TaskPromptReviewFlags,
   TaskPromptItem,
   TaskModelReference,
-  GrokImagePromptDraftResponse
+  GrokImagePromptDraftResponse,
+  WorkflowItem
 } from "../api/client";
 import { StudioRoute } from "../router";
 import { User } from "../auth";
@@ -33,6 +34,9 @@ import {
   ProtectedAssetPreview
 } from "../components/ProtectedAssets";
 
+function workflowLabel(workflow: WorkflowItem) {
+  return workflow.label || workflow.name || workflow.id;
+}
 
 // E-03 · 3a "작업 이력" — design_handoff_dobedub_v3/3 Review.dc.html의 첫 화면.
 // 목록·페이지네이션·삭제는 B-01/C-03에서 이미 완성된 로직(loadHistoryPage,
@@ -83,7 +87,8 @@ export function Create3aScreen({
   canDelete,
   canCancel,
   canReview,
-  canGiveFeedback
+  canGiveFeedback,
+  workflows
 }: {
   user: User | null;
   health: HealthResponse | null;
@@ -122,6 +127,7 @@ export function Create3aScreen({
   canCancel: boolean;
   canReview: boolean;
   canGiveFeedback: boolean;
+  workflows: WorkflowItem[];
 }) {
   const [historyTab, setHistoryTab] = useState<"prompt" | "runpod">("prompt");
   const [runpodPage, setRunpodPage] = useState(1);
@@ -132,6 +138,7 @@ export function Create3aScreen({
   const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "completed" | "failed">("all");
+  const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
   // 선택한 Run이 바뀌어도 사용자가 펼쳐둔 섹션은 유지한다(세션 내 UX 편의).
@@ -148,7 +155,7 @@ export function Create3aScreen({
     setRunpodHistoryLoading(true);
     setRunpodHistoryNotice("");
     setSelectedRunpodTaskIds([]);
-    apiClient.runpodHistory(runpodPage)
+    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter })
       .then((response) => {
         if (!active) return;
         setRunpodHistoryItems(response.items);
@@ -166,7 +173,7 @@ export function Create3aScreen({
     return () => {
       active = false;
     };
-  }, [historyTab, runpodPage]);
+  }, [historyTab, runpodPage, runpodWorkflowFilter]);
 
   const filteredHistory = runpodHistoryItems.filter((item) => {
     if (statusFilter === "all") return true;
@@ -226,8 +233,11 @@ export function Create3aScreen({
       sidebarExtra={
         <div className="v3-step-tracker">
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {runpodHistoryTotal}</div>
+          <div className="v3-runpod-filter-bar" style={{ padding: "0 10px 8px" }}>
+            <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
+          </div>
           {([
-            ["all", "전체", history.length],
+            ["all", "전체", runpodHistoryItems.length],
             ["active", "진행", activeCount],
             ["completed", "완료", completedCount],
             ["failed", "실패", failedCount]
@@ -583,13 +593,15 @@ function PromptGenerationHistory() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [generationFilter, setGenerationFilter] = useState("");
+  const [runpodFilter, setRunpodFilter] = useState("");
   const pageSize = 20;
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setNotice("");
-    apiClient.promptHistory(page)
+    apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })
       .then((response) => {
         if (!active) return;
         setItems(response.items);
@@ -607,7 +619,7 @@ function PromptGenerationHistory() {
     return () => {
       active = false;
     };
-  }, [page]);
+  }, [page, generationFilter, runpodFilter]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
@@ -620,6 +632,10 @@ function PromptGenerationHistory() {
         <div className="v3-card-header-title">프롬프트 생성 이력</div>
         <span className="v3-card-header-meta">{total}건 · 20건 / 페이지</span>
       </div>
+      <div className="v3-runpod-filter-bar">
+        <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option></select></label>
+        <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option></select></label>
+      </div>
       <div className="v3-prompt-history-head">
         <span>No</span><span>작업자</span><span>KST 생성일</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>Grok API 응답</span><span>복사</span>
       </div>
@@ -627,7 +643,8 @@ function PromptGenerationHistory() {
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
       {!loading && !notice && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>생성된 프롬프트 이력이 없습니다.</p> : null}
       {!loading && items.map((item, index) => {
-        const generated = item.status !== "FAILED";
+        const generated = item.status === "READY";
+        const generationLabel = item.status === "FAILED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
         const api = item.grokResponse;
         return (
           <div className="v3-prompt-history-row" key={item.draftId}>
@@ -639,7 +656,7 @@ function PromptGenerationHistory() {
               <small>{item.assetId}</small>
             </div>
             <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : "null"}</div>
-            <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generated ? "SUCCESS" : "FAILED"}</span>
+            <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
             <div className="v3-prompt-api-meta" title={item.error || ""}>
               <strong>{api?.model || item.model || "-"}</strong>

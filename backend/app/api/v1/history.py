@@ -26,6 +26,8 @@ def history(page: int = 1, pageSize: int = 20, _: CurrentUser = Depends(require_
 @router.get("/prompts")
 def prompt_history(
     page: int = 1,
+    generationStatus: str = "",
+    runpodStatus: str = "",
     current_user: CurrentUser = Depends(require_permission("history:read")),
     db: Session = Depends(get_db),
 ):
@@ -40,6 +42,8 @@ def prompt_history(
             page=page,
             page_size=20,
             include_worker_stats=False,
+            generation_status=generationStatus,
+            runpod_status=runpodStatus,
         )
     except SQLAlchemyError as exc:
         LOGGER.exception("Prompt history query failed")
@@ -52,10 +56,11 @@ def prompt_history(
 @router.get("/runpod")
 def runpod_history(
     page: int = 1,
+    workflowId: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     """RunPod task history, deliberately fixed to 20 rows per page."""
-    return studio_api_service.paginated_runpod_history(page)
+    return studio_api_service.paginated_runpod_history(page, workflow_id=workflowId)
 
 
 @router.post("/{task_id}/delete")

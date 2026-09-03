@@ -174,7 +174,7 @@ def _reconcile_task_links_from_snapshot(db: Session, batch: RunpodRequestBatch) 
 
 
 def latest_active_request_batch(db: Session, *, created_by: str) -> dict | None:
-    terminal = {"COMPLETED", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
+    terminal = {"COMPLETED", "SUCCESS", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
     batch = db.scalar(
         select(RunpodRequestBatch)
         .where(RunpodRequestBatch.created_by == created_by, RunpodRequestBatch.status.not_in(terminal))
@@ -266,8 +266,8 @@ def _request_queue_entries(
     workflow_id: str = "",
 ) -> list[dict]:
     """Build a canonical, de-duplicated view of work not yet completed."""
-    terminal_batches = {"COMPLETED", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
-    terminal_items = {"COMPLETED"}
+    terminal_batches = {"COMPLETED", "SUCCESS", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
+    terminal_items = {"COMPLETED", "SUCCESS"}
     batch_statement = select(RunpodRequestItem, RunpodRequestBatch).join(
         RunpodRequestBatch,
         RunpodRequestItem.request_batch_id == RunpodRequestBatch.id,
@@ -423,7 +423,7 @@ def refresh_request_batch_summary(db: Session, batch_id: str) -> None:
     batch.requested_count = len(items)
     batch.queued_count = sum(states[state] for state in ("PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"))
     batch.in_progress_count = sum(states[state] for state in ("IN_PROGRESS", "RUNNING"))
-    batch.completed_count = states["COMPLETED"]
+    batch.completed_count = states["COMPLETED"] + states["SUCCESS"]
     batch.failed_count = states["FAILED"] + states["TIMED_OUT"]
     batch.cancelled_count = states["CANCELLED"]
     if not items:

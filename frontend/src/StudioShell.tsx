@@ -2057,6 +2057,7 @@ export function StudioShell({
         canCancel={canUse(user, "jobs:cancel")}
         canReview={canUse(user, "prompts:review")}
         canGiveFeedback={canUse(user, "prompts:review")}
+        workflows={workflows}
       />
     ) : route === "review.reuse" ? (
       <Create4cScreen

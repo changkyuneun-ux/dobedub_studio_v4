@@ -69,7 +69,7 @@ def record_job_status(job: dict, *, resolve_asset: Callable[[str], tuple[dict, P
 MAX_HISTORY_PAGE_SIZE = 200
 
 
-def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE) -> list[dict]:
+def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE, *, workflow_id: str = "") -> list[dict]:
     session = SessionLocal()
     try:
         safe_page = max(1, int(page or 1))
@@ -83,6 +83,8 @@ def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE) ->
             .offset((safe_page - 1) * safe_page_size)
             .limit(safe_page_size)
         )
+        if workflow_id:
+            id_statement = id_statement.where(WorkflowTask.workflow_id == workflow_id)
         task_ids = list(session.scalars(id_statement))
         if not task_ids:
             return []
@@ -108,7 +110,7 @@ def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE) ->
         session.close()
 
 
-def task_history_total() -> int:
+def task_history_total(*, workflow_id: str = "") -> int:
     session = SessionLocal()
     try:
         statement = (
@@ -117,6 +119,8 @@ def task_history_total() -> int:
             # soft delete된 작업은 총계에서도 제외(목록과 페이지네이션 일치).
             .where(WorkflowTask.deleted_at.is_(None))
         )
+        if workflow_id:
+            statement = statement.where(WorkflowTask.workflow_id == workflow_id)
         return int(session.scalar(statement) or 0)
     finally:
         session.close()

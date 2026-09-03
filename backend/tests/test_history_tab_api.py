@@ -141,6 +141,65 @@ def test_prompt_history_database_errors_return_actionable_message(api_client, mo
     assert response.json()["detail"] == "프롬프트 이력 조회에 실패했습니다. 최신 DB 인덱스 마이그레이션 적용 상태를 확인해주세요."
 
 
+def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            Asset(id="asset_prompt_ready_unrequested", asset_type="input_image", file_name="ready.png", mime_type="image/png", size_bytes=1, storage_key="uploads/ready.png"),
+            Asset(id="asset_prompt_failed", asset_type="input_image", file_name="failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/failed.png"),
+            Asset(id="asset_prompt_runpod_failed", asset_type="input_image", file_name="runpod-failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/runpod-failed.png"),
+            ImagePromptDraft(
+                id="grok_draft_ready_unrequested", asset_id="asset_prompt_ready_unrequested", workflow_id="1-images.json",
+                slot_index=1, status="READY", model="grok", positive_prompt="ready", created_by="history-user",
+            ),
+            ImagePromptDraft(
+                id="grok_draft_generation_failed", asset_id="asset_prompt_failed", workflow_id="1-images.json",
+                slot_index=1, status="FAILED", model="grok", failure_message="failed", created_by="history-user",
+            ),
+            ImagePromptDraft(
+                id="grok_draft_runpod_failed", asset_id="asset_prompt_runpod_failed", workflow_id="1-images.json",
+                slot_index=1, status="READY", model="grok", positive_prompt="ready but runpod failed", created_by="history-user",
+            ),
+            WorkflowTask(
+                id="task_prompt_runpod_failed",
+                workflow_id="1-images.json",
+                status="FAILED",
+                prompt_draft_id="grok_draft_runpod_failed",
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    failed_generation = api_client.get(
+        "/api/history/prompts?page=1&generationStatus=FAILED",
+        headers=_authorized_headers(),
+    )
+    unrequested_success = api_client.get(
+        "/api/history/prompts?page=1&generationStatus=SUCCESS&runpodStatus=UNREQUESTED",
+        headers=_authorized_headers(),
+    )
+    failed_runpod = api_client.get(
+        "/api/history/prompts?page=1&runpodStatus=FAILED",
+        headers=_authorized_headers(),
+    )
+
+    assert failed_generation.status_code == 200
+    assert [item["draftId"] for item in failed_generation.json()["items"]] == ["grok_draft_generation_failed"]
+    assert unrequested_success.status_code == 200
+    assert [item["draftId"] for item in unrequested_success.json()["items"]] == ["grok_draft_ready_unrequested"]
+    assert failed_runpod.status_code == 200
+    assert [item["draftId"] for item in failed_runpod.json()["items"]] == ["grok_draft_runpod_failed"]
+
+
 def test_runpod_history_returns_task_and_provider_response(api_client):
     session = SessionLocal()
     try:
@@ -186,13 +245,41 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
     }
 
 
+def test_runpod_history_filters_by_workflow(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            WorkflowTask(id="task_history_workflow_a", workflow_id="1-images.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_history_workflow_b", workflow_id="Pickme_Workflow.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get("/api/history/runpod?page=1&workflowId=Pickme_Workflow.json", headers=_authorized_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["taskId"] for item in body["items"]] == ["task_history_workflow_b"]
+
+
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
-    assert 'promptHistory: (page = 1)' in client
-    assert "/api/history/prompts?page=${page}" in client
-    assert 'runpodHistory: (page = 1)' in client
-    assert "/api/history/runpod?page=${page}" in client
-    assert "apiClient.promptHistory(page)" in screen
-    assert "apiClient.runpodHistory(runpodPage)" in screen
+    assert "promptHistory: (params:" in client
+    assert 'query.set("generationStatus", params.generationStatus)' in client
+    assert 'query.set("runpodStatus", params.runpodStatus)' in client
+    assert "runpodHistory: (params:" in client
+    assert 'query.set("workflowId", params.workflowId)' in client
+    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter })" in screen

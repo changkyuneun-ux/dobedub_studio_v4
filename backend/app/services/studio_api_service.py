@@ -68,20 +68,21 @@ def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
     return task_history_items(1, limit)
 
 
-def paginated_history(page: int = 1, page_size: int = 20) -> dict:
+def paginated_history(page: int = 1, page_size: int = 20, *, workflow_id: str = "") -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
+    workflow_id = str(workflow_id or "").strip()
     return {
-        "items": task_history_items(page, page_size),
+        "items": task_history_items(page, page_size, workflow_id=workflow_id),
         "page": page,
         "pageSize": page_size,
-        "total": task_history_total(),
+        "total": task_history_total(workflow_id=workflow_id),
     }
 
 
-def paginated_runpod_history(page: int = 1) -> dict:
+def paginated_runpod_history(page: int = 1, *, workflow_id: str = "") -> dict:
     """Return the dedicated RunPod-history contract with its fixed 20-row page."""
-    return paginated_history(page, 20)
+    return paginated_history(page, 20, workflow_id=workflow_id)
 
 
 def append_history(item: dict) -> list[dict]:

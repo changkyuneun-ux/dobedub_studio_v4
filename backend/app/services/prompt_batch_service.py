@@ -25,6 +25,10 @@ DRAFT_PENDING = "PENDING"
 DRAFT_GENERATING = "GENERATING"
 DRAFT_READY = "READY"
 DRAFT_FAILED = "FAILED"
+RUNPOD_WAITING_STATES = {"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"}
+RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
+RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
+RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
 
 
 def create_prompt_generation_batch(db: Session, payload: dict[str, Any], *, created_by: str) -> dict[str, Any]:
@@ -165,6 +169,8 @@ def list_prompt_drafts(
     created_by: str | None,
     workflow_id: str = "",
     status: str = "",
+    generation_status: str = "",
+    runpod_status: str = "",
     page: int = 1,
     page_size: int = 50,
     include_worker_stats: bool = True,
@@ -181,6 +187,17 @@ def list_prompt_drafts(
     if status:
         statement = statement.where(ImagePromptDraft.status == status.upper())
         count_statement = count_statement.where(ImagePromptDraft.status == status.upper())
+    generation_filter = str(generation_status or "").strip().upper()
+    if generation_filter == "SUCCESS":
+        statement = statement.where(ImagePromptDraft.status == DRAFT_READY)
+        count_statement = count_statement.where(ImagePromptDraft.status == DRAFT_READY)
+    elif generation_filter == "FAILED":
+        statement = statement.where(ImagePromptDraft.status == DRAFT_FAILED)
+        count_statement = count_statement.where(ImagePromptDraft.status == DRAFT_FAILED)
+    runpod_filter = _runpod_status_filter_condition(runpod_status)
+    if runpod_filter is not None:
+        statement = statement.where(runpod_filter)
+        count_statement = count_statement.where(runpod_filter)
     safe_page = max(1, int(page or 1))
     safe_page_size = max(1, min(200, int(page_size or 50)))
     total = int(db.scalar(count_statement) or 0)
@@ -221,6 +238,41 @@ def list_prompt_drafts(
         else:
             entry["pendingCount"] += int(count or 0)
     return {"items": _draft_payloads(db, rows, user_names=user_names), "workerStats": list(worker_stats.values()), "page": safe_page, "pageSize": safe_page_size, "total": total}
+
+
+def _runpod_status_filter_condition(value: str):
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return None
+    latest_status = (
+        select(WorkflowTask.status)
+        .where(
+            WorkflowTask.prompt_draft_id == ImagePromptDraft.id,
+            WorkflowTask.deleted_at.is_(None),
+        )
+        .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    task_exists = (
+        select(WorkflowTask.id)
+        .where(
+            WorkflowTask.prompt_draft_id == ImagePromptDraft.id,
+            WorkflowTask.deleted_at.is_(None),
+        )
+        .exists()
+    )
+    if normalized == "UNREQUESTED":
+        return ~task_exists
+    if normalized in {"PENDING", "WAITING", "QUEUED"}:
+        return latest_status.in_(RUNPOD_WAITING_STATES)
+    if normalized in {"IN_PROGRESS", "RUNNING"}:
+        return latest_status.in_(RUNPOD_ACTIVE_STATES)
+    if normalized in {"SUCCESS", "COMPLETED"}:
+        return latest_status.in_(RUNPOD_SUCCESS_STATES)
+    if normalized == "FAILED":
+        return latest_status.in_(RUNPOD_FAILED_STATES)
+    return None
 
 
 def update_prompt_draft(

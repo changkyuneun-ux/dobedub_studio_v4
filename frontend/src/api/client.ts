@@ -1036,8 +1036,19 @@ export const apiClient = {
   // Task History is intentionally split into two fixed 20-row contracts. Keeping
   // these endpoints separate prevents prompt-generation history from inheriting
   // RunPod pagination and sorting behavior.
-  promptHistory: (page = 1) => requestJson<PromptDraftListResponse>(`/api/history/prompts?page=${page}`),
-  runpodHistory: (page = 1) => requestJson<HistoryResponse>(`/api/history/runpod?page=${page}`),
+  promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string } = {}) => {
+    const query = new URLSearchParams();
+    query.set("page", String(params.page || 1));
+    if (params.generationStatus) query.set("generationStatus", params.generationStatus);
+    if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
+    return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
+  },
+  runpodHistory: (params: { page?: number; workflowId?: string } = {}) => {
+    const query = new URLSearchParams();
+    query.set("page", String(params.page || 1));
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
+  },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
   // 2026-08-11: Asset 관리 통합 - collectionId/uncategorized 필터 추가(사이드바
   // 컬렉션 선택에 대응).
