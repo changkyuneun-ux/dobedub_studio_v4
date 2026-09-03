@@ -55,11 +55,17 @@ def ensure_storage_dirs() -> None:
     settings.metadata_dir.mkdir(parents=True, exist_ok=True)
 
 
-def load_history() -> list[dict]:
+# 프롬프트 옵션 목록은 최근 이력에서 텍스트만 뽑아 종류별 상위 100건으로 자른다.
+# 최근 200건이면 그 100건을 채우고도 남는다. 전체 이력을 읽던 이전 구현은
+# workflow_tasks 전 행을 한 요청에서 메모리로 올려 ECS 메모리 부족의 직접 원인이었다.
+PROMPT_OPTION_HISTORY_LIMIT = 200
+
+
+def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
     # Task history is DB-only (D-03): always read through task_tracking_service,
     # independent of PERSISTENCE_BACKEND (which still governs assets/configs/
     # uploads via studio_repository()).
-    return task_history_items()
+    return task_history_items(1, limit)
 
 
 def paginated_history(page: int = 1, page_size: int = 20) -> dict:

@@ -7,6 +7,7 @@ import os
 from time import perf_counter
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
 
@@ -110,6 +111,9 @@ def create_app() -> FastAPI:
         redoc_url="/api-redoc",
         lifespan=_lifecycle,
     )
+    # 이력/자산 목록 응답은 반복 필드가 많은 JSON이라 압축률이 높다. ALB와
+    # 브라우저 사이 전송량을 줄이려고 붙인다. 1KB 미만 응답은 압축하지 않는다.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

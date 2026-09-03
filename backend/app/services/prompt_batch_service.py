@@ -4,9 +4,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import time
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
@@ -149,9 +149,7 @@ def list_active_prompt_generation_batches(db: Session, *, created_by: str | None
     )
     statement = (
         select(PromptGenerationBatch)
-        .where(
-            or_(PromptGenerationBatch.status.in_((BATCH_PENDING, BATCH_GENERATING)), active_draft_exists),
-        )
+        .where(active_draft_exists)
         .order_by(PromptGenerationBatch.created_at.desc(), PromptGenerationBatch.id.desc())
     )
     if created_by is not None:
@@ -418,17 +416,28 @@ def _latest_attempts_by_draft(db: Session, draft_ids: list[str]) -> dict[str, Pr
     return latest
 
 
-def _latest_runpod_tasks_by_draft(db: Session, draft_ids: list[str]) -> dict[str, WorkflowTask]:
-    tasks = db.scalars(
-        select(WorkflowTask)
+class DraftRunpodTask(NamedTuple):
+    """프롬프트 이력이 task에서 실제로 쓰는 두 값."""
+
+    id: str
+    status: str | None
+
+
+def _latest_runpod_tasks_by_draft(db: Session, draft_ids: list[str]) -> dict[str, DraftRunpodTask]:
+    # 응답이 쓰는 값은 task의 id와 status뿐이다. select(WorkflowTask)로 전체
+    # 엔티티를 읽던 이전 구현은 결과물 base64가 담긴 runpod_status_json(행당
+    # 최대 1.6MB)까지 끌어와, 영상을 표시하지도 않는 프롬프트 이력 화면을
+    # 느리게 만들고 ECS 메모리 부족의 원인이 됐다.
+    rows = db.execute(
+        select(WorkflowTask.prompt_draft_id, WorkflowTask.id, WorkflowTask.status)
         .where(WorkflowTask.prompt_draft_id.in_(draft_ids), WorkflowTask.deleted_at.is_(None))
         .order_by(WorkflowTask.prompt_draft_id.asc(), WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
     ).all()
-    latest: dict[str, WorkflowTask] = {}
-    for task in tasks:
-        draft_id = str(task.prompt_draft_id or "")
+    latest: dict[str, DraftRunpodTask] = {}
+    for prompt_draft_id, task_id, status in rows:
+        draft_id = str(prompt_draft_id or "")
         if draft_id and draft_id not in latest:
-            latest[draft_id] = task
+            latest[draft_id] = DraftRunpodTask(id=task_id, status=status)
     return latest
 
 
@@ -441,7 +450,7 @@ def _draft_payload_from_related(
     *,
     asset: Asset | None,
     attempt: PromptGenerationAttempt | None,
-    runpod_task: WorkflowTask | None,
+    runpod_task: DraftRunpodTask | None,
     created_by_name: str | None,
 ) -> dict[str, Any]:
     return {

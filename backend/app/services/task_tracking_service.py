@@ -63,20 +63,26 @@ def record_job_status(job: dict, *, resolve_asset: Callable[[str], tuple[dict, P
     _with_session(lambda session: _record_job_status(session, job, resolve_asset=resolve_asset))
 
 
-def task_history_items(page: int | None = None, page_size: int | None = None) -> list[dict]:
+# 이력 조회는 언제나 한 페이지 분량으로 제한된다. page/page_size를 생략하면 전체
+# 테이블을 읽던 이전 시그니처는 호출부가 실수하기 쉬웠고, 실제로 prompt_options()가
+# 그 경로로 workflow_tasks 전체를 메모리에 올려 ECS OOM을 냈다.
+MAX_HISTORY_PAGE_SIZE = 200
+
+
+def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE) -> list[dict]:
     session = SessionLocal()
     try:
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(MAX_HISTORY_PAGE_SIZE, int(page_size or MAX_HISTORY_PAGE_SIZE)))
         id_statement = (
             select(WorkflowTask.id)
             # 작업 생성 직후부터 같은 Task History에서 상태를 추적한다. 완료/실패만
             # 보이던 이전 필터는 활성 Task를 숨겨 멀티 작업 운영을 불가능하게 했다.
             .where(WorkflowTask.deleted_at.is_(None))
             .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
         )
-        if page is not None and page_size is not None:
-            safe_page = max(1, int(page))
-            safe_page_size = max(1, min(200, int(page_size)))
-            id_statement = id_statement.offset((safe_page - 1) * safe_page_size).limit(safe_page_size)
         task_ids = list(session.scalars(id_statement))
         if not task_ids:
             return []
@@ -89,7 +95,9 @@ def task_history_items(page: int | None = None, page_size: int | None = None) ->
             )
             .where(WorkflowTask.id.in_(task_ids))
         ).all()
-        assets_by_id = _assets_by_id(session)
+        # 이 페이지가 참조하는 자산만 읽는다. assets 테이블 전체를 읽던 이전
+        # 구현은 자산이 쌓일수록 모든 이력 조회를 함께 느리게 만들었다.
+        assets_by_id = _assets_by_ids(session, _history_asset_ids(tasks))
         tasks_by_id = {task.id: task for task in tasks}
         return [
             _task_to_history_item(tasks_by_id[task_id], assets_by_id)
@@ -339,7 +347,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
         )
         if not task:
             return None
-        history_item = _task_to_history_item(task, _assets_by_id(session))
+        history_item = _task_to_history_item(task, _assets_by_ids(session, _history_asset_ids([task])))
         payload = dict(task.payload_json or {})
         segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
         first_segment = segments[0] if segments else {}
@@ -489,7 +497,7 @@ def task_prompts(task_id: str) -> list[dict]:
             .where(TaskPrompt.task_id == task_id)
             .order_by(TaskPrompt.segment_index, TaskPrompt.id)
         ).all()
-        assets_by_id = _assets_by_id(session)
+        assets_by_id = _assets_by_ids(session, _prompt_asset_ids(rows))
         feedback_by_output_id = _prompt_feedback_by_output_id(session, [row.prompt_generation_output_id for row in rows])
         return [_task_prompt_to_json(row, assets_by_id, feedback_by_output_id) for row in rows]
     finally:
@@ -535,7 +543,7 @@ def update_task_prompt_review(task_id: str, segment_index: int, payload: dict) -
         _apply_prompt_review(row, payload)
         session.commit()
         feedback_by_output_id = _prompt_feedback_by_output_id(session, [row.prompt_generation_output_id])
-        return _task_prompt_to_json(row, _assets_by_id(session), feedback_by_output_id)
+        return _task_prompt_to_json(row, _assets_by_ids(session, _prompt_asset_ids([row])), feedback_by_output_id)
     except Exception:
         session.rollback()
         raise
@@ -603,7 +611,7 @@ def reusable_task_prompts(
         # 걸러진 소량의 큐레이션된 데이터만 다루므로 전체 후보를 메모리에 올리는
         # 비용이 감내할 만하다고 판단했다.
         rows = session.scalars(query).all()
-        assets_by_id = _assets_by_id(session)
+        assets_by_id = _assets_by_ids(session, _prompt_asset_ids(rows))
         feedback_by_output_id = _prompt_feedback_by_output_id(session, [row.prompt_generation_output_id for row in rows])
         items = [_task_prompt_to_json(row, assets_by_id, feedback_by_output_id) for row in rows]
         cleaned_keyword = str(keyword or "").strip()
@@ -658,6 +666,43 @@ def _sync_request_batch(session: Session, task: WorkflowTask) -> None:
     from backend.app.services.runpod_request_batch_service import sync_request_batch_for_task
 
     sync_request_batch_for_task(session, task)
+
+
+# RunPod은 완료된 결과물을 provider 응답 안에 base64로 그대로 실어 보낸다
+# (output.images[*].data). output_service.save_runpod_outputs()가 이미 그 바이트를
+# 디코딩해 asset 저장소에 파일로 기록하므로, 같은 값을 DB 컬럼에도 남기면 완전한
+# 중복본이 된다. 그 중복본은 응답에 실리지도 않으면서 - 이 컬럼에서 실제로 쓰는
+# 값은 _runpod_response_summary()의 filename/executionTime/delayTime/jobId 네
+# 개뿐이다 - 모든 task 조회가 행당 최대 1.6MB를 메모리로 끌어오게 만들었다.
+# 프롬프트 이력 화면처럼 영상을 보여주지도 않는 화면이 느려지고 ECS에서 메모리가
+# 부족해진 근본 원인이므로, 영속화 직전에 본문만 잘라내고 봉투(상태·ID·타이밍·
+# 파일명)는 그대로 남긴다.
+PROVIDER_PAYLOAD_MAX_STRING = 4096
+
+
+def prune_provider_payload(value, *, max_string_length: int = PROVIDER_PAYLOAD_MAX_STRING):
+    """Strip provider result bytes, keeping the response envelope intact.
+
+    Only oversized strings are removed, so a provider schema change cannot
+    smuggle a new base64 field back into the column. Each stripped value keeps
+    its original length as ``<key>Bytes`` so operators can still tell how large
+    the discarded body was.
+    """
+    if isinstance(value, dict):
+        pruned: dict = {}
+        for key, item in value.items():
+            if isinstance(item, str) and len(item) > max_string_length:
+                pruned[key] = ""
+                pruned[f"{key}Bytes"] = len(item)
+                pruned[f"{key}Stripped"] = True
+                continue
+            pruned[key] = prune_provider_payload(item, max_string_length=max_string_length)
+        return pruned
+    if isinstance(value, list):
+        return [prune_provider_payload(item, max_string_length=max_string_length) for item in value]
+    if isinstance(value, str) and len(value) > max_string_length:
+        return ""
+    return value
 
 
 def _payload_without_seed(payload: dict) -> dict:
@@ -731,8 +776,8 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
     task.wan_node_config = job.get("wanNodeConfig") or {}
     task.patch_summary = job.get("patchSummary") or {}
     task.payload_json = stored_payload
-    task.runpod_submit_json = job.get("runpodSubmit") or {}
-    task.runpod_status_json = job.get("runpodStatus") or {}
+    task.runpod_submit_json = prune_provider_payload(job.get("runpodSubmit") or {})
+    task.runpod_status_json = prune_provider_payload(job.get("runpodStatus") or {})
     # Queue jobs retain their immutable request references in payload.  The
     # persistence record must copy them into indexed columns as well; otherwise
     # a RunPod request batch cannot observe the task after navigation/restart.
@@ -1082,10 +1127,6 @@ def _first_output_filename(output_assets: list[dict]) -> str | None:
     return str(asset.get("fileName")) if isinstance(asset, dict) and asset.get("fileName") else None
 
 
-def _assets_by_id(session: Session) -> dict[str, dict]:
-    return {_asset.id: _asset_to_json(_asset) for _asset in session.scalars(select(Asset)).all()}
-
-
 def _assets_by_ids(session: Session, asset_ids: set[str] | list[str]) -> dict[str, dict]:
     """지정된 자산만 JSON으로 변환한다.
 
@@ -1101,10 +1142,40 @@ def _assets_by_ids(session: Session, asset_ids: set[str] | list[str]) -> dict[st
     }
 
 
+def _history_asset_ids(tasks: list[WorkflowTask]) -> set[str]:
+    """이력 항목 조립에 실제로 필요한 자산 ID만 모은다.
+
+    입력/출력 링크 외에 payload의 keyframe uploadId도 포함한다 -
+    hydrate_input_images()가 링크에 없는 업로드 ID로도 자산을 찾기 때문이다.
+    """
+    asset_ids: set[str] = set()
+    for task in tasks:
+        asset_ids.update(link.asset_id for link in task.input_assets if link.asset_id)
+        asset_ids.update(link.asset_id for link in task.output_assets if link.asset_id)
+        payload = task.payload_json if isinstance(task.payload_json, dict) else {}
+        for keyframe in payload.get("keyframes") or []:
+            if isinstance(keyframe, dict) and keyframe.get("uploadId"):
+                asset_ids.add(str(keyframe["uploadId"]))
+    return asset_ids
+
+
+def _prompt_asset_ids(rows) -> set[str]:
+    """task_prompts 행들이 참조하는 입력/출력 자산 ID만 모은다."""
+    asset_ids: set[str] = set()
+    for row in rows:
+        for asset_id in (row.input_asset_ids or []):
+            if asset_id:
+                asset_ids.add(str(asset_id))
+        for asset_id in (row.output_asset_ids or []):
+            if asset_id:
+                asset_ids.add(str(asset_id))
+    return asset_ids
+
+
 def _prompt_feedback_by_output_id(session: Session, output_ids: list[str | None]) -> dict[str, PromptFeedback]:
     """B-02: `prompt_feedback`("프롬프트 생성 품질" 평가, `task_prompts.quality_rating`
     ("영상 결과 평가")과는 역할이 분리된 별도 저장소)에서 이 배치의 `prompt_generation_output_id`들에
-    연결된 기존 평가를 한 번에 읽어온다 - `_assets_by_id`와 동일하게 N+1 쿼리를 피하기 위한
+    연결된 기존 평가를 한 번에 읽어온다 - `_assets_by_ids`와 동일하게 N+1 쿼리를 피하기 위한
     배치 조회. 같은 output에 대해 평가가 여러 번 저장될 수 있어(재평가), created_at 오름차순으로
     가져와 나중 값으로 덮어써 가장 최신 평가만 남긴다."""
     cleaned_ids = sorted({output_id for output_id in output_ids if output_id})

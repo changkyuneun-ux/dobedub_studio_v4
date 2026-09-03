@@ -16,7 +16,7 @@ from backend.app.services.json_repository import (
     hydrate_input_images,
     hydrate_output_asset,
 )
-from backend.app.services.task_tracking_service import TERMINAL_STATES
+from backend.app.services.task_tracking_service import TERMINAL_STATES, prune_provider_payload
 
 
 class DbStudioRepository:
@@ -94,8 +94,8 @@ class DbStudioRepository:
             "segments": sanitized_segments,
             "generationSeed": item.get("generationSeed") or item.get("seed"),
         }
-        task.runpod_submit_json = item.get("runpodSubmit") or {}
-        task.runpod_status_json = item.get("runpodStatus") or {}
+        task.runpod_submit_json = prune_provider_payload(item.get("runpodSubmit") or {})
+        task.runpod_status_json = prune_provider_payload(item.get("runpodStatus") or {})
         task.updated_at = datetime.utcnow()
         self.session.flush()
 
@@ -204,7 +204,7 @@ class DbStudioRepository:
         return self._asset_to_json(asset)
 
     def hydrate_input_images(self, item: dict) -> list[dict]:
-        return hydrate_input_images(item, self._assets_by_id())
+        return hydrate_input_images(item, self._input_image_assets(item))
 
     def _ensure_user(self, user_payload: dict, fallback_name: str | None) -> User | None:
         user_id = str(user_payload.get("id") or user_payload.get("email") or "").strip()
@@ -389,7 +389,7 @@ class DbStudioRepository:
             )
             for link in sorted(task.output_assets, key=lambda link: (link.segment_index or 0, link.id or 0))
         ] or item.get("outputAssets", [])
-        item["inputImages"] = item.get("inputImages") or hydrate_input_images(item, self._assets_by_id())
+        item["inputImages"] = item.get("inputImages") or hydrate_input_images(item, self._input_image_assets(item))
         item["wanNodeConfig"] = item.get("wanNodeConfig") or {}
         return item
 
@@ -419,8 +419,22 @@ class DbStudioRepository:
         item.setdefault("downloadUrl", f"/api/files/{asset.id}")
         return item
 
-    def _assets_by_id(self) -> dict:
-        return {asset.id: self._asset_to_json(asset) for asset in self.session.scalars(select(Asset)).all()}
+    def _input_image_assets(self, item: dict) -> dict:
+        """hydrate_input_images()가 찾는 자산만 읽는다.
+
+        assets 테이블 전체를 읽던 이전 구현은 자산이 쌓일수록 이력 조립을 함께
+        느리게 만들었다.
+        """
+        asset_ids = {str(asset_id) for asset_id in (item.get("inputAssets") or []) if asset_id}
+        for keyframe in item.get("keyframes") or []:
+            if isinstance(keyframe, dict) and keyframe.get("uploadId"):
+                asset_ids.add(str(keyframe["uploadId"]))
+        if not asset_ids:
+            return {}
+        return {
+            asset.id: self._asset_to_json(asset)
+            for asset in self.session.scalars(select(Asset).where(Asset.id.in_(sorted(asset_ids)))).all()
+        }
 
 
 def parse_datetime(value) -> datetime | None:

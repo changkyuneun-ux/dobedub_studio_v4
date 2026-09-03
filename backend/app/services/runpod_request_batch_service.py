@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import now_seoul_naive
@@ -94,6 +94,7 @@ def request_batch_payload(
         .order_by(RunpodRequestItem.sequence_no.asc())
     ).all()
     worker_name = _user_name(db, batch.created_by)
+    item_assets, item_runpod_job_ids = _item_relations(db, list(items))
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
@@ -111,7 +112,14 @@ def request_batch_payload(
         "submittedBy": batch.submitted_by,
         "submittedByName": _user_name(db, batch.submitted_by),
         "items": [
-            _item_payload(db, item, worker_id=batch.created_by, worker_name=worker_name)
+            _item_payload(
+                db,
+                item,
+                worker_id=batch.created_by,
+                worker_name=worker_name,
+                assets=item_assets,
+                runpod_job_ids=item_runpod_job_ids,
+            )
             for item in items
         ],
     }
@@ -128,19 +136,41 @@ def _reconcile_task_links_from_snapshot(db: Session, batch: RunpodRequestBatch) 
     items = db.scalars(
         select(RunpodRequestItem).where(RunpodRequestItem.request_batch_id == batch.id)
     ).all()
+    task_ids = [item.task_id for item in items if item.task_id]
+    if not task_ids:
+        return
+    # 필요한 컬럼만 한 번에 읽는다. item마다 db.get(WorkflowTask, ...)로 전체
+    # 엔티티를 가져오던 이전 구현은 폴링되는 이 경로에서 결과물 base64가 담긴
+    # runpod_status_json까지 매번 함께 끌어왔다.
+    task_rows = {
+        str(row.id): row
+        for row in db.execute(
+            select(
+                WorkflowTask.id,
+                WorkflowTask.payload_json,
+                WorkflowTask.status,
+                WorkflowTask.last_dispatch_error,
+                WorkflowTask.request_batch_id,
+                WorkflowTask.request_item_id,
+            ).where(WorkflowTask.id.in_(task_ids))
+        ).all()
+    }
     for item in items:
-        if not item.task_id:
+        row = task_rows.get(str(item.task_id or ""))
+        if row is None:
             continue
-        task = db.get(WorkflowTask, item.task_id)
-        if task is None:
-            continue
-        payload = task.payload_json if isinstance(task.payload_json, dict) else {}
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
         if payload.get("requestBatchId") != batch.id or payload.get("requestItemId") != item.id:
             continue
-        task.request_batch_id = batch.id
-        task.request_item_id = item.id
-        item.status = _item_status(task.status)
-        item.failure_message = task.last_dispatch_error if item.status == "PENDING_SUBMIT" else None
+        # 복구가 필요한 행만 쓴다. 이미 링크가 맞으면 쓰기는 발생하지 않는다.
+        if row.request_batch_id != batch.id or row.request_item_id != item.id:
+            db.execute(
+                update(WorkflowTask)
+                .where(WorkflowTask.id == row.id)
+                .values(request_batch_id=batch.id, request_item_id=item.id)
+            )
+        item.status = _item_status(row.status)
+        item.failure_message = row.last_dispatch_error if item.status == "PENDING_SUBMIT" else None
 
 
 def latest_active_request_batch(db: Session, *, created_by: str) -> dict | None:
@@ -248,11 +278,24 @@ def _request_queue_entries(
         batch_statement = batch_statement.where(RunpodRequestItem.workflow_id == workflow_id)
 
     entries: list[dict] = []
-    for request_item, batch in db.execute(batch_statement).all():
-        if str(request_item.status or "").upper() in terminal_items:
-            continue
+    # 행을 먼저 모은 뒤 참조 자산/task를 한 번에 읽는다. 루프 안에서 항목마다
+    # db.get()을 부르면 2초 폴링되는 이 경로가 N+1이 된다.
+    queue_rows = [
+        (request_item, batch)
+        for request_item, batch in db.execute(batch_statement).all()
+        if str(request_item.status or "").upper() not in terminal_items
+    ]
+    item_assets, item_runpod_job_ids = _item_relations(db, [row[0] for row in queue_rows])
+    for request_item, batch in queue_rows:
         worker_name = _user_name(db, batch.created_by)
-        payload = _item_payload(db, request_item, worker_id=batch.created_by, worker_name=worker_name)
+        payload = _item_payload(
+            db,
+            request_item,
+            worker_id=batch.created_by,
+            worker_name=worker_name,
+            assets=item_assets,
+            runpod_job_ids=item_runpod_job_ids,
+        )
         payload.update({
             "kind": "REQUEST_ITEM",
             "requestBatchId": batch.id,
@@ -389,15 +432,44 @@ def _item_status(task_status: str | None) -> str:
     return state
 
 
+def _item_relations(db: Session, items: list[RunpodRequestItem]) -> tuple[dict, dict]:
+    """항목 목록이 참조하는 자산과 RunPod job ID를 각각 한 번의 쿼리로 읽는다.
+
+    항목마다 db.get()을 부르던 이전 구현은 N+1이었고, WorkflowTask는 전체
+    엔티티로 로드되어 결과물 base64가 담긴 runpod_status_json까지 끌어왔다.
+    """
+    asset_ids = {item.asset_id for item in items if item.asset_id}
+    task_ids = {item.task_id for item in items if item.task_id}
+    assets = {
+        asset.id: asset
+        for asset in (db.scalars(select(Asset).where(Asset.id.in_(asset_ids))).all() if asset_ids else [])
+    }
+    runpod_job_ids = {
+        str(task_id): runpod_job_id
+        for task_id, runpod_job_id in (
+            db.execute(
+                select(WorkflowTask.id, WorkflowTask.runpod_job_id).where(WorkflowTask.id.in_(task_ids))
+            ).all()
+            if task_ids
+            else []
+        )
+    }
+    return assets, runpod_job_ids
+
+
 def _item_payload(
     db: Session,
     item: RunpodRequestItem,
     *,
     worker_id: str | None = None,
     worker_name: str | None = None,
+    assets: dict | None = None,
+    runpod_job_ids: dict | None = None,
 ) -> dict:
-    asset = db.get(Asset, item.asset_id)
-    task = db.get(WorkflowTask, item.task_id) if item.task_id else None
+    if assets is None or runpod_job_ids is None:
+        assets, runpod_job_ids = _item_relations(db, [item])
+    asset = assets.get(item.asset_id)
+    runpod_job_id = runpod_job_ids.get(str(item.task_id)) if item.task_id else None
     return {
         "id": item.id,
         "sequenceNo": item.sequence_no,
@@ -415,7 +487,7 @@ def _item_payload(
         "requestedFrames": item.requested_frames,
         "status": item.status,
         "taskId": item.task_id,
-        "runpodJobId": task.runpod_job_id if task else None,
+        "runpodJobId": runpod_job_id,
         "failureMessage": item.failure_message,
         "workerId": worker_id,
         "workerName": worker_name,
