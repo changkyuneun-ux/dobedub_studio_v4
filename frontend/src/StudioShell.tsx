@@ -1500,7 +1500,9 @@ export function StudioShell({
     if (route !== "review.history" || !history.some((item) => !isTerminalHistoryStatus(item.status))) {
       return;
     }
-    const timer = window.setInterval(() => void loadHistoryPage(historyPage), 3000);
+    // 서버 모니터 주기(TASK_MONITOR_INTERVAL_SECONDS=5)보다 자주 물어봐야 얻는
+    // 정보가 없다. 3초 폴링은 같은 이력 페이지를 서버에 반복 조립시키기만 했다.
+    const timer = window.setInterval(() => void loadHistoryPage(historyPage), 5000);
     return () => window.clearInterval(timer);
   }, [route, history, historyPage, historyPageSize]);
 

@@ -85,7 +85,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
     if (!requestDashboard || !requestDashboard.totals.incomplete) return;
     const timer = window.setInterval(() => {
       void load(false);
-    }, 2000);
+    }, 3000);
     return () => window.clearInterval(timer);
   }, [requestDashboard?.totals.incomplete]);
 

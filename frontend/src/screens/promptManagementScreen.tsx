@@ -120,7 +120,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
       void apiClient.activePromptGenerationBatches().then((response) => {
         setActivePromptGenerationBatches(response.items);
       }).catch((error: Error) => setNotice(error.message));
-    }, 2000);
+    }, 3000);
     return () => window.clearInterval(timer);
   }, [activePromptGenerationBatches.length]);
 
