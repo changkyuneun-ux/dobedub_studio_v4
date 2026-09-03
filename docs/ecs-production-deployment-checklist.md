@@ -12,6 +12,7 @@
 - [ ] Alembic migration 파일이 추가·변경된 경우 로컬에서 `python3 scripts/db_migration_smoke_check.py`를 통과한다.
 - [ ] 운영 RDS가 `20260811_0015_collections`보다 뒤처졌다면 이번 one-off migration에서 `collections`, `collection_items`가 함께 생성됨을 승인한다. 이 migration은 기존 asset/task 행을 수정하거나 컬렉션 데이터를 seed하지 않는다.
 - [ ] 이번 릴리스에 `20260812_0019_task_execution_policy.py`가 포함되면, 변경 범위가 `task_execution_policies` 신규 테이블과 기본 정책 행 `(id=1, 사용자당 3건, 전체 10건)`뿐인지 검토·승인한다. 기존 `users`, catalog, workflow, task, asset 행을 변경하지 않는다.
+- [ ] 이번 릴리스의 head는 `20260902_0029_jobs_manage_permission`다. `0024`~`0028`은 Grok 이미지 프롬프트 초안, 프롬프트 생성 배치/시도, RunPod 요청 배치/항목 및 관련 nullable 컬럼·인덱스를 추가한다. `0029`는 `jobs:manage` 권한 카탈로그만 추가하며 기존 role/user 권한 연결은 변경하지 않는다. 기존 `users`, catalog, workflow, task, asset, 기존 request batch 행은 삭제·이름 변경·값 재작성하지 않는다.
 - [ ] local DB의 catalog, users, task history는 운영 RDS로 자동 이전되지 않는다는 점을 확인한다. 데이터 이관은 별도 승인 작업이다.
 
 ## 2. 이미지와 task definition
@@ -39,7 +40,7 @@ python3 scripts/upgrade_database.py --if-needed
 ```
 
 - [ ] `--if-needed` task가 exit code `0`으로 끝났는지 확인한다. 실패 시 service 배포를 중단한다.
-- [ ] migration 적용 후 동일 task definition으로 `--check`를 한 번 더 실행해 exit code `0`, `migrationRequired=false`, target head `20260812_0019`를 확인한다.
+- [ ] migration 적용 후 동일 task definition으로 `--check`를 한 번 더 실행해 exit code `0`, `migrationRequired=false`, target head `20260902_0029`를 확인한다.
 - [ ] RDS 접속 오류, CA 오류, security group 오류는 migration 필요 여부가 아니라 배포 차단 오류로 처리한다.
 
 ## 4. ECS service 배포

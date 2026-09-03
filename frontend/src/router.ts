@@ -79,6 +79,8 @@ export type StudioRoute =
   | "access.login"
   | "access.manual"
   | "create.load"
+  | "create.promptManagement"
+  | "create.runpodRequests"
   | "create.prompt"
   | "create.confirm"
   | "review.history"
@@ -94,6 +96,7 @@ export type StudioRoute =
   | "admin.workflows"
   | "admin.workflowRegister"
   | "admin.catalogHierarchy"
+  | "admin.grokInstructions"
   | "admin.catalogTerms"
   | "admin.negativeDefaults"
   | "admin.status"
@@ -119,6 +122,8 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.login": "/studio/access/login",
   "access.manual": "/studio/access/manual",
   "create.load": "/studio/create/load",
+  "create.promptManagement": "/studio/create/prompts",
+  "create.runpodRequests": "/studio/create/runpod",
   "create.prompt": "/studio/create/prompt",
   "create.confirm": "/studio/create/confirm",
   "review.history": "/studio/review/history",
@@ -134,6 +139,7 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "admin.workflows": "/studio/admin/workflows",
   "admin.workflowRegister": "/studio/admin/workflows/register",
   "admin.catalogHierarchy": "/studio/admin/catalog/hierarchy",
+  "admin.grokInstructions": "/studio/admin/grok-instructions",
   "admin.catalogTerms": "/studio/admin/catalog/terms",
   "admin.negativeDefaults": "/studio/admin/catalog/negative-defaults",
   "admin.status": "/studio/admin/status",

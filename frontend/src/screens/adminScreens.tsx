@@ -13,7 +13,9 @@ import {
   WorkflowWidgetMetadata,
   ModelMetadataResponse,
   PromptSystemPromptResponse,
-  SystemPromptVersion
+  SystemPromptVersion,
+  GrokInstructionDocument,
+  GrokInstructionSetResponse
 } from "../api/client";
 import { StudioRoute } from "../router";
 import {
@@ -1386,6 +1388,170 @@ export function AdminAuditLogScreen({ user, onGoTo }: { user: User; onGoTo: (rou
       }
     >
       <AuditLogTable action={actionFilter || undefined} targetType={targetTypeFilter || undefined} pageSize={20} title="감사 로그" />
+    </AppShell>
+  );
+}
+
+const EMPTY_GROK_INSTRUCTION: Omit<GrokInstructionDocument, "id" | "version"> = {
+  code: "", title: "", role: "GUIDE", contentMarkdown: "", source: "", sortOrder: 100, isActive: true
+};
+
+/** JSON-backed instructions assembled into the Grok system message on every draft request. */
+export function GrokInstructionAdminScreen({ user, onGoTo }: { user: User; onGoTo: (route: StudioRoute) => void }) {
+  const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [workflowId, setWorkflowId] = useState("");
+  const [data, setData] = useState<GrokInstructionSetResponse | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [form, setForm] = useState<Omit<GrokInstructionDocument, "id" | "version">>(EMPTY_GROK_INSTRUCTION);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [copySourceWorkflowId, setCopySourceWorkflowId] = useState("");
+  const [instructionSourceWorkflowIds, setInstructionSourceWorkflowIds] = useState<Set<string>>(() => new Set());
+  const [creating, setCreating] = useState(false);
+  const [notice, setNotice] = useState("");
+  const markdownInputRef = useRef<HTMLInputElement | null>(null);
+
+  async function loadInstructionSourceWorkflowIds() {
+    const response = await apiClient.grokInstructionSourceWorkflows();
+    setInstructionSourceWorkflowIds(new Set(response.workflowIds));
+  }
+
+  async function load(selectedWorkflowId = workflowId, preferredId?: string | null) {
+    setData(null);
+    setSelectedId(null);
+    setCreating(false);
+    setCopySourceWorkflowId("");
+    setForm(EMPTY_GROK_INSTRUCTION);
+    if (!selectedWorkflowId) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await apiClient.grokInstructions(selectedWorkflowId);
+      setData(response);
+      const item = response.items.find((candidate) => candidate.id === (preferredId ?? selectedId)) || response.items[0];
+      if (item) select(item);
+      setNotice("");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "지시문을 불러오지 못했습니다.");
+    } finally { setLoading(false); }
+  }
+  useEffect(() => {
+    void Promise.all([apiClient.workflows(), loadInstructionSourceWorkflowIds()]).then(([items]) => {
+      setWorkflows(items);
+      const firstWorkflowId = items[0]?.id || "";
+      setWorkflowId(firstWorkflowId);
+      return load(firstWorkflowId);
+    }).catch((error: Error) => setNotice(error.message));
+  }, []);
+  function select(item: GrokInstructionDocument) {
+    const { id, version: _version, ...next } = item;
+    setCreating(false);
+    setSelectedId(id); setForm(next);
+  }
+  function startNew() {
+    setCreating(true);
+    setSelectedId(null);
+    setForm({ ...EMPTY_GROK_INSTRUCTION, sortOrder: (data?.items.length || 0) * 10 + 10 });
+    setNotice("새 지시문을 작성합니다.");
+  }
+  async function save() {
+    if (!workflowId) return;
+    setSaving(true);
+    try {
+      const payload = { ...form, workflowId };
+      const response = selectedId ? await apiClient.updateGrokInstruction(selectedId, payload) : await apiClient.createGrokInstruction(payload);
+      setData(response);
+      const item = response.item || response.items.find((candidate) => candidate.id === selectedId) || response.items[0];
+      if (item) select(item);
+      await loadInstructionSourceWorkflowIds();
+      setNotice("저장했습니다. 다음 이미지 업로드부터 새 활성 지시문이 적용됩니다.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "지시문 저장에 실패했습니다."); }
+    finally { setSaving(false); }
+  }
+  async function importMarkdown(file: File) {
+    if (!workflowId) return;
+    setSaving(true);
+    try {
+      const contentMarkdown = await file.text();
+      const response = await apiClient.importGrokInstructionMarkdown({
+        workflowId,
+        fileName: file.name,
+        contentMarkdown,
+        role: "GUIDE",
+        sortOrder: Math.max(...(data?.items.map((item) => item.sortOrder) || [0])) + 10,
+        isActive: true
+      });
+      setData(response);
+      const item = response.item || response.items[response.items.length - 1];
+      if (item) select(item);
+      setNotice(`${file.name}을(를) JSON 지시문으로 가져왔습니다. 역할과 순서를 확인한 뒤 저장할 수 있습니다.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Markdown 가져오기에 실패했습니다.");
+    } finally { setSaving(false); }
+  }
+  async function removeSelected() {
+    if (!selectedId || !workflowId) return;
+    setSaving(true);
+    try {
+      const response = await apiClient.deleteGrokInstruction(selectedId, workflowId);
+      setData(response);
+      const next = response.items[0];
+      if (next) select(next);
+      else {
+        setCreating(false);
+        setSelectedId(null);
+        setForm(EMPTY_GROK_INSTRUCTION);
+      }
+      await loadInstructionSourceWorkflowIds();
+      setNotice("지시문을 삭제했습니다.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "지시문 삭제에 실패했습니다.");
+    } finally { setSaving(false); }
+  }
+  async function copyFromWorkflow() {
+    if (!workflowId || !copySourceWorkflowId) return;
+    setSaving(true);
+    try {
+      const response = await apiClient.copyGrokInstructions({
+        sourceWorkflowId: copySourceWorkflowId,
+        targetWorkflowId: workflowId
+      });
+      setData(response);
+      const first = response.items[0];
+      if (first) select(first);
+      await loadInstructionSourceWorkflowIds();
+      const source = workflows.find((workflow) => workflow.id === copySourceWorkflowId);
+      setNotice(`${source?.label || source?.name || copySourceWorkflowId}의 지시문을 독립적으로 복사했습니다. 이후 수정은 원본에 영향을 주지 않습니다.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "지시문 복사에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const editable = canUse(user, "prompt-catalog:write");
+  const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId);
+  const copySourceWorkflows = workflows.filter((workflow) => workflow.id !== workflowId && instructionSourceWorkflowIds.has(workflow.id));
+  const editorVisible = Boolean(selectedId) || creating;
+  return (
+    <AppShell user={user} area="admin" activeItem="adminGrokInstructions" onNavigate={(key) => shellNavigateAdmin(key, onGoTo)} headerEyebrow="ADMIN · GROK PROMPT" headerTitle="프롬프트 생성 지시 관리" headerActions={<button className="v3-secondary-button" type="button" onClick={() => void load(workflowId, selectedId)}>새로고침</button>}>
+      {notice ? <p className="v3-inline-notice">{notice}</p> : null}
+      <div className="v3-grok-admin-grid">
+        <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">Target Workflow</div></div><div className="v3-grok-workflow-select"><select aria-label="Target Workflow" value={workflowId} disabled={loading || saving} onChange={(event) => { const nextWorkflowId = event.target.value; setWorkflowId(nextWorkflowId); void load(nextWorkflowId); }}><option value="">워크플로우 선택</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.label || workflow.name || workflow.id}</option>)}</select></div><div className="v3-card-header"><div className="v3-card-header-title">Instruction Documents</div>{editable ? <div className="v3-inline-actions"><input ref={markdownInputRef} type="file" accept=".md,text/markdown,text/plain" hidden onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void importMarkdown(file); }} /><button className="v3-secondary-button" type="button" disabled={saving || !workflowId} onClick={() => markdownInputRef.current?.click()}>Markdown 가져오기</button><button className="v3-primary-button" type="button" disabled={saving || !workflowId} onClick={startNew}>+ 지시문 추가</button></div> : null}</div><p className="v3-muted-text">{selectedWorkflow ? `${selectedWorkflow.label || selectedWorkflow.name || selectedWorkflow.id}에 연결된 JSON 실행 지시문입니다.` : "워크플로우를 선택하세요."}</p><div className="v3-grok-doc-list">
+          {loading ? <p className="v3-muted-text">지시문을 불러오는 중...</p> : data?.items.map((item) => <button key={item.id} type="button" className={`v3-grok-doc-row ${item.id === selectedId ? "is-selected" : ""}`} onClick={() => select(item)}><span><b>{item.sortOrder}. {item.title}</b><small>{item.code} · {item.role} · v{item.version}</small></span><em className={item.isActive ? "is-active" : ""}>{item.isActive ? "ACTIVE" : "OFF"}</em></button>)}
+          {!loading && workflowId && !data?.items.length ? <div className="v3-grok-empty-instruction"><p className="v3-muted-text">연결된 지시문이 없습니다. 새 지시문을 추가하거나 Markdown을 가져오세요.</p>{editable ? <div className="v3-inline-actions"><select className="v3-grok-workflow-select-control" aria-label="복사할 원본 워크플로우" value={copySourceWorkflowId} disabled={saving} onChange={(event) => setCopySourceWorkflowId(event.target.value)}><option value="">기존 워크플로우 지시문 선택</option>{copySourceWorkflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.label || workflow.name || workflow.id}</option>)}</select><button className="v3-secondary-button" type="button" disabled={saving || !copySourceWorkflowId} onClick={() => void copyFromWorkflow()}>지시문 복사</button></div> : null}</div> : null}
+        </div></section>
+        <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">Instruction Editor</div><span className="v3-muted-text">{selectedWorkflow ? `${selectedWorkflow.label || selectedWorkflow.name || selectedWorkflow.id} · 1:1 CONNECTED` : "워크플로우 선택 필요"}</span></div>{editorVisible ? <><div className="v3-grok-editor">
+          <label>문서 코드<input value={form.code} disabled={!editable || saving} placeholder="rule_dynamic_image" onChange={(event) => setForm((current) => ({ ...current, code: event.target.value }))} /></label>
+          <label>문서명<input value={form.title} disabled={!editable || saving} placeholder="동적 이미지 규칙" onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
+          <label>역할<select value={form.role} disabled={!editable || saving} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}><option value="CORE">CORE</option><option value="ROUTER">ROUTER</option><option value="GUIDE">GUIDE</option></select></label>
+          <label>정렬 순서<input type="number" value={form.sortOrder} disabled={!editable || saving} onChange={(event) => setForm((current) => ({ ...current, sortOrder: Number(event.target.value) || 0 }))} /></label>
+          <label className="v3-grok-editor-wide">출처/메모<input value={form.source || ""} disabled={!editable || saving} placeholder="규칙_03_동적_이미지.md" onChange={(event) => setForm((current) => ({ ...current, source: event.target.value }))} /></label>
+          <label className="v3-grok-editor-toggle"><input type="checkbox" checked={form.isActive} disabled={!editable || saving} onChange={(event) => setForm((current) => ({ ...current, isActive: event.target.checked }))} /> 이 문서를 Grok 실행 지시문에 적용</label>
+          <label className="v3-grok-editor-wide">지시문 내용<textarea value={form.contentMarkdown} disabled={!editable || saving} placeholder="Grok에 전달할 운영 지시문을 입력합니다." onChange={(event) => setForm((current) => ({ ...current, contentMarkdown: event.target.value }))} /></label>
+          {editable ? <div className="v3-inline-actions"><button className="v3-primary-button" type="button" disabled={saving || !workflowId || !form.code.trim() || !form.title.trim() || !form.contentMarkdown.trim()} onClick={() => void save()}>{saving ? "저장 중..." : "저장"}</button>{selectedId ? <button className="v3-danger-button" type="button" disabled={saving} onClick={() => void removeSelected()}>지시문 삭제</button> : null}</div> : null}
+        </div><details className="v3-grok-json-preview"><summary>활성 지시문 JSON 미리보기</summary><pre>{JSON.stringify(data?.instructionSet || {}, null, 2)}</pre></details></> : <div className="v3-grok-editor-empty">선택한 워크플로우에 연결된 지시문이 없습니다. 좌측에서 새 지시문을 추가하거나 Markdown을 가져오거나 기존 지시문을 복사하세요.</div>}</section>
+      </div>
     </AppShell>
   );
 }

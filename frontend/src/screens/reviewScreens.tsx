@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import {
+  apiClient,
   HealthResponse,
   HistoryItem,
   AssetItem,
   CollectionSummary,
   TaskPromptReviewFlags,
   TaskPromptItem,
-  TaskModelReference
+  TaskModelReference,
+  GrokImagePromptDraftResponse,
+  PromptDraftListResponse
 } from "../api/client";
 import { StudioRoute } from "../router";
 import { User } from "../auth";
@@ -14,7 +17,8 @@ import { AppShell } from "../components/AppShell";
 import {
   formatTimestamp,
   isSuccessStatus,
-  isTerminalHistoryStatus
+  isTerminalHistoryStatus,
+  copyText
 } from "../helpers/format";
 import { positivePromptEntries, negativePromptEntries } from "../helpers/prompts";
 import {
@@ -59,7 +63,7 @@ export function Create3aScreen({
   total,
   loading,
   selectedTaskId,
-  deleteTarget,
+  deleteTargets,
   deleteError,
   promptReviewItems,
   promptReviewLoading,
@@ -72,6 +76,7 @@ export function Create3aScreen({
   onSavePromptReview,
   onSavePromptFeedback,
   onRequestDelete,
+  onRequestBulkDelete,
   onCancelDelete,
   onConfirmDelete,
   onCancelTask,
@@ -91,7 +96,7 @@ export function Create3aScreen({
   total: number;
   loading: boolean;
   selectedTaskId: string;
-  deleteTarget: HistoryItem | null;
+  deleteTargets: HistoryItem[];
   // #4 오류 위치 규칙: 삭제(동작) 실패는 본문 상단이 아니라 삭제 모달의 버튼 근처에
   // 표시한다. modalNotice(StudioShell)를 그대로 받는다 - 이전엔 어디에도 렌더되지
   // 않아 삭제 실패가 사용자에게 전혀 보이지 않았다.
@@ -109,6 +114,7 @@ export function Create3aScreen({
   onSavePromptReview: (segmentIndex: number, payload: Record<string, unknown>) => void;
   onSavePromptFeedback: (outputId: string, payload: { rating?: number; notes?: string }) => void;
   onRequestDelete: (item: HistoryItem) => void;
+  onRequestBulkDelete: (items: HistoryItem[]) => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
   onCancelTask: (item: HistoryItem) => void;
@@ -118,6 +124,14 @@ export function Create3aScreen({
   canReview: boolean;
   canGiveFeedback: boolean;
 }) {
+  const [historyTab, setHistoryTab] = useState<"prompt" | "runpod">("prompt");
+  const [runpodPage, setRunpodPage] = useState(1);
+  const [runpodHistoryItems, setRunpodHistoryItems] = useState<HistoryItem[]>([]);
+  const [runpodHistoryTotal, setRunpodHistoryTotal] = useState(0);
+  const [runpodHistoryLoading, setRunpodHistoryLoading] = useState(false);
+  const [runpodHistoryNotice, setRunpodHistoryNotice] = useState("");
+  const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
+  const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
@@ -129,20 +143,66 @@ export function Create3aScreen({
     promptReview: false
   });
   const toggleSection = (key: string) => setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
-  const filteredHistory = history.filter((item) => {
+  useEffect(() => {
+    if (historyTab !== "runpod") return;
+    let active = true;
+    setRunpodHistoryLoading(true);
+    setRunpodHistoryNotice("");
+    setSelectedRunpodTaskIds([]);
+    apiClient.runpodHistory(runpodPage)
+      .then((response) => {
+        if (!active) return;
+        setRunpodHistoryItems(response.items);
+        setRunpodHistoryTotal(response.total);
+      })
+      .catch((error: Error) => {
+        if (!active) return;
+        setRunpodHistoryItems([]);
+        setRunpodHistoryTotal(0);
+        setRunpodHistoryNotice(error.message || "RunPod 이력을 불러오지 못했습니다.");
+      })
+      .finally(() => {
+        if (active) setRunpodHistoryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [historyTab, runpodPage]);
+
+  const filteredHistory = runpodHistoryItems.filter((item) => {
     if (statusFilter === "all") return true;
     if (statusFilter === "active") return !isTerminalHistoryStatus(item.status);
     if (statusFilter === "completed") return isSuccessStatus(item.status);
     if (statusFilter === "failed") return isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
     return true;
   });
-  const selectedItem = history.find((item) => item.taskId === selectedTaskId) || history[0] || null;
-  const pageStart = total ? (page - 1) * pageSize + 1 : 0;
-  const pageEnd = Math.min(total, page * pageSize);
-  const pageOffset = (page - 1) * pageSize;
-  const completedCount = history.filter((item) => isSuccessStatus(item.status)).length;
-  const activeCount = history.filter((item) => !isTerminalHistoryStatus(item.status)).length;
-  const failedCount = history.filter((item) => isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status)).length;
+  const selectedItem = historyTab === "runpod"
+    ? runpodHistoryItems.find((item) => item.taskId === selectedTaskId) || runpodHistoryItems[0] || null
+    : null;
+  const runpodPageSize = 20;
+  const runpodPageCount = Math.max(1, Math.ceil(runpodHistoryTotal / runpodPageSize));
+  const pageStart = runpodHistoryTotal ? (runpodPage - 1) * runpodPageSize + 1 : 0;
+  const pageEnd = Math.min(runpodHistoryTotal, runpodPage * runpodPageSize);
+  const pageOffset = (runpodPage - 1) * runpodPageSize;
+  const terminalRunpodItems = filteredHistory.filter((item) => isTerminalHistoryStatus(item.status));
+  const selectedRunpodItems = terminalRunpodItems.filter((item) => selectedRunpodTaskIds.includes(item.taskId));
+  const selectedDownloadItems = selectedRunpodItems.filter((item) => {
+    const result = historyOutputAsset(item);
+    return Boolean(result?.downloadUrl || result?.url || item.outputUrl);
+  });
+  const allTerminalItemsSelected = terminalRunpodItems.length > 0
+    && terminalRunpodItems.every((item) => selectedRunpodTaskIds.includes(item.taskId));
+  const toggleRunpodSelection = (taskId: string) => {
+    setSelectedRunpodTaskIds((current) => current.includes(taskId)
+      ? current.filter((candidate) => candidate !== taskId)
+      : [...current, taskId]);
+  };
+  const toggleAllRunpodSelection = () => {
+    setSelectedRunpodTaskIds(allTerminalItemsSelected ? [] : terminalRunpodItems.map((item) => item.taskId));
+  };
+  const completedCount = runpodHistoryItems.filter((item) => isSuccessStatus(item.status)).length;
+  const activeCount = runpodHistoryItems.filter((item) => !isTerminalHistoryStatus(item.status)).length;
+  const failedCount = runpodHistoryItems.filter((item) => isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status)).length;
   const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
   const isFailedSelected = selectedItem ? isTerminalHistoryStatus(selectedItem.status) && !isSuccessStatus(selectedItem.status) : false;
   const output = selectedItem ? historyOutputAsset(selectedItem) : null;
@@ -166,7 +226,7 @@ export function Create3aScreen({
       headerTitle="작업 이력"
       sidebarExtra={
         <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {history.length}</div>
+          <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {runpodHistoryTotal}</div>
           {([
             ["all", "전체", history.length],
             ["active", "진행", activeCount],
@@ -184,7 +244,7 @@ export function Create3aScreen({
           ))}
         </div>
       }
-      sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · 한 페이지 {pageSize}건 · 이후 Assets만 유지</p>}
+      sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 20건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
         selectedItem ? (
           <>
@@ -345,31 +405,103 @@ export function Create3aScreen({
         )
       }
     >
+      <div className="v3-scope-tabs" role="tablist" aria-label="작업 이력 종류">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={historyTab === "prompt"}
+          className={`v3-scope-tab ${historyTab === "prompt" ? "is-active" : ""}`}
+          onClick={() => setHistoryTab("prompt")}
+        >
+          프롬프트 이력
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={historyTab === "runpod"}
+          className={`v3-scope-tab ${historyTab === "runpod" ? "is-active" : ""}`}
+          onClick={() => setHistoryTab("runpod")}
+        >
+          RunPod 이력
+        </button>
+      </div>
+
+      {historyTab === "prompt" ? (
+        <PromptGenerationHistory />
+      ) : (
+        <>
+      <div className="v3-inline-actions" style={{ margin: "12px 0" }}>
+        <button
+          className="v3-secondary-button"
+          type="button"
+          disabled={!selectedDownloadItems.length}
+          onClick={() => selectedDownloadItems.forEach((item) => onDownload(item))}
+        >
+          선택 다운로드 ({selectedDownloadItems.length})
+        </button>
+        {canDelete ? (
+          <button
+            className="v3-danger-button"
+            type="button"
+            disabled={!selectedRunpodItems.length}
+            onClick={() => onRequestBulkDelete(selectedRunpodItems)}
+          >
+            선택 삭제 ({selectedRunpodItems.length})
+          </button>
+        ) : null}
+      </div>
       <div className="v3-card">
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: "40px 218px 80px minmax(160px,1fr) minmax(160px,1fr) 84px 56px", minWidth: 920 }}>
-          <span>No</span><span>Timestamp</span><span>Worker</span><span>Positive Prompt</span><span>Negative Prompt</span><span>Status</span><span style={{ textAlign: "right" }}>삭제</span>
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: "32px 36px 70px 96px 130px 120px 82px 72px 72px minmax(150px, .8fr) 86px 52px", minWidth: 1120 }}>
+          <span><input type="checkbox" aria-label="종료된 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Prompt ID</span><span>결과</span><span>입력 View</span><span>결과 View</span><span>ComfyUI Response</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
-        {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
-        {!loading && !filteredHistory.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 작업이 없습니다.</p> : null}
+        {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
+        {runpodHistoryNotice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
+        {!runpodHistoryLoading && !runpodHistoryNotice && !filteredHistory.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 작업이 없습니다.</p> : null}
         {filteredHistory.map((item) => {
           const isSelected = item.taskId === selectedTaskId;
-          const promptSnippet = positivePromptEntries(item)[0]?.text || item.positivePrompt || item.prompt || "-";
-          const negativeSnippet = negativePromptEntries(item)[0]?.text || item.negativePrompt || "-";
-          const rowNo = pageOffset + history.findIndex((candidate) => candidate.taskId === item.taskId) + 1;
+          const rowNo = pageOffset + runpodHistoryItems.findIndex((candidate) => candidate.taskId === item.taskId) + 1;
+          const input = historyInputImages(item)[0];
+          const result = historyOutputAsset(item);
+          const resultUrl = result?.downloadUrl || result?.url || item.outputUrl || "";
           return (
             <div
               key={item.taskId}
               className={`v3-review-table-row v3-history-row ${isSelected ? "is-selected" : ""}`}
-              style={{ gridTemplateColumns: "40px 218px 80px minmax(160px,1fr) minmax(160px,1fr) 84px 56px", minWidth: 920, cursor: "pointer" }}
+              style={{ gridTemplateColumns: "32px 36px 70px 96px 130px 120px 82px 72px 72px minmax(150px, .8fr) 86px 52px", minWidth: 1120, cursor: "pointer" }}
               onClick={() => onSelect(item)}
             >
+              <span>
+                {isTerminalHistoryStatus(item.status) ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`${item.taskId} 선택`}
+                    checked={selectedRunpodTaskIds.includes(item.taskId)}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={() => toggleRunpodSelection(item.taskId)}
+                  />
+                ) : null}
+              </span>
               <span className="v3-review-seg-name">{rowNo}</span>
-              <span className="v3-timestamp-cell">{formatTimestamp(item.timestampKst || item.timestamp, item.timestampUtc)}</span>
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
-              <div className="v3-review-prompt" style={{ minWidth: 0 }}>{promptSnippet}</div>
-              <div className="v3-review-prompt" style={{ minWidth: 0 }}>{negativeSnippet}</div>
+              <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatKstHistoryDate(item.timestampUtc || item.timestamp)}</span>
+              <span className="v3-review-prompt" title={item.workflowName || item.workflow || item.workflowId || ""}>{item.workflowName || item.workflow || item.workflowId || "-"}</span>
+              <span className="v3-review-prompt" title={item.promptDraftId || ""}>{item.promptDraftId || "-"}</span>
               <span>
                 <span className={`v3-status-badge ${isSuccessStatus(item.status) ? "is-ready" : "is-pending"}`}>{item.status || "-"}</span>
+              </span>
+              <span>
+                {input?.assetId ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: `/api/files/${input.assetId}`, isVideo: false, alt: input.fileName || "입력 이미지" }); }}>View</button> : "-"}
+              </span>
+              <span>
+                {resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: resultUrl, isVideo: true, alt: result?.fileName || "생성 결과" }); }}>View</button> : "-"}
+              </span>
+              <span className="v3-runpod-response-cell" title={`Job ID ${item.runpodResponse?.jobId || item.runpodJobId || "-"}`}>
+                {item.runpodResponse?.filename || item.outputFile || result?.fileName || "-"}
+                <small>Delay {formatRunpodSeconds(item.runpodResponse?.delaySeconds)} · Execution {formatRunpodSeconds(item.runpodResponse?.executionSeconds)}</small>
+                <small>Job {item.runpodResponse?.jobId || item.runpodJobId || "-"}</small>
+              </span>
+              <span>
+                {resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
               </span>
               <span style={{ textAlign: "right" }}>
                 {canDelete && isTerminalHistoryStatus(item.status) ? (
@@ -390,28 +522,34 @@ export function Create3aScreen({
           );
         })}
         <div className="v3-pagination">
-          <span className="v3-pagination-meta">{pageStart}–{pageEnd} / {total}</span>
+          <span className="v3-pagination-meta">{pageStart}–{pageEnd} / {runpodHistoryTotal}</span>
           <div className="v3-pagination-controls">
-            <button className="v3-page-button" type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>이전</button>
-            <span className="v3-page-button is-current">{page}</span>
-            <button className="v3-page-button" type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>다음</button>
-            <select className="v3-page-size-select" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value) as 20 | 50)}>
-              <option value={20}>20건 / 페이지</option>
-              <option value={50}>50건 / 페이지</option>
-            </select>
+            <button className="v3-page-button" type="button" disabled={runpodPage <= 1} onClick={() => setRunpodPage((value) => value - 1)}>이전</button>
+            <span className="v3-page-button is-current">{runpodPage}</span>
+            <button className="v3-page-button" type="button" disabled={runpodPage >= runpodPageCount} onClick={() => setRunpodPage((value) => value + 1)}>다음</button>
+            <span className="v3-pagination-meta">20건 / 페이지</span>
           </div>
         </div>
       </div>
 
-      {deleteTarget ? (
+      {assetPreview ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-label="자산 미리보기" onClick={() => setAssetPreview(null)}>
+          <div className="v3-modal-panel v3-asset-preview-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="v3-panel-title-row"><div className="v3-panel-title">{assetPreview.alt}</div><button className="v3-secondary-button" type="button" onClick={() => setAssetPreview(null)}>닫기</button></div>
+            <ProtectedAssetPreview src={assetPreview.src} isVideo={assetPreview.isVideo} alt={assetPreview.alt} />
+          </div>
+        </div>
+      ) : null}
+
+      {deleteTargets.length ? (
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3DeleteHistoryTitle">
           <div className="v3-modal-panel">
             <div className="v3-label" style={{ color: "var(--v3-danger)" }}>HISTORY:DELETE</div>
             <h2 id="v3DeleteHistoryTitle" className="v3-modal-title">작업 내역 삭제</h2>
             <div className="v3-summary-card">
-              <div className="v3-summary-row"><span>작업</span><strong>#{deleteTarget.taskId.slice(0, 8)} · {deleteTarget.workflowName || deleteTarget.workflow || deleteTarget.workflowId || "-"}</strong></div>
-              <div className="v3-summary-row"><span>실행</span><strong>{formatTimestamp(deleteTarget.timestampKst || deleteTarget.timestamp, deleteTarget.timestampUtc).replace(/\n/g, " ")} · {deleteTarget.workerName || deleteTarget.user?.name || "-"}</strong></div>
-              <div className="v3-summary-row"><span>결과물</span><strong>{(deleteTarget.outputAssets || []).length || (deleteTarget.outputUrl ? 1 : 0)}건</strong></div>
+              <div className="v3-summary-row"><span>대상 작업</span><strong>{deleteTargets.length}건</strong></div>
+              {deleteTargets.length === 1 ? <><div className="v3-summary-row"><span>작업</span><strong>#{deleteTargets[0].taskId.slice(0, 8)} · {deleteTargets[0].workflowName || deleteTargets[0].workflow || deleteTargets[0].workflowId || "-"}</strong></div><div className="v3-summary-row"><span>실행</span><strong>{formatTimestamp(deleteTargets[0].timestampKst || deleteTargets[0].timestamp, deleteTargets[0].timestampUtc).replace(/\n/g, " ")} · {deleteTargets[0].workerName || deleteTargets[0].user?.name || "-"}</strong></div></> : null}
+              <div className="v3-summary-row"><span>결과물</span><strong>{deleteTargets.reduce((count, item) => count + ((item.outputAssets || []).length || (item.outputUrl ? 1 : 0)), 0)}건</strong></div>
             </div>
             <p className="v3-modal-body-text">이력에서 제거되면 이 작업의 프롬프트 평가와 재사용 등록도 함께 사라집니다. 결과물 파일은 Assets에 남습니다.</p>
             <div className="v3-warning-strip" style={{ background: "var(--v3-danger-bg)", margin: 0 }}>
@@ -425,7 +563,6 @@ export function Create3aScreen({
                 className="v3-danger-button v3-flex-button"
                 style={{ background: "var(--v3-danger)", color: "#fff", borderColor: "var(--v3-danger)" }}
                 type="button"
-                disabled={!isTerminalHistoryStatus(deleteTarget.status)}
                 onClick={onConfirmDelete}
               >
                 삭제
@@ -435,8 +572,147 @@ export function Create3aScreen({
           </div>
         </div>
       ) : null}
+        </>
+      )}
     </AppShell>
   );
+}
+
+function PromptGenerationHistory() {
+  const [items, setItems] = useState<GrokImagePromptDraftResponse[]>([]);
+  const [workerStats, setWorkerStats] = useState<PromptDraftListResponse["workerStats"]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+  const pageSize = 20;
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setNotice("");
+    apiClient.promptHistory(page)
+      .then((response) => {
+        if (!active) return;
+        setItems(response.items);
+        setTotal(response.total);
+        setWorkerStats(response.workerStats || []);
+      })
+      .catch((error: Error) => {
+        if (!active) return;
+        setItems([]);
+        setTotal(0);
+        setWorkerStats([]);
+        setNotice(error.message || "프롬프트 이력을 불러오지 못했습니다.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [page]);
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const pageStart = total ? (page - 1) * pageSize + 1 : 0;
+  const pageEnd = Math.min(total, page * pageSize);
+
+  return (
+    <div className="v3-prompt-history-layout">
+      <div className="v3-card v3-prompt-history-card">
+      <div className="v3-card-header">
+        <div className="v3-card-header-title">프롬프트 생성 이력</div>
+        <span className="v3-card-header-meta">{total}건 · 20건 / 페이지</span>
+      </div>
+      <div className="v3-prompt-history-head">
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>Grok API 응답</span><span>복사</span>
+      </div>
+      {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
+      {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
+      {!loading && !notice && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>생성된 프롬프트 이력이 없습니다.</p> : null}
+      {!loading && items.map((item, index) => {
+        const generated = item.status !== "FAILED";
+        const api = item.grokResponse;
+        return (
+          <div className="v3-prompt-history-row" key={item.draftId}>
+            <span className="v3-review-seg-name">{(page - 1) * pageSize + index + 1}</span>
+            <span className="v3-prompt-history-worker">{item.createdByName || item.createdBy || "-"}</span>
+            <span className="v3-prompt-history-date">{formatKstHistoryDate(item.createdAt)}</span>
+            <div className="v3-prompt-history-image" title={item.assetId}>
+              {item.assetId ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.asset?.fileName || item.assetId} /> : <span>-</span>}
+              <small>{item.assetId}</small>
+            </div>
+            <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : "null"}</div>
+            <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generated ? "SUCCESS" : "FAILED"}</span>
+            <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
+            <div className="v3-prompt-api-meta" title={item.error || ""}>
+              <strong>{api?.model || item.model || "-"}</strong>
+              <span>{compactEndpoint(api?.endpoint)}</span>
+              <small>{formatGrokUsage(api)}</small>
+            </div>
+            <button
+              className="v3-text-link-button"
+              type="button"
+              disabled={!item.positivePrompt}
+              onClick={() => copyText(item.positivePrompt || "")}
+            >
+              Copy
+            </button>
+          </div>
+        );
+      })}
+      <div className="v3-pagination">
+        <span className="v3-pagination-meta">{pageStart}–{pageEnd} / {total}</span>
+        <div className="v3-pagination-controls">
+          <button className="v3-page-button" type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>이전</button>
+          <span className="v3-page-button is-current">{page}</span>
+          <button className="v3-page-button" type="button" disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}>다음</button>
+        </div>
+      </div>
+      </div>
+      <aside className="v3-card v3-prompt-worker-dashboard">
+        <div className="v3-card-header">
+          <div className="v3-card-header-title">사용자별 생성 통계</div>
+          <span className="v3-card-header-meta">현재 조회 범위</span>
+        </div>
+        {!workerStats.length ? <p className="v3-muted-text">표시할 프롬프트 생성 이력이 없습니다.</p> : <div className="v3-prompt-worker-stat-list">{workerStats.map((worker) => <div key={worker.workerId || "unknown"}><b>{worker.workerName || worker.workerId || "알 수 없음"}</b><span>전체 {worker.total} · 완료 {worker.readyCount} · 생성 중 {worker.generatingCount} · 실패 {worker.failedCount}</span></div>)}</div>}
+      </aside>
+    </div>
+  );
+}
+
+function formatKstHistoryDate(value?: string | null) {
+  if (!value) return "-";
+  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function formatRunpodSeconds(value?: number | string | null) {
+  if (value === undefined || value === null || value === "") return "-";
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? `${seconds.toFixed(seconds % 1 ? 1 : 0)}s` : String(value);
+}
+
+function compactEndpoint(value?: string | null) {
+  if (!value) return "endpoint -";
+  try {
+    return new URL(value).host;
+  } catch {
+    return value;
+  }
+}
+
+function formatGrokUsage(response: GrokImagePromptDraftResponse["grokResponse"]) {
+  if (!response) return "응답 메타데이터 없음";
+  const latency = response.latencyMs == null ? "-" : `${(response.latencyMs / 1000).toFixed(1)}s`;
+  return `${latency} · in ${response.inputTokens ?? "-"} · out ${response.outputTokens ?? "-"}`;
 }
 
 function uniqueModelReferences(references: TaskModelReference[]): TaskModelReference[] {

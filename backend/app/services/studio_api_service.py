@@ -5,10 +5,13 @@ import uuid
 from pathlib import Path
 from threading import RLock
 
+from sqlalchemy import select
+
 from backend.app.core.config import get_settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
 from backend.app.services import job_service, output_service, workflow_patch_service
+from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User
 from backend.app.services.asset_storage import encode_file_base64, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
@@ -26,6 +29,16 @@ from backend.app.services.task_tracking_service import (
     update_task_prompt_review,
 )
 from backend.app.services.task_policy_service import assert_task_submission_allowed
+from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
+from backend.app.services.runpod_request_batch_service import (
+    attach_task_to_request_item,
+    create_request_batch,
+    latest_active_request_batch,
+    mark_request_item_failed,
+    request_batch_dashboard,
+    request_batch_queue,
+    request_batch_payload,
+)
 from backend.app.db.session import SessionLocal
 
 
@@ -58,6 +71,11 @@ def paginated_history(page: int = 1, page_size: int = 20) -> dict:
         "pageSize": page_size,
         "total": task_history_total(),
     }
+
+
+def paginated_runpod_history(page: int = 1) -> dict:
+    """Return the dedicated RunPod-history contract with its fixed 20-row page."""
+    return paginated_history(page, 20)
 
 
 def append_history(item: dict) -> list[dict]:
@@ -318,7 +336,219 @@ def create_job(payload: dict, *, user: dict[str, object]) -> dict:
             "role": str(user.get("role") or ""),
             "permissions": list(user.get("permissions") or []),
         }
-        return job_service.create_job(job_runtime(), safe_payload)
+        return job_service.queue_job(job_runtime(), safe_payload)
+
+
+def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> dict:
+    """Build one single-keyframe job from a persisted, reviewed Grok draft.
+
+    The batch flow intentionally does not combine draft records into a multi-keyframe
+    graph yet.  Each selected image becomes an independently traceable RunPod task.
+    """
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise ValueError("인증된 사용자 정보를 찾을 수 없습니다.")
+    session = SessionLocal()
+    try:
+        draft = session.scalar(
+            select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id, ImagePromptDraft.created_by == user_id)
+        )
+        if draft is None:
+            raise ValueError("프롬프트 초안을 찾을 수 없습니다.")
+        if draft.status != "READY" or not str(draft.positive_prompt or "").strip():
+            raise ValueError("완료된 Positive Prompt가 있는 초안만 RunPod 요청에 추가할 수 있습니다.")
+        asset = session.get(Asset, draft.asset_id)
+        if asset is None:
+            raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
+        frames = max(1, int(draft.requested_frames or 81))
+        # Draft-based jobs are submitted outside the legacy workspace form.
+        # Carry the persisted source dimensions so the Wan node receives the
+        # exact uploaded image size, just as it does for a direct submission.
+        config = {"frames": frames, "frame_count": frames, "length": frames, "fps": 16}
+        if asset.image_width and int(asset.image_width) > 0:
+            config["width"] = int(asset.image_width)
+        if asset.image_height and int(asset.image_height) > 0:
+            config["height"] = int(asset.image_height)
+        return {
+            "workflowId": draft.workflow_id,
+            # The job history must show the registered workflow label rather
+            # than the JSON filename. The parser uses the filename stem as the
+            # stable display name for registered workflows.
+            "workflowName": Path(draft.workflow_id).stem,
+            "promptDraftId": draft.id,
+            "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
+            "segments": [{
+                "index": 1,
+                "positivePrompt": draft.positive_prompt,
+                "negativePromptAddition": draft.negative_prompt or "",
+                "config": config,
+            }],
+        }
+    finally:
+        session.close()
+
+
+def job_payload_from_request_item(item_id: str, *, user: dict[str, object], worker_id: str | None = None) -> dict:
+    """Build a job solely from the request item's immutable snapshot."""
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise ValueError("인증된 사용자 정보를 찾을 수 없습니다.")
+    session = SessionLocal()
+    try:
+        item = session.scalar(
+            select(RunpodRequestItem)
+            .where(RunpodRequestItem.id == item_id)
+            .limit(1)
+        )
+        if item is None:
+            raise ValueError("RunPod 요청 항목을 찾을 수 없습니다.")
+        batch_owner = session.get(RunpodRequestBatch, item.request_batch_id)
+        if batch_owner is None or batch_owner.created_by != (worker_id or user_id):
+            raise ValueError("RunPod 요청 항목에 접근할 수 없습니다.")
+        asset = session.get(Asset, item.asset_id)
+        if asset is None:
+            raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
+        config = {"frames": item.requested_frames, "frame_count": item.requested_frames, "length": item.requested_frames, "fps": 16}
+        if asset.image_width and int(asset.image_width) > 0:
+            config["width"] = int(asset.image_width)
+        if asset.image_height and int(asset.image_height) > 0:
+            config["height"] = int(asset.image_height)
+        return {
+            "workflowId": item.workflow_id,
+            "workflowName": Path(item.workflow_id).stem,
+            "promptDraftId": item.prompt_draft_id,
+            "requestBatchId": item.request_batch_id,
+            "requestItemId": item.id,
+            "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
+            "segments": [{
+                "index": 1,
+                "positivePrompt": item.positive_prompt,
+                "negativePromptAddition": item.negative_prompt or "",
+                "config": config,
+            }],
+        }
+    finally:
+        session.close()
+
+
+def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> dict:
+    """Create durable local tasks for selected drafts without calling RunPod yet."""
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise ValueError("인증된 사용자 정보를 찾을 수 없습니다.")
+    worker_id = str(payload.get("workerId") or user_id).strip()
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        draft_ids = payload.get("promptDraftIds") or []
+        raw_items = [{"promptDraftId": draft_id} for draft_id in draft_ids]
+    with JOB_LOCK:
+        session = SessionLocal()
+        try:
+            worker = session.get(User, worker_id)
+            if worker is None or not worker.is_active:
+                raise ValueError("선택한 작업자를 찾을 수 없거나 비활성 상태입니다.")
+            # The selected worker owns the created tasks even when a manager
+            # submits the batch. Keep only a plain snapshot beyond this session
+            # boundary so a detached ORM object cannot alter the ownership flow.
+            worker_user = {
+                "id": worker.id,
+                "name": worker.name,
+                "role": worker.role,
+                "permissions": worker.permissions_json or [],
+            }
+            batch = create_request_batch(session, items=raw_items, created_by=worker_id, submitted_by=user_id)
+        finally:
+            session.close()
+
+        for item in batch["items"]:
+            try:
+                job_payload = job_payload_from_request_item(item["id"], user=user, worker_id=worker_id)
+                job = create_job(job_payload, user=worker_user)
+                link_session = SessionLocal()
+                try:
+                    attach_task_to_request_item(link_session, item_id=item["id"], task_id=job["taskId"])
+                finally:
+                    link_session.close()
+            except Exception as exc:
+                error_session = SessionLocal()
+                try:
+                    mark_request_item_failed(error_session, item_id=item["id"], message=str(exc))
+                finally:
+                    error_session.close()
+        result_session = SessionLocal()
+        try:
+            return request_batch_payload(result_session, batch["id"], created_by=worker_id)
+        finally:
+            result_session.close()
+
+
+def active_runpod_request_batch(*, user: dict[str, object], worker_id: str | None = None) -> dict | None:
+    user_id = str(user.get("id") or "").strip()
+    selected_worker = str(worker_id or user_id).strip()
+    session = SessionLocal()
+    try:
+        return latest_active_request_batch(session, created_by=selected_worker)
+    finally:
+        session.close()
+
+
+def runpod_request_dashboard(*, worker_id: str | None = None, workflow_id: str = "") -> dict:
+    session = SessionLocal()
+    try:
+        return request_batch_dashboard(session, created_by=worker_id, workflow_id=workflow_id)
+    finally:
+        session.close()
+
+
+def runpod_request_queue(
+    *,
+    worker_id: str | None = None,
+    workflow_id: str = "",
+    page: int = 1,
+    page_size: int = 10,
+) -> dict:
+    session = SessionLocal()
+    try:
+        return request_batch_queue(
+            session,
+            created_by=worker_id,
+            workflow_id=workflow_id,
+            page=page,
+            page_size=page_size,
+        )
+    finally:
+        session.close()
+
+
+def runpod_request_batch(batch_id: str, *, user: dict[str, object]) -> dict:
+    session = SessionLocal()
+    try:
+        return request_batch_payload(
+            session,
+            batch_id,
+            actor_id=str(user.get("id") or ""),
+            can_manage=bool(user.get("canManage")),
+        )
+    finally:
+        session.close()
+
+
+def _dispatch_pending_job(task_id: str) -> dict:
+    with JOB_LOCK:
+        restored = restore_job_from_task(task_id)
+        if not restored:
+            raise KeyError(task_id)
+        JOBS[task_id] = restored
+        return job_service.dispatch_queued_job(job_runtime(), restored)
+
+
+def dispatch_next_queued_job() -> dict:
+    settings = get_settings()
+    return dispatch_next_pending_submission(RunpodDispatchRuntime(
+        dry_run=settings.dry_run,
+        connection_status=runpod_connection,
+        dispatch_task=_dispatch_pending_job,
+    ))
 
 
 def job_status(task_id: str) -> dict:
@@ -346,6 +576,7 @@ def monitor_active_jobs() -> dict:
     monitor cycle retries it rather than changing a task to failed merely
     because the status API had a transient error.
     """
+    dispatch = dispatch_next_queued_job()
     task_ids = active_task_ids()
     failures: list[str] = []
     for task_id in task_ids:
@@ -353,7 +584,7 @@ def monitor_active_jobs() -> dict:
             job_status(task_id)
         except Exception:
             failures.append(task_id)
-    return {"checked": len(task_ids), "failures": failures}
+    return {"checked": len(task_ids), "failures": failures, "dispatch": dispatch}
 
 
 def job_prompts(task_id: str) -> list[dict]:

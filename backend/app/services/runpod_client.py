@@ -8,6 +8,26 @@ import urllib.request
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
 
 
+def idle_worker_capacity(health: dict) -> dict:
+    """Normalize the small set of worker-capacity shapes returned by /health.
+
+    Unknown capacity intentionally does not permit dispatch. That keeps Studio
+    from building a second opaque provider queue when RunPod cannot confirm an
+    idle Serverless worker.
+    """
+    workers = health.get("workers") if isinstance(health, dict) else None
+    if not isinstance(workers, dict):
+        return {"known": False, "idle": 0, "source": "workers unavailable"}
+
+    for key in ("idle", "available", "ready"):
+        value = workers.get(key)
+        try:
+            return {"known": True, "idle": max(0, int(value)), "source": f"workers.{key}"}
+        except (TypeError, ValueError):
+            continue
+    return {"known": False, "idle": 0, "source": "idle worker count unavailable"}
+
+
 def is_real_secret(value: str, placeholder: str) -> bool:
     return bool(value and value.strip() and value.strip() != placeholder)
 
@@ -29,7 +49,7 @@ def runpod_is_configured(api_key: str, endpoint_id: str) -> bool:
 
 def runpod_headers(api_key: str, endpoint_id: str) -> dict[str, str]:
     if not runpod_is_configured(api_key, endpoint_id):
-        raise ValueError("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required when RUNPOD_DRY_RUN=0")
+        raise ValueError("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for RunPod submission")
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

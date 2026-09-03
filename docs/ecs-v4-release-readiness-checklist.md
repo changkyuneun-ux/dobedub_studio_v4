@@ -15,7 +15,7 @@
 
 | 항목 | 판정 |
 | --- | --- |
-| Alembic head | `20260813_0021` |
+| Alembic head | `20260902_0029_jobs_manage_permission` |
 | v3/v4 history bridge | `20260813_0020_merge_v3_v4_histories` |
 | 감사 로그 보존 migration | `20260812_0018_purge_login_audit_logs`는 보존형 no-op으로 전환 |
 | 자산 컬렉션 migration | `20260811_0015_collections` |
@@ -24,10 +24,18 @@
 | 정책 신규 테이블 | `task_execution_policies` |
 | 입력 이미지 크기 migration | `20260813_0021_asset_image_dimensions` |
 | 기존 asset 확장 | `assets.image_width`, `assets.image_height`를 NULL 허용으로 추가 |
+| 이미지-프롬프트 draft migration | `20260831_0024_image_prompt_drafts` |
+| Grok 지시문 migration | `20260831_0025_grok_instruction_documents` |
+| 배치 프롬프트/RunPod 큐 migration | `20260901_0026_batch_prompt_runpod_queue` |
+| 내구성 RunPod 요청 배치 migration | `20260902_0027_durable_request_batches` |
+| 요청 제출자 migration | `20260902_0028_request_batch_submitter` |
+| RunPod 요청 관리 권한 migration | `20260902_0029_jobs_manage_permission` |
 | 기존 테이블 변경 | `prompt_terms.category_id`를 NULL 허용으로 완화. 기존 값·FK 행은 변경하지 않음 |
 | 컬렉션 신규 데이터 | 없음. migration은 컬렉션 또는 item을 자동 생성하지 않음 |
 | 정책 신규 데이터 | singleton 정책 행 1개: `id=1`, 사용자당 활성 Task `3`, 전체 활성 Task `10` |
 | 기존 RDS 데이터 영향 | 기존 행 수정·삭제 없음 |
+
+`20260831_0024`부터 `20260902_0029`까지는 이미지 프롬프트 draft, Grok 지시문, 요청 배치·항목 및 `jobs:manage` 권한 카탈로그를 추가하는 additive migration이다. 기존 Task History, asset, workflow, 사용자 데이터에 대한 backfill·seed·수정 SQL은 포함하지 않으며, `20260902_0028`의 `submitted_by`도 legacy batch에 대해 NULL을 유지한다. `20260902_0029`는 기존 role/user의 권한 연결을 변경하지 않으므로, 역할별 부여는 권한 관리 화면에서 명시적으로 결정한다.
 
 `20260811_0015_collections.py`는 자산 컬렉션과 컬렉션-asset 연결을 저장하기 위해 `collections`, `collection_items`를 추가한다. `collection_items`의 FK cascade는 **향후** 컬렉션 또는 asset 삭제 시의 연결 정리 규칙일 뿐, migration 실행 중에는 기존 asset/task를 삭제하거나 변경하지 않는다.
 

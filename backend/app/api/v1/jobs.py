@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.app.core.security import CurrentUser, require_any_permission, require_permission
+from backend.app.core.security import CurrentUser, has_permission, require_any_permission, require_permission
 from backend.app.services import studio_api_service
 from backend.app.services.task_policy_service import TaskSubmissionLimitError
 
@@ -32,9 +32,133 @@ def create_job(payload: dict, current_user: CurrentUser = Depends(require_permis
     return {
         "taskId": job["taskId"],
         "runpodJobId": job["runpodJobId"],
-        "status": "queued",
+        "status": "pending_submit",
         "generationSeed": job.get("generationSeed"),
     }
+
+
+@router.post("/from-prompt-draft", status_code=201)
+def create_job_from_prompt_draft(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    draft_id = str(payload.get("promptDraftId") or "").strip()
+    if not draft_id:
+        raise HTTPException(status_code=400, detail="promptDraftId is required")
+    user = {
+        "id": current_user.id,
+        "name": current_user.name,
+        "role": current_user.role,
+        "permissions": current_user.permissions,
+    }
+    try:
+        batch = studio_api_service.create_runpod_request_batch(
+            {"items": [{"promptDraftId": draft_id}]},
+            user=user,
+        )
+        item = batch["items"][0]
+    except TaskSubmissionLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, KeyError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "taskId": item.get("taskId"),
+        "runpodJobId": item.get("runpodJobId") or "",
+        "status": str(item.get("status") or "pending_submit").lower(),
+        "requestBatchId": batch["id"],
+    }
+
+
+@router.post("/request-batches", status_code=201)
+def create_runpod_request_batch(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    worker_id = str(payload.get("workerId") or current_user.id).strip()
+    if worker_id != current_user.id and not has_permission(current_user.permissions, "jobs:manage"):
+        raise HTTPException(status_code=403, detail="다른 작업자 요청을 제출하려면 jobs:manage 권한이 필요합니다.")
+    try:
+        return studio_api_service.create_runpod_request_batch(
+            payload,
+            user={
+                "id": current_user.id,
+                "name": current_user.name,
+                "role": current_user.role,
+                "permissions": current_user.permissions,
+            },
+        )
+    except TaskSubmissionLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, KeyError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/request-batches/active")
+def active_runpod_request_batch(
+    workerId: str = "",
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    worker_id = workerId.strip() or current_user.id
+    can_manage = has_permission(current_user.permissions, "jobs:manage")
+    if worker_id != current_user.id and not can_manage:
+        raise HTTPException(status_code=403, detail="다른 작업자 요청 조회에는 jobs:manage 권한이 필요합니다.")
+    return {"item": studio_api_service.active_runpod_request_batch(user={"id": current_user.id}, worker_id=worker_id)}
+
+
+@router.get("/request-batches/dashboard")
+def runpod_request_dashboard(
+    workerId: str = "",
+    workflowId: str = "",
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    selected_worker = workerId.strip()
+    can_manage = has_permission(current_user.permissions, "jobs:manage")
+    if selected_worker in {"*", "all"}:
+        if not can_manage:
+            raise HTTPException(status_code=403, detail="전체 작업자 조회에는 jobs:manage 권한이 필요합니다.")
+        selected_worker = ""
+    elif selected_worker and selected_worker != current_user.id and not can_manage:
+        raise HTTPException(status_code=403, detail="다른 작업자 조회에는 jobs:manage 권한이 필요합니다.")
+    return studio_api_service.runpod_request_dashboard(
+        worker_id=selected_worker or (None if can_manage and workerId.strip() in {"*", "all"} else current_user.id),
+        workflow_id=workflowId.strip(),
+    )
+
+
+@router.get("/request-batches/queue")
+def runpod_request_queue(
+    workerId: str = "",
+    workflowId: str = "",
+    page: int = 1,
+    pageSize: int = 10,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    selected_worker = workerId.strip()
+    can_manage = has_permission(current_user.permissions, "jobs:manage")
+    if selected_worker in {"*", "all"}:
+        if not can_manage:
+            raise HTTPException(status_code=403, detail="전체 작업자 조회에는 jobs:manage 권한이 필요합니다.")
+        selected_worker = ""
+    elif selected_worker and selected_worker != current_user.id and not can_manage:
+        raise HTTPException(status_code=403, detail="다른 작업자 요청 조회에는 jobs:manage 권한이 필요합니다.")
+    return studio_api_service.runpod_request_queue(
+        worker_id=selected_worker or (None if can_manage and workerId.strip() in {"*", "all"} else current_user.id),
+        workflow_id=workflowId.strip(),
+        page=page,
+        page_size=pageSize,
+    )
+
+
+@router.get("/request-batches/{batch_id}")
+def get_runpod_request_batch(batch_id: str, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    try:
+        return studio_api_service.runpod_request_batch(
+            batch_id,
+            user={
+                "id": current_user.id,
+                "canManage": has_permission(current_user.permissions, "jobs:manage"),
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{task_id}")

@@ -53,7 +53,8 @@ type NavItem = {
 // 2026-08-11: Task History를 Prompt Library보다 위로 이동(사용자 요청) - 작업
 // 이력 확인이 더 빈번한 진입점이라는 판단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
-  { key: "workspace", label: "Workspace" },
+  { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
+  { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
   { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse" },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "Asset 관리" 한
@@ -75,6 +76,7 @@ const ADMIN_NAV_ITEMS: NavItem[] = [
   { key: "adminRoles", label: "역할 & 권한", permission: "roles:read" },
   { key: "adminUsers", label: "사용자", permission: "users:read" },
   { key: "adminCatalog", label: "프롬프트 카탈로그", permission: "prompt-catalog:read" },
+  { key: "adminGrokInstructions", label: "프롬프트 지시 관리", permission: "prompt-catalog:read" },
   { key: "adminWorkflows", label: "워크플로 정의", permission: "workflows:read" },
   { key: "adminSandbox", label: "Sandbox Pod", permission: "sandbox:read" },
   { key: "adminTaskPolicy", label: "Task Policy", permission: "roles:read" },

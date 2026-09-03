@@ -8,7 +8,6 @@ import os
 import base64
 import re
 import tempfile
-import time
 from pathlib import Path
 
 from alembic import command
@@ -192,8 +191,10 @@ def main():
             }],
         }
         response = client.post("/api/jobs", headers=admin_headers, json=invalid_resolution_payload)
-        assert response.status_code == 400, response.text
-        assert "multiple of 16" in response.json()["detail"]
+        # Wan의 허용 크기/비율 보정은 서버리스 워커가 담당한다. 스튜디오는
+        # 업로드 이미지의 원본 폭·높이를 검증으로 막지 않고 그대로 큐에 보존한다.
+        assert response.status_code == 201, response.text
+        assert response.json()["status"] == "pending_submit"
 
         response = client.post("/api/jobs", headers=admin_headers, json=job_payload)
         assert response.status_code == 201, response.text
@@ -204,17 +205,19 @@ def main():
         response = client.get("/api/history?page=1&pageSize=10", headers=admin_headers)
         assert response.status_code == 200, response.text
         initial_history = response.json()["items"]
-        assert any(item.get("taskId") == task_id and item.get("status") in {"queued", "QUEUED"} for item in initial_history), initial_history
-        last_status = {}
-        for _ in range(80):
-            response = client.get(f"/api/jobs/{task_id}", headers=admin_headers)
-            assert response.status_code == 200, response.text
-            last_status = response.json()
-            if last_status["status"] == "success":
-                break
-            time.sleep(0.1)
-        assert last_status["status"] == "success", last_status
-        assert last_status.get("generationSeed") == created_job["generationSeed"]
+        # A request is now durable before the serial dispatcher is allowed to
+        # contact RunPod.  The FastAPI smoke check deliberately verifies this
+        # persistence contract without depending on external worker capacity.
+        assert any(
+            item.get("taskId") == task_id and item.get("status") in {"pending_submit", "PENDING_SUBMIT"}
+            for item in initial_history
+        ), initial_history
+        response = client.get(f"/api/jobs/{task_id}", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        queued_status = response.json()
+        assert queued_status["status"] == "queued"
+        assert queued_status["rawStatus"] == "PENDING_SUBMIT"
+        assert queued_status.get("generationSeed") == created_job["generationSeed"]
 
         # 작업 결과 평가 API: 등급은 필수이고, 사유 또는 코멘트 중 하나가 반드시
         # 있어야 한다. 정상 저장 시에는 서버가 로그인 사용자를 평가자로 기록한다.
@@ -323,13 +326,18 @@ def main():
         )
         assert response.status_code == 200, response.text
         assert response.json()["maxActiveTasksPerUser"] == 1
+        # PENDING_SUBMIT is a local durable queue, not a RunPod-active task.
+        # The policy only caps work after an idle worker accepts the request, so
+        # pending requests must remain enqueueable while the server is busy.
         response = client.post("/api/jobs", headers=admin_headers, json=job_payload)
         assert response.status_code == 201, response.text
         limited_task_id = response.json()["taskId"]
         response = client.post("/api/jobs", headers=admin_headers, json=job_payload)
-        assert response.status_code == 409, response.text
-        assert "사용자 동시 활성 Task 한도(1개)에 도달했습니다" in response.json()["detail"]
+        assert response.status_code == 201, response.text
+        second_pending_task_id = response.json()["taskId"]
         response = client.post(f"/api/jobs/{limited_task_id}/cancel", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        response = client.post(f"/api/jobs/{second_pending_task_id}/cancel", headers=admin_headers)
         assert response.status_code == 200, response.text
         response = client.put(
             "/api/admin/task-execution-policy",
@@ -370,6 +378,11 @@ def main():
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "cancelled"
 
+        # A queued-but-not-submitted task is intentionally protected from
+        # deletion. Cancel it first, then verify the history cleanup contract.
+        response = client.post(f"/api/jobs/{task_id}/cancel", headers=admin_headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "cancelled"
         response = client.post(f"/api/history/{task_id}/delete", headers=admin_headers)
         assert response.status_code == 200, response.text
         assert response.json()["deleted"] is True

@@ -5,3 +5,4 @@ alembic>=1.13
 pymysql>=1.1
 boto3>=1.34
 jsonschema>=4.21
+pytest>=8.0

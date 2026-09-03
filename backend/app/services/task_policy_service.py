@@ -9,6 +9,10 @@ from backend.app.db.models import TaskExecutionPolicy, WorkflowTask
 
 DEFAULT_MAX_ACTIVE_TASKS_PER_USER = 3
 DEFAULT_MAX_ACTIVE_TASKS_TOTAL = 10
+# A local PENDING_SUBMIT/DISPATCHING record has not consumed any RunPod
+# capacity yet. The durable dispatcher may retain an arbitrary number of those
+# records and submits only after an idle worker is confirmed. Task policy
+# limits therefore apply after RunPod accepts a job, not while it waits locally.
 ACTIVE_TASK_STATUSES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 
 

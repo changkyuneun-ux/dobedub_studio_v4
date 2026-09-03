@@ -30,8 +30,10 @@ from backend.app.api.v1.workflows import router as workflows_router
 from backend.app.core.config import get_settings
 from backend.app.core.observability import ensure_request_id, observe_response
 from backend.app.db.session import engine
+from backend.app.services.grok_instruction_service import ensure_instruction_set
 from backend.app.services.prompt_builder_service import monitor_active_prompt_generations
 from backend.app.services.studio_api_service import ensure_storage_dirs, monitor_active_jobs
+from backend.app.services.prompt_batch_service import process_next_prompt_generation_draft
 from backend.app.services.workflow_storage_service import bootstrap_workflow_store
 
 
@@ -73,6 +75,9 @@ async def _lifecycle(_: FastAPI):
         len(workflow_store["preserved"]),
     )
     _ensure_database_schema()
+    # Grok 지시문은 DB가 아닌 JSON 런타임 세트가 유일한 기준이다. 파일이 없을
+    # 때만 추적되는 기본 세트를 복사하므로 재시작에 기존 관리자 편집이 덮이지 않는다.
+    ensure_instruction_set()
     async def monitor_loop() -> None:
         while True:
             try:
@@ -82,6 +87,7 @@ async def _lifecycle(_: FastAPI):
                 prompt_result = await asyncio.to_thread(monitor_active_prompt_generations)
                 if prompt_result["failures"]:
                     LOGGER.warning("Prompt monitor could not refresh requests: %s", prompt_result["failures"])
+                await asyncio.to_thread(process_next_prompt_generation_draft)
             except Exception:
                 LOGGER.exception("Task monitor cycle failed")
             await asyncio.sleep(settings.task_monitor_interval_seconds)

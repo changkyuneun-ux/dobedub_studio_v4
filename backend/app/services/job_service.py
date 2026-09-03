@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, timestamp_fields
@@ -55,27 +57,30 @@ def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     }
 
 
-def create_job(runtime: JobRuntime, payload: dict) -> dict:
+def queue_job(runtime: JobRuntime, payload: dict) -> dict:
+    """Persist a validated job before any external RunPod request is made."""
+    # The in-memory task and its DB record must preserve the exact request
+    # submitted to RunPod, even if a caller later mutates its original object.
+    payload = copy.deepcopy(payload)
     now_seoul = now_seoul_naive()
     task_id = f"task_{now_seoul.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     now = time.time()
     workflow_id = payload.get("workflowId") or "unknown"
+    workflow_name = str(payload.get("workflowName") or Path(str(workflow_id)).stem or workflow_id)
+    payload["workflowName"] = workflow_name
     segments = payload.get("segments") or []
     first_config = (segments[0].get("config") if segments else {}) or {}
-    runpod_data = {
-        "runpodJobId": f"dryrun_{uuid.uuid4().hex[:10]}",
-        "patchSummary": {},
-        "runpodSubmit": {},
-    }
-    execution_mode = "dry-run"
-    if not runtime.dry_run:
-        runpod_data = submit_runpod_job(runtime, payload)
-        execution_mode = "runpod"
-    else:
-        # Dry-run must follow the same i2v input validation path as an actual
-        # submission, otherwise an empty-image task can slip into history.
-        _workflow, _images, patch_summary = runtime.prepare_workflow_for_job(payload)
-        runpod_data["patchSummary"] = patch_summary
+    # Validate now, while the request still belongs to the caller, but defer
+    # the network call to the durable dispatcher. Persist the generated seed
+    # so the workflow reconstructed at submission time is identical.
+    _workflow, _images, patch_summary = runtime.prepare_workflow_for_job(payload)
+    generation_seed = generation_seed_from_patch_summary(patch_summary)
+    if generation_seed is not None:
+        payload["generationSeed"] = generation_seed
+    # A durable queued task always represents an actual RunPod submission. Test
+    # callers replace runpod_request with a fake runtime rather than creating
+    # local success records that differ from production behavior.
+    execution_mode = "runpod"
     created_at_utc = datetime.fromtimestamp(now, tz=UTC_TIMEZONE)
     created_at_fields = timestamp_fields(
         "createdAt",
@@ -89,10 +94,11 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
     created_at_fields.pop("createdAt", None)
     runtime.jobs[task_id] = {
         "taskId": task_id,
-        "runpodJobId": runpod_data["runpodJobId"],
+        "runpodJobId": "",
         "executionMode": execution_mode,
         "workflowId": workflow_id,
-        "status": "queued",
+        "workflowName": workflow_name,
+        "status": "PENDING_SUBMIT",
         "progress": 0,
         "createdAt": now,
         "createdAtEpoch": now,
@@ -101,9 +107,9 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
         **timestamp_fields("startedAt", now_seoul, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="ecs-application"),
         "payload": payload,
         "firstConfig": first_config,
-        "generationSeed": generation_seed_from_patch_summary(runpod_data.get("patchSummary")),
-        "patchSummary": runpod_data.get("patchSummary") or {},
-        "runpodSubmit": runpod_data.get("runpodSubmit") or {},
+        "generationSeed": generation_seed,
+        "patchSummary": patch_summary,
+        "runpodSubmit": {},
         "inputAssets": [
             keyframe.get("uploadId")
             for keyframe in (payload.get("keyframes") or [])
@@ -112,6 +118,42 @@ def create_job(runtime: JobRuntime, payload: dict) -> dict:
     }
     record_job(runtime, runtime.jobs[task_id])
     return runtime.jobs[task_id]
+
+
+def create_job(runtime: JobRuntime, payload: dict) -> dict:
+    """Compatibility alias. New callers must use the durable queue semantics."""
+    return queue_job(runtime, payload)
+
+
+def dispatch_queued_job(runtime: JobRuntime, job: dict) -> dict:
+    """Submit one DB-claimed task and retain its original request snapshot."""
+    if str(job.get("status") or "").upper() not in {"PENDING_SUBMIT", "DISPATCHING"}:
+        raise ValueError("Only a pending submission can be dispatched")
+
+    payload = copy.deepcopy(job.get("payload") or {})
+    if not payload:
+        raise ValueError("Queued task payload is missing")
+    if job.get("generationSeed") is not None:
+        payload["generationSeed"] = job["generationSeed"]
+
+    runpod_data = submit_runpod_job(runtime, payload)
+    execution_mode = "runpod"
+
+    now_seoul = now_seoul_naive()
+    job.update({
+        "payload": payload,
+        "runpodJobId": runpod_data["runpodJobId"],
+        "executionMode": execution_mode,
+        "status": "QUEUED",
+        "progress": 0,
+        "startedAt": now_seoul.strftime("%Y-%m-%d %H:%M:%S"),
+        "patchSummary": runpod_data.get("patchSummary") or {},
+        "runpodSubmit": runpod_data.get("runpodSubmit") or {},
+        "generationSeed": generation_seed_from_patch_summary(runpod_data.get("patchSummary")) or job.get("generationSeed"),
+    })
+    job.update(timestamp_fields("startedAt", now_seoul, naive_timezone=SEOUL_TIMEZONE, source_timezone="Asia/Seoul", source="ecs-application"))
+    record_job(runtime, job)
+    return job
 
 
 def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
@@ -158,7 +200,7 @@ def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
     if status in TERMINAL_RUNPOD_STATES:
         return job_status(runtime, task_id)
     cancel_response = {}
-    if job.get("executionMode") == "runpod":
+    if job.get("executionMode") == "runpod" and job.get("runpodJobId"):
         cancel_response = runtime.runpod_request("POST", f"/cancel/{job['runpodJobId']}", None)
     else:
         cancel_response = {"status": "CANCELLED", "message": "Dry-run job cancelled locally."}
@@ -179,7 +221,10 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
     if not job:
         raise KeyError(task_id)
     elapsed = max(0, time.time() - job["createdAt"])
-    if job.get("executionMode") == "runpod":
+    if str(job.get("status") or "").upper() in {"PENDING_SUBMIT", "DISPATCHING"}:
+        progress = 0
+        terminal = False
+    elif job.get("executionMode") == "runpod":
         runpod_status, elapsed, progress = poll_runpod_job(runtime, job)
         terminal = runpod_status.get("status") in TERMINAL_RUNPOD_STATES
     else:
@@ -240,6 +285,8 @@ def api_job_status(job: dict) -> str:
         return "timed_out"
     if status in {"IN_QUEUE", "QUEUED"}:
         return "queued"
+    if status in {"PENDING_SUBMIT", "DISPATCHING"}:
+        return "queued"
     return "running"
 
 
@@ -263,6 +310,8 @@ def display_job_status(job: dict) -> str:
 def localized_job_status(job: dict) -> str:
     status = str(job.get("status", "")).upper()
     labels = {
+        "PENDING_SUBMIT": "요청 대기",
+        "DISPATCHING": "제출 중",
         "QUEUED": "대기",
         "IN_QUEUE": "대기",
         "IN_PROGRESS": "실행 중",
@@ -288,7 +337,7 @@ def save_job_history(runtime: JobRuntime, job: dict):
         "taskId": job["taskId"],
         "timestamp": job["startedAt"],
         "workflowId": job["workflowId"],
-        "workflowName": job["workflowId"],
+        "workflowName": job.get("workflowName") or payload.get("workflowName") or job["workflowId"],
         "runpodJobId": job.get("runpodJobId", ""),
         "executionMode": job.get("executionMode", "dry-run"),
         "user": user,
@@ -331,6 +380,10 @@ def save_job_history(runtime: JobRuntime, job: dict):
 
 
 def job_status_message(job: dict) -> str:
+    if str(job.get("status") or "").upper() == "PENDING_SUBMIT":
+        return "RunPod 유휴 worker를 기다리는 중입니다."
+    if str(job.get("status") or "").upper() == "DISPATCHING":
+        return "RunPod worker에 요청을 제출하는 중입니다."
     if job.get("executionMode") == "runpod":
         status = job.get("status", "UNKNOWN")
         if status == "COMPLETED" and job.get("outputUrl"):

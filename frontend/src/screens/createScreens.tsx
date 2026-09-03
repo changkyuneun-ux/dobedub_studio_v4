@@ -63,6 +63,8 @@ export function Create2aScreen({
   activeImageIndexes,
   onUploadFiles,
   onClearKeyframe,
+  onUpdateKeyframePrompt,
+  onRegenerateKeyframePrompt,
   onNext
 }: {
   user: User | null;
@@ -77,6 +79,8 @@ export function Create2aScreen({
   activeImageIndexes: Set<number>;
   onUploadFiles: (index: number, files: FileList | null) => void;
   onClearKeyframe: (index: number) => void;
+  onUpdateKeyframePrompt: (index: number, prompt: string) => void;
+  onRegenerateKeyframePrompt: (index: number) => void;
   onNext: () => void;
 }) {
   const selected = workflows.find((workflow) => workflow.id === selectedWorkflow) || null;
@@ -85,7 +89,9 @@ export function Create2aScreen({
   const filledKeyframeCount = keyframes.filter((keyframe) => Boolean(keyframe.previewUrl)).length;
   const segmentCount = schema?.segmentCount || selected?.segmentCount || 0;
   const missingCount = Math.max(requiredKeyframeCount - filledKeyframeCount, 0);
-  const canProceed = Boolean(selectedWorkflow) && missingCount === 0;
+  const promptGenerating = keyframes.some((keyframe) => keyframe.upload && keyframe.grokStatus === "GENERATING");
+  const manualPromptRequired = keyframes.some((keyframe) => keyframe.upload && keyframe.grokStatus === "MANUAL_REQUIRED" && !keyframe.grokPrompt.trim());
+  const canProceed = Boolean(selectedWorkflow) && missingCount === 0 && !promptGenerating && !manualPromptRequired;
 
   return (
     <AppShell
@@ -146,8 +152,8 @@ export function Create2aScreen({
               키프레임 {filledKeyframeCount} / {requiredKeyframeCount}
             </div>
             <div className="v3-checklist-item is-pending">
-              <span className="v3-checklist-dot" />
-              세그먼트 설정
+              <span className="v3-checklist-dot">{promptGenerating ? "" : ""}</span>
+              {promptGenerating ? "Grok prompt 생성 중" : "세그먼트 설정"}
             </div>
             <div className="v3-checklist-item is-pending">
               <span className="v3-checklist-dot" />
@@ -249,10 +255,64 @@ export function Create2aScreen({
             </label>
           ))}
         </div>
+        <div className="v3-image-prompt-grid">
+          {keyframes.map((keyframe) => {
+            const hasUpload = Boolean(keyframe.upload);
+            const isGenerating = keyframe.grokStatus === "GENERATING";
+            const statusLabel = !hasUpload
+              ? "업로드 대기"
+              : isGenerating
+                ? "Grok 생성 중"
+                : keyframe.grokStatus === "READY"
+                  ? `Grok 준비됨${keyframe.grokImageType ? ` · ${keyframe.grokImageType}` : ""}`
+                  : keyframe.grokStatus === "MANUAL_REQUIRED"
+                    ? "직접 입력 필요 · 실내 배경"
+                  : keyframe.grokStatus === "FAILED"
+                    ? "생성 실패 · 직접 입력 가능"
+                    : "생성 대기";
+            return (
+              <section className="v3-image-prompt-card" key={`image-prompt-${keyframe.index}`}>
+                <div className="v3-image-prompt-card-head">
+                  <div>
+                    <div className="v3-label">IMAGE-PROMPT PAIR</div>
+                    <strong>SLOT {String(keyframe.index).padStart(2, "0")} · Positive Prompt</strong>
+                  </div>
+                  <span className={`v3-image-prompt-status is-${keyframe.grokStatus.toLowerCase()}`}>{statusLabel}</span>
+                </div>
+                <textarea
+                  className="v3-image-prompt-textarea"
+                  value={keyframe.grokPrompt}
+                  disabled={!hasUpload || isGenerating}
+                  placeholder={hasUpload ? "Grok가 생성한 positive prompt가 여기에 표시됩니다. 필요하면 직접 수정하세요." : "이미지를 업로드하면 Grok positive prompt가 자동 생성됩니다."}
+                  onChange={(event) => onUpdateKeyframePrompt(keyframe.index, event.target.value)}
+                />
+                <div className="v3-image-prompt-actions">
+                  <span>이 문장은 시작 키프레임으로 연결된 세그먼트에 적용됩니다.</span>
+                  <button
+                    className="v3-secondary-button"
+                    type="button"
+                    disabled={!hasUpload || isGenerating}
+                    onClick={() => onRegenerateKeyframePrompt(keyframe.index)}
+                  >
+                    재생성
+                  </button>
+                </div>
+                {keyframe.grokError ? <p className="v3-image-prompt-error">{keyframe.grokError}</p> : null}
+                {keyframe.grokWarnings.length ? <p className="v3-image-prompt-warning">주의: {keyframe.grokWarnings.join(" · ")}</p> : null}
+              </section>
+            );
+          })}
+        </div>
         {missingCount > 0 ? (
           <div className="v3-warning-strip">
             <span className="v3-warning-dot" />
             <span>{missingCount}개 슬롯이 비어 있습니다 — 업로드해야 다음 단계로 넘어갈 수 있습니다</span>
+          </div>
+        ) : null}
+        {manualPromptRequired ? (
+          <div className="v3-warning-strip">
+            <span className="v3-warning-dot" />
+            <span>실내 배경으로 판정된 이미지가 있습니다. 해당 SLOT의 Positive Prompt를 직접 입력해야 다음 단계로 갈 수 있습니다.</span>
           </div>
         ) : null}
         <div className="v3-note-block">

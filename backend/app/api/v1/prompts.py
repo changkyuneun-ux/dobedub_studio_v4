@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.app.core.security import CurrentUser, require_any_permission, require_permission
-from backend.app.db.models import PromptCategoryGroup, PromptSubcategory, PromptSystemPrompt, PromptTerm
+from backend.app.core.security import CurrentUser, has_permission, require_any_permission, require_permission
+from backend.app.core.config import get_settings
+from backend.app.db.models import ImagePromptDraft, PromptCategoryGroup, PromptSubcategory, PromptSystemPrompt, PromptTerm
 from backend.app.db.session import get_db
 from backend.app.services import studio_api_service
 from backend.app.services.audit_log_service import record_audit_log
@@ -30,6 +33,21 @@ from backend.app.services.prompt_system_prompt_service import (
     get_prompt_system_prompt,
     list_prompt_system_prompt_versions,
     save_prompt_system_prompt,
+)
+from backend.app.services.grok_image_prompt_service import (
+    GrokPromptError,
+    GrokPromptInputError,
+    generate_image_prompt,
+)
+from backend.app.services.grok_instruction_service import active_instruction_text, list_instruction_documents
+from backend.app.services.prompt_batch_service import (
+    create_prompt_generation_batch,
+    list_active_prompt_generation_batches,
+    latest_active_prompt_generation_batch,
+    list_prompt_drafts,
+    prompt_generation_batch_payload,
+    retry_prompt_draft,
+    update_prompt_draft,
 )
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
@@ -365,6 +383,234 @@ def generate(payload: dict, current_user: CurrentUser = Depends(require_permissi
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail=f"Prompt generation failed: {exc}") from exc
+
+
+def _image_prompt_draft_payload(draft: ImagePromptDraft, *, cached: bool = False) -> dict:
+    return {
+        "draftId": draft.id,
+        "assetId": draft.asset_id,
+        "workflowId": draft.workflow_id,
+        "slotIndex": draft.slot_index,
+        "status": draft.status,
+        "provider": draft.provider,
+        "model": draft.model,
+        "instructionVersion": draft.instruction_version,
+        "positivePrompt": draft.positive_prompt or "",
+        "imageType": str((draft.raw_json or {}).get("imageType") or "mixed"),
+        "warnings": draft.warnings_json or [],
+        "error": draft.failure_message,
+        "cached": cached,
+    }
+
+
+@router.post("/image-drafts/generate")
+def generate_image_draft(
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    """Generate (or return) the positive prompt paired with one source asset."""
+    asset_id = str(payload.get("assetId") or "").strip()
+    workflow_id = str(payload.get("workflowId") or "").strip()
+    try:
+        slot_index = int(payload.get("slotIndex") or 0)
+    except (TypeError, ValueError):
+        slot_index = 0
+    if not asset_id or not workflow_id or slot_index < 1:
+        raise HTTPException(status_code=400, detail="assetId, workflowId, and slotIndex are required")
+
+    settings = get_settings()
+    if not settings.grok_enabled:
+        raise HTTPException(status_code=409, detail="Grok image prompt generation is disabled. Set GROK_ENABLED=1.")
+    try:
+        instruction_text, instruction_version = active_instruction_text(workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    existing = db.scalar(
+        select(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.asset_id == asset_id,
+            ImagePromptDraft.workflow_id == workflow_id,
+            ImagePromptDraft.slot_index == slot_index,
+            ImagePromptDraft.created_by == current_user.id,
+            ImagePromptDraft.status.in_(["READY", "MANUAL_REQUIRED"]),
+            ImagePromptDraft.model == settings.grok_model,
+            ImagePromptDraft.instruction_version == instruction_version,
+        )
+        .order_by(ImagePromptDraft.updated_at.desc())
+    )
+    if existing and not bool(payload.get("regenerate")):
+        return _image_prompt_draft_payload(existing, cached=True)
+
+    try:
+        asset, asset_path = studio_api_service.get_asset(asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Input image asset was not found.") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Input image file is unavailable.") from exc
+
+    draft = ImagePromptDraft(
+        id=f"grok_draft_{uuid.uuid4().hex[:16]}",
+        asset_id=asset_id,
+        workflow_id=workflow_id,
+        slot_index=slot_index,
+        status="GENERATING",
+        provider="grok",
+        model=settings.grok_model,
+        instruction_version=instruction_version,
+        warnings_json=[],
+        raw_json={},
+        created_by=current_user.id,
+    )
+    db.add(draft)
+    db.flush()
+    try:
+        result = generate_image_prompt(
+            settings,
+            asset_path=asset_path,
+            mime_type=str(asset.get("mimeType") or ""),
+            file_name=str(asset.get("fileName") or asset_path.name),
+            image_width=asset.get("imageWidth"),
+            image_height=asset.get("imageHeight"),
+            instruction_text=instruction_text,
+        )
+        draft.status = "MANUAL_REQUIRED" if not result.positive_prompt else "READY"
+        draft.positive_prompt = result.positive_prompt
+        draft.warnings_json = result.warnings
+        draft.raw_json = {"imageType": result.image_type, "response": result.raw_response}
+        db.commit()
+        db.refresh(draft)
+        return _image_prompt_draft_payload(draft)
+    except GrokPromptInputError as exc:
+        draft.status = "FAILED"
+        draft.failure_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GrokPromptError as exc:
+        draft.status = "FAILED"
+        draft.failure_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        draft.status = "FAILED"
+        draft.failure_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=500, detail="Grok image prompt generation failed.") from exc
+
+
+@router.post("/image-drafts/batches")
+def create_image_prompt_batch(
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    """Persist one Grok request batch; the monitor processes its drafts sequentially."""
+    settings = get_settings()
+    if not settings.grok_enabled:
+        raise HTTPException(status_code=409, detail="Grok image prompt generation is disabled. Set GROK_ENABLED=1.")
+    try:
+        return create_prompt_generation_batch(db, payload, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail=f"Prompt generation batch save failed: {exc}") from exc
+
+
+@router.get("/image-drafts/batches/active")
+def active_image_prompt_batch(
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    return {"item": latest_active_prompt_generation_batch(db, created_by=current_user.id)}
+
+
+@router.get("/image-drafts/batches/active-list")
+def active_image_prompt_batches(
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    return {"items": list_active_prompt_generation_batches(db, created_by=current_user.id)}
+
+
+@router.get("/image-drafts/batches/{batch_id}")
+def image_prompt_batch_status(
+    batch_id: str,
+    _: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return prompt_generation_batch_payload(db, batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/image-drafts")
+def image_prompt_drafts(
+    workerId: str = "",
+    workflowId: str = "",
+    status: str = "",
+    page: int = 1,
+    pageSize: int = 50,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    selected_worker = workerId.strip() or current_user.id
+    if selected_worker in {"*", "all"}:
+        if not has_permission(current_user.permissions, "jobs:manage"):
+            raise HTTPException(status_code=403, detail="전체 작업자 조회에는 jobs:manage 권한이 필요합니다.")
+        selected_worker = None
+    elif selected_worker != current_user.id and not has_permission(current_user.permissions, "jobs:manage"):
+        raise HTTPException(status_code=403, detail="다른 작업자 조회에는 jobs:manage 권한이 필요합니다.")
+    return list_prompt_drafts(
+        db,
+        created_by=selected_worker,
+        workflow_id=workflowId,
+        status=status,
+        page=page,
+        page_size=pageSize,
+    )
+
+
+@router.get("/image-drafts/instruction-status")
+def image_prompt_instruction_status(workflowId: str, _: CurrentUser = Depends(require_permission("prompts:build"))):
+    try:
+        result = list_instruction_documents(workflowId)
+        active_items = [item for item in result.get("items") or [] if item.get("isActive")]
+        return {"workflowId": workflowId, "configured": bool(active_items), "count": len(active_items)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/image-drafts/{draft_id}")
+def update_image_prompt_draft(
+    draft_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return update_prompt_draft(
+            db,
+            draft_id,
+            created_by=current_user.id,
+            positive_prompt=payload.get("positivePrompt"),
+            negative_prompt=payload.get("negativePrompt"),
+            requested_frames=payload.get("requestedFrames"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/image-drafts/{draft_id}/retry")
+def retry_image_prompt_draft(
+    draft_id: str,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return retry_prompt_draft(db, draft_id, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/generate/{request_id}")

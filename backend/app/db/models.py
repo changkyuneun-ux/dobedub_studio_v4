@@ -176,6 +176,9 @@ class WorkflowTask(Base):
     __tablename__ = "workflow_tasks"
     __table_args__ = (
         Index("ix_workflow_tasks_created_at_id", "created_at", "id"),
+        # Durable local submission queue scan order. Existing RunPod status
+        # values remain intact; only PENDING_SUBMIT is locally introduced.
+        Index("ix_workflow_tasks_dispatch", "status", "next_dispatch_at", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -208,6 +211,16 @@ class WorkflowTask(Base):
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     runpod_submit_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     runpod_status_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    prompt_draft_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # A RunPod request batch contains one immutable item per selected prompt
+    # draft. Keep the concrete item id on the task so later draft edits never
+    # affect the queued job snapshot.
+    request_item_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dispatch_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_dispatch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # External-provider raw timestamps and their normalized UTC/KST pairs.
     # Existing rows keep an empty object and are reported as legacy/unknown.
     time_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -601,6 +614,122 @@ class PromptGenerationOutput(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
 
     request: Mapped[PromptGenerationRequest] = relationship(back_populates="outputs")
+
+
+class ImagePromptDraft(Base):
+    """A Grok-generated positive prompt paired with one uploaded source asset."""
+
+    __tablename__ = "image_prompt_drafts"
+    __table_args__ = (
+        Index("ix_image_prompt_drafts_asset_workflow_slot", "asset_id", "workflow_id", "slot_index"),
+        Index("ix_image_prompt_drafts_created_by_status", "created_by", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    slot_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY", index=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="grok")
+    model: Mapped[str] = mapped_column(String(191), nullable=False)
+    instruction_version: Mapped[str] = mapped_column(String(64), nullable=False, default="wan-i2v-grok-v1")
+    positive_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_frames: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    warnings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class PromptGenerationBatch(Base):
+    """One user request that creates image-scoped Grok prompt drafts."""
+
+    __tablename__ = "prompt_generation_batches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class PromptGenerationAttempt(Base):
+    """Immutable Grok-call audit record; intentionally no draft foreign key."""
+
+    __tablename__ = "prompt_generation_attempts"
+    __table_args__ = (
+        Index("ix_prompt_generation_attempts_draft", "draft_id", "attempt_no"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    endpoint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(191), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+
+
+class RunpodRequestBatch(Base):
+    """Audit envelope for a user-selected set of pending RunPod requests."""
+
+    __tablename__ = "runpod_request_batches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    requested_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="QUEUED", index=True)
+    queued_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    in_progress_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cancelled_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    # The worker owns all drafts/tasks. A manager may submit the worker's batch
+    # without changing the owner shown in task and prompt history.
+    submitted_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class RunpodRequestItem(Base):
+    """Immutable per-image snapshot accepted into a RunPod request batch."""
+
+    __tablename__ = "runpod_request_items"
+    __table_args__ = (
+        Index("ix_runpod_request_items_batch_sequence", "request_batch_id", "sequence_no"),
+        Index("ix_runpod_request_items_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_batch_id: Mapped[str] = mapped_column(String(64), ForeignKey("runpod_request_batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_draft_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("image_prompt_drafts.id"), nullable=True, index=True)
+    asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id"), nullable=False, index=True)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    positive_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_frames: Mapped[int] = mapped_column(Integer, nullable=False, default=81)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_SUBMIT")
+    task_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_tasks.id"), nullable=True, index=True)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
 
 class PromptFeedback(Base):

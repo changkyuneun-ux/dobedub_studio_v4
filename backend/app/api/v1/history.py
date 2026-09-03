@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
-from backend.app.core.security import CurrentUser, require_permission
-from backend.app.services import studio_api_service
+from backend.app.core.security import CurrentUser, has_permission, require_permission
+from backend.app.db.session import get_db
+from backend.app.services import prompt_batch_service, studio_api_service
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -15,6 +17,33 @@ router = APIRouter(prefix="/history", tags=["history"])
 # 향후 API 클라이언트 등)를 위한 안전망이다.
 def history(page: int = 1, pageSize: int = 20, _: CurrentUser = Depends(require_permission("history:read"))):
     return studio_api_service.paginated_history(page, pageSize)
+
+
+@router.get("/prompts")
+def prompt_history(
+    page: int = 1,
+    current_user: CurrentUser = Depends(require_permission("history:read")),
+    db: Session = Depends(get_db),
+):
+    """Image-scoped Grok history, deliberately fixed to 20 rows per page."""
+    # A manager needs the per-worker operational dashboard. Other users keep
+    # the original isolation and only receive their own prompt history.
+    created_by = None if has_permission(current_user.permissions, "jobs:manage") else current_user.id
+    return prompt_batch_service.list_prompt_drafts(
+        db,
+        created_by=created_by,
+        page=page,
+        page_size=20,
+    )
+
+
+@router.get("/runpod")
+def runpod_history(
+    page: int = 1,
+    _: CurrentUser = Depends(require_permission("history:read")),
+):
+    """RunPod task history, deliberately fixed to 20 rows per page."""
+    return studio_api_service.paginated_runpod_history(page)
 
 
 @router.post("/{task_id}/delete")

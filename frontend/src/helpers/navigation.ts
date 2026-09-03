@@ -4,8 +4,10 @@ import { StudioRoute } from "../router";
 // assets)는 화면마다 반복되는 공통 골격이라 각 Create*Screen이 받는 onGoTo(실제
 // StudioRoute 이동)를 통해 여기서 한 곳에서만 매핑한다.
 export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void) {
-  if (key === "workspace") {
-    onGoTo("create.load");
+  if (key === "workspace" || key === "promptManagement") {
+    onGoTo("create.promptManagement");
+  } else if (key === "runpodRequests") {
+    onGoTo("create.runpodRequests");
   } else if (key === "taskHistory") {
     onGoTo("review.history");
   } else if (key === "promptLibrary") {
@@ -23,6 +25,8 @@ export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void)
 export function shellNavigateAdmin(key: string, onGoTo: (route: StudioRoute) => void) {
   if (key === "adminCatalog") {
     onGoTo("admin.catalogHierarchy");
+  } else if (key === "adminGrokInstructions") {
+    onGoTo("admin.grokInstructions");
   } else if (key === "adminStatus") {
     onGoTo("admin.status");
   } else if (key === "adminMetadata") {

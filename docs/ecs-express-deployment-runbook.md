@@ -17,6 +17,7 @@
 | Asset storage | EFS mounted at `/data/outputs`, `STORAGE_BACKEND=local` |
 | Deployment strategy | ECS Express Canary, 신규 task health check 후 이전 revision drain |
 | DB migration | 앱 기동과 분리. schema 변경 시에만 one-off task 실행 |
+| Current Alembic head | `20260902_0029_jobs_manage_permission` |
 
 ### 반드시 지킬 원칙
 
@@ -27,6 +28,7 @@
 5. `AUTH_TRUST_PROXY_HEADERS`는 운영 task definition에 넣지 않는다. 인증은 JWT Bearer token과 DB 기반 권한만 사용한다.
 6. 로컬 SQLite의 users, Prompt Catalog, task history, assets는 RDS/EFS로 자동 복사되지 않는다. 운영 데이터 이관은 별도 승인 작업이다.
 7. Canary 배포 중에는 이전 revision을 수동 중지하지 않는다. ECS가 health check와 draining을 관리한다.
+8. 이번 릴리스의 `0024`~`0028` migration은 신규 테이블, nullable 컬럼, 인덱스만 추가하고, `0029`는 `jobs:manage` 권한 카탈로그만 추가한다. 기존 운영 행과 role/user 권한 연결은 백필하거나 수정하지 않는다.
 
 ## 2. 사전 조건
 

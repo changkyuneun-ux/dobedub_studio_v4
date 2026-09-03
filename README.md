@@ -4,6 +4,21 @@ RunPod Serverless ComfyUI에서 실행되는 WAN Image-to-Video 워크플로우�
 
 v4는 `design_handoff_dobedub_v3/`의 설계 문서를 기준으로 화면 전체를 업무 흐름(S1~S5) 단위로 전면 재구축한 버전입니다. 기능 단위로 흩어져 있던 구버전(v3) 모달·페이지 구조를 걷어내고, 사이드바 212px + 헤더 + 본문 + 우측 패널의 공통 레이아웃(`AppShell`)을 모든 화면이 공유하도록 다시 짰습니다.
 
+## Superpowers 기반 개발
+
+이 리포지토리는 Codex Superpowers 작업 흐름을 위한 프로젝트 규칙을
+[`AGENTS.md`](AGENTS.md)에 정의합니다. 설계와 실행 계획은
+[`docs/superpowers/`](docs/superpowers/) 아래에서 관리합니다.
+
+공통 검증은 다음 명령으로 실행합니다.
+
+```bash
+./scripts/verify.sh
+```
+
+이 명령은 백엔드 컴파일·테스트, 프론트엔드 빌드, Git diff 공백 검사를 수행하며
+RunPod 호출, 데이터 변경, Git push, ECS 배포는 수행하지 않습니다.
+
 ## 실행
 
 권장 실행:

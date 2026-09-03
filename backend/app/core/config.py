@@ -60,6 +60,20 @@ class Settings:
     prompt_llm_submit_timeout: int = 20
     prompt_llm_cold_start_timeout: int = 900
     prompt_llm_poll_interval: int = 3
+    # Grok Vision is intentionally isolated from the legacy Qwen/RunPod
+    # prompt path. It generates a per-upload positive prompt only.
+    grok_enabled: bool = False
+    grok_api_key: str = ""
+    grok_base_url: str = "https://api.x.ai/v1"
+    grok_model: str = "grok-4-1-fast-reasoning"
+    grok_auto_generate_on_upload: bool = False
+    grok_max_image_bytes: int = 20 * 1024 * 1024
+    grok_max_output_tokens: int = 600
+    grok_temperature: float = 0.2
+    grok_request_timeout_seconds: int = 120
+    grok_max_retries: int = 2
+    grok_retry_backoff_seconds: float = 2.0
+    grok_instruction_set_path: Path = PROJECT_ROOT / "data" / "grok_instruction_set.json"
     auth_jwt_secret: str = "dobedub-studio-local-dev-secret"
     auth_token_ttl_minutes: int = 480
     task_monitor_interval_seconds: int = 5
@@ -69,12 +83,9 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    # B-04: 환경변수가 아예 없을 때의 폴백을 실제 실행("0")으로 통일한다 - 운영
-    # 배포는 항상 RUNPOD_DRY_RUN=0을 명시하므로 이것이 실제 운영 기본값이다.
-    # RUNPOD_API_KEY/RUNPOD_ENDPOINT_ID가 없는 미설정 환경에서는 dry-run으로
-    # 조용히 넘어가는 대신 runpod_client.runpod_headers()가 ValueError로 즉시
-    # 실패해 잘못된 설정을 드러낸다. 로컬 개발에서 안전한 시뮬레이션이 필요하면
-    # .env.example처럼 RUNPOD_DRY_RUN=1을 명시적으로 설정한다.
+    # RUNPOD_DRY_RUN은 기존 환경 파일과 health 응답의 호환을 위해 읽기만
+    # 한다. 배치 디스패처는 이 값과 무관하게 실제 /health와 /run을 호출한다.
+    # 테스트는 JobRuntime의 runpod_request 더블로 네트워크를 차단한다.
     dry_run = os.environ.get("RUNPOD_DRY_RUN", "0") != "0"
     try:
         runpod_timeout = int(os.environ.get("RUNPOD_TIMEOUT", "30"))
@@ -119,6 +130,30 @@ def get_settings() -> Settings:
     except ValueError:
         prompt_llm_max_tokens = 900
     try:
+        grok_max_image_bytes = min(50 * 1024 * 1024, max(256 * 1024, int(os.environ.get("GROK_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))))
+    except ValueError:
+        grok_max_image_bytes = 20 * 1024 * 1024
+    try:
+        grok_max_output_tokens = min(2_000, max(64, int(os.environ.get("GROK_MAX_OUTPUT_TOKENS", "600"))))
+    except ValueError:
+        grok_max_output_tokens = 600
+    try:
+        grok_temperature = min(1.0, max(0.0, float(os.environ.get("GROK_TEMPERATURE", "0.2"))))
+    except ValueError:
+        grok_temperature = 0.2
+    try:
+        grok_request_timeout_seconds = min(300, max(10, int(os.environ.get("GROK_REQUEST_TIMEOUT_SECONDS", "120"))))
+    except ValueError:
+        grok_request_timeout_seconds = 120
+    try:
+        grok_max_retries = min(5, max(0, int(os.environ.get("GROK_MAX_RETRIES", "2"))))
+    except ValueError:
+        grok_max_retries = 2
+    try:
+        grok_retry_backoff_seconds = min(30.0, max(0.25, float(os.environ.get("GROK_RETRY_BACKOFF_SECONDS", "2"))))
+    except ValueError:
+        grok_retry_backoff_seconds = 2.0
+    try:
         auth_token_ttl_minutes = int(os.environ.get("AUTH_TOKEN_TTL_MINUTES", "480"))
     except ValueError:
         auth_token_ttl_minutes = 480
@@ -130,10 +165,11 @@ def get_settings() -> Settings:
         observability_slow_request_ms = min(60_000, max(1, int(os.environ.get("OBSERVABILITY_SLOW_REQUEST_MS", "500"))))
     except ValueError:
         observability_slow_request_ms = 500
+    data_dir = Path(os.environ.get("STUDIO_DATA_DIR", PROJECT_ROOT / "data"))
     return Settings(
         workflow_seed_dir=Path(os.environ.get("WORKFLOW_SEED_DIR", PROJECT_ROOT / "workflows")),
         workflows_dir=Path(os.environ.get("WORKFLOWS_DIR", PROJECT_ROOT / "workflows")),
-        data_dir=Path(os.environ.get("STUDIO_DATA_DIR", PROJECT_ROOT / "data")),
+        data_dir=data_dir,
         metadata_dir=Path(os.environ.get("METADATA_DIR", PROJECT_ROOT / "metadata")),
         persistence_backend=os.environ.get("PERSISTENCE_BACKEND", "json").strip().lower() or "json",
         database_url=os.environ.get("DATABASE_URL", "sqlite:///./data/dobedub-studio.db"),
@@ -174,6 +210,18 @@ def get_settings() -> Settings:
         prompt_llm_submit_timeout=prompt_llm_submit_timeout,
         prompt_llm_cold_start_timeout=prompt_llm_cold_start_timeout,
         prompt_llm_poll_interval=prompt_llm_poll_interval,
+        grok_enabled=os.environ.get("GROK_ENABLED", "0") in {"1", "true", "TRUE", "yes", "YES"},
+        grok_api_key=os.environ.get("GROK_API_KEY", ""),
+        grok_base_url=os.environ.get("GROK_BASE_URL", "https://api.x.ai/v1").rstrip("/"),
+        grok_model=os.environ.get("GROK_MODEL", "grok-4-1-fast-reasoning").strip() or "grok-4-1-fast-reasoning",
+        grok_auto_generate_on_upload=os.environ.get("GROK_AUTO_GENERATE_ON_UPLOAD", "0") not in {"0", "false", "FALSE", "no", "NO"},
+        grok_max_image_bytes=grok_max_image_bytes,
+        grok_max_output_tokens=grok_max_output_tokens,
+        grok_temperature=grok_temperature,
+        grok_request_timeout_seconds=grok_request_timeout_seconds,
+        grok_max_retries=grok_max_retries,
+        grok_retry_backoff_seconds=grok_retry_backoff_seconds,
+        grok_instruction_set_path=Path(os.environ.get("GROK_INSTRUCTION_SET_PATH", data_dir / "grok_instruction_set.json")),
         auth_jwt_secret=os.environ.get("AUTH_JWT_SECRET", "dobedub-studio-local-dev-secret"),
         auth_token_ttl_minutes=auth_token_ttl_minutes,
         task_monitor_interval_seconds=task_monitor_interval_seconds,

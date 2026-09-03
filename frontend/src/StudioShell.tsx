@@ -25,7 +25,8 @@ import {
   AssetItem,
   CollectionSummary,
   CollectionDetail,
-  TaskPromptItem
+  TaskPromptItem,
+  GrokImagePromptDraftResponse
 } from "./api/client";
 import { StudioRoute } from "./router";
 import {
@@ -74,6 +75,9 @@ import {
   Create2bScreen,
   Create2fScreen
 } from "./screens/createScreens";
+import { GrokWorkspaceScreen } from "./screens/grokWorkspaceScreen";
+import { PromptManagementScreen } from "./screens/promptManagementScreen";
+import { RunpodRequestScreen } from "./screens/runpodRequestScreen";
 import {
   Create3aScreen,
   Create4cScreen,
@@ -91,7 +95,8 @@ import {
   Create7cScreen,
   Create4aScreen,
   Create4dScreen,
-  AdminAuditLogScreen
+  AdminAuditLogScreen,
+  GrokInstructionAdminScreen
 } from "./screens/adminScreens";
 import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 
@@ -104,6 +109,8 @@ import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 // (screens/accessScreens.tsx의 AccessDeniedScreen)을 구현해, 직접 URL 진입 시
 // 아래 deniedRoute 계산으로 그 화면을 본문에 그린다.
 export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
+  "create.promptManagement": "prompts:build",
+  "create.runpodRequests": "jobs:run",
   "review.history": "history:read",
   "review.assets": "history:read",
   "admin.systemPrompt": "prompts:build",
@@ -116,6 +123,7 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "admin.workflows": "workflows:read",
   "admin.workflowRegister": "workflows:write",
   "admin.catalogHierarchy": "prompt-catalog:read",
+  "admin.grokInstructions": "prompt-catalog:read",
   "admin.catalogTerms": "prompt-catalog:read",
   "admin.negativeDefaults": "prompt-catalog:read",
   "admin.status": "system:read",
@@ -148,6 +156,8 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 }
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
+  "create.promptManagement": "프롬프트 생성 관리",
+  "create.runpodRequests": "RunPod 요청 관리",
   "review.history": "Task History",
   "review.assets": "Assets",
   "admin.systemPrompt": "System Prompt",
@@ -160,6 +170,7 @@ export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "admin.workflows": "워크플로 정의",
   "admin.workflowRegister": "워크플로 등록",
   "admin.catalogHierarchy": "카탈로그 계층",
+  "admin.grokInstructions": "Prompt Instructions",
   "admin.catalogTerms": "용어 관리",
   "admin.negativeDefaults": "Negative 기본값",
   "admin.status": "Check Status",
@@ -189,7 +200,7 @@ export function StudioShell({
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryTaskId, setSelectedHistoryTaskId] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<HistoryItem | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<HistoryItem[]>([]);
   // E-03(5a+5c 통합, 2026-08-11): "Asset 관리" - 3a와 동일한 20/50 페이지네이션
   // 패턴은 유지하되, 목록 자체가 이제 출력 자산 기준이고 컬렉션 필터가 곧 사이드바
   // 카테고리다. 예전엔 5a(자산 type 필터+선택 상세)와 5c(컬렉션 선택+상세)가 각자
@@ -282,6 +293,7 @@ export function StudioShell({
   const [segments, setSegments] = useState<SegmentState[]>([]);
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(1);
   const [keyframes, setKeyframes] = useState<KeyframeState[]>([]);
+  const [grokVideoLengthFrames, setGrokVideoLengthFrames] = useState(81);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -323,7 +335,11 @@ export function StudioShell({
     const nextSchema = await apiClient.workflowSchema(workflowId);
     releaseKeyframePreviews(keyframes);
     setSchema(nextSchema);
-    setSegments(createSegmentsFromSchema(nextSchema));
+    setSegments(createSegmentsFromSchema(nextSchema).map((segment) => ({
+      ...segment,
+      config: { ...segment.config, frames: 81, frame_count: 81, length: 81, duration: 5, duration_seconds: 5, fps: 16, output_fps: 16 }
+    })));
+    setGrokVideoLengthFrames(81);
     setSelectedSegmentIndex(1);
     setKeyframes(createKeyframes(nextSchema.keyframeCount || 1));
     resetPromptBuilderDraft();
@@ -1520,6 +1536,114 @@ export function StudioShell({
     setSegments((items) => items.map((segment) => (segment.index === index ? updater(segment) : segment)));
   }
 
+  function applyImagePromptToLinkedSegments(slotIndex: number, positivePrompt: string) {
+    const prompt = positivePrompt.trim();
+    if (!prompt) {
+      return;
+    }
+    setSegments((items) => items.map((segment) => (
+      segment.startImageIndex === slotIndex
+        ? { ...segment, positivePrompt: prompt }
+        : segment
+    )));
+  }
+
+  function updateKeyframeImagePrompt(slotIndex: number, positivePrompt: string) {
+    setKeyframes((items) => items.map((keyframe) => (
+      keyframe.index === slotIndex ? { ...keyframe, grokPrompt: positivePrompt } : keyframe
+    )));
+    applyImagePromptToLinkedSegments(slotIndex, positivePrompt);
+  }
+
+  function updateGrokNegativePrompt(negativePrompt: string) {
+    setSegments((items) => items.map((segment) => ({
+      ...segment,
+      negativePrompt,
+      negativePromptAddition: negativePrompt
+    })));
+  }
+
+  function updateGrokVideoLengthFrames(frames: number) {
+    const safeFrames = [49, 81, 161].includes(frames) ? frames : 81;
+    const seconds = safeFrames === 49 ? 3 : safeFrames === 161 ? 10 : 5;
+    setGrokVideoLengthFrames(safeFrames);
+    setSegments((items) => items.map((segment) => ({
+      ...segment,
+      config: {
+        ...segment.config,
+        frames: safeFrames,
+        frame_count: safeFrames,
+        length: safeFrames,
+        duration: seconds,
+        duration_seconds: seconds,
+        fps: 16,
+        output_fps: 16
+      }
+    })));
+  }
+
+  function applyWanResolutionForKeyframe(slotIndex: number, imageWidth?: number | null, imageHeight?: number | null) {
+    const width = Number(imageWidth || 0);
+    const height = Number(imageHeight || 0);
+    if (!width || !height) return;
+    // Preserve the uploaded image dimensions exactly. The selected Wan node is
+    // responsible for converting them to a supported internal resolution.
+    setSegments((items) => items.map((segment) => segment.startImageIndex === slotIndex ? {
+      ...segment,
+      config: { ...segment.config, width, height, fps: 16, output_fps: 16 }
+    } : segment));
+  }
+
+  function updateKeyframeImagePromptState(slotIndex: number, response: GrokImagePromptDraftResponse) {
+    const positivePrompt = response.positivePrompt || "";
+    setKeyframes((items) => items.map((keyframe) => (
+      keyframe.index === slotIndex
+        ? {
+            ...keyframe,
+            grokStatus: response.status === "READY" || response.status === "MANUAL_REQUIRED"
+              ? response.status
+              : "FAILED",
+            grokPrompt: positivePrompt,
+            grokImageType: response.imageType || "",
+            grokWarnings: response.warnings || [],
+            grokError: response.error || ""
+          }
+        : keyframe
+    )));
+    applyImagePromptToLinkedSegments(slotIndex, positivePrompt);
+  }
+
+  async function regenerateKeyframeImagePrompt(slotIndex: number) {
+    const keyframe = keyframes.find((item) => item.index === slotIndex);
+    if (!keyframe?.upload || !selectedWorkflow) {
+      setNotice("업로드된 이미지와 워크플로우를 먼저 선택하세요.");
+      return;
+    }
+    setKeyframes((items) => items.map((item) => (
+      item.index === slotIndex
+        ? { ...item, grokStatus: "GENERATING", grokError: "", grokWarnings: [] }
+        : item
+    )));
+    try {
+      const response = await apiClient.generateImagePromptDraft({
+        assetId: keyframe.upload.assetId,
+        workflowId: selectedWorkflow,
+        slotIndex,
+        regenerate: keyframe.grokStatus !== "IDLE"
+      });
+      updateKeyframeImagePromptState(slotIndex, response);
+      setNotice(keyframe.grokStatus === "IDLE" ? "Grok positive prompt를 생성했습니다." : "Grok positive prompt를 다시 생성했습니다.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Grok prompt generation failed";
+      setKeyframes((items) => items.map((item) => (
+        item.index === slotIndex
+          ? { ...item, grokStatus: "FAILED", grokError: message }
+          : item
+      )));
+      setNotice(message);
+    }
+  }
+
   function updateSelectedPrompt(field: "positivePrompt" | "negativePrompt", value: string) {
     if (!selectedSegment) {
       return;
@@ -1626,7 +1750,12 @@ export function StudioShell({
             metaText: `${Math.round(file.size / 1024)}KB · pending upload`,
             dimensionText: "",
             uploading: true,
-            error: ""
+            error: "",
+            grokStatus: "IDLE",
+            grokPrompt: "",
+            grokImageType: "",
+            grokWarnings: [],
+            grokError: ""
           };
         })
       );
@@ -1645,12 +1774,18 @@ export function StudioShell({
                   uploading: false,
                   metaText: `${upload.fileName} · ${formatUploadSize(upload.sizeBytes)}`,
                   dimensionText: formatImageDimensions(upload.imageHeight, upload.imageWidth),
-                  error: ""
+                  error: "",
+                  grokStatus: "IDLE",
+                  grokPrompt: "",
+                  grokImageType: "",
+                  grokWarnings: [],
+                  grokError: ""
                 }
               : keyframe
           )
         );
-        setNotice("이미지 업로드가 완료되었습니다.");
+        applyWanResolutionForKeyframe(targetIndex, upload.imageWidth, upload.imageHeight);
+        setNotice("이미지 업로드가 완료되었습니다. 슬롯의 프롬프트 생성 버튼을 눌러 Grok 요청을 시작하세요.");
       } catch (error) {
         setKeyframes((items) =>
           items.map((keyframe) =>
@@ -1732,16 +1867,21 @@ export function StudioShell({
     setModalNotice("프롬프트를 복사했습니다.");
   }
 
-  async function deleteHistoryItem() {
-    if (!deleteTarget?.taskId) {
+  async function deleteHistoryItems() {
+    const terminalTargets = deleteTargets.filter((item) => item.taskId);
+    if (!terminalTargets.length) {
       return;
     }
     setModalNotice("");
     try {
-      await apiClient.deleteHistory(deleteTarget.taskId);
-      setDeleteTarget(null);
+      for (const item of terminalTargets) {
+        await apiClient.deleteHistory(item.taskId);
+      }
+      setDeleteTargets([]);
       await loadHistoryPage(historyPage);
-      setNotice("작업 내역과 연결된 asset을 삭제했습니다.");
+      setNotice(terminalTargets.length === 1
+        ? "작업 내역과 연결된 asset을 삭제했습니다."
+        : `${terminalTargets.length}건의 작업 내역과 연결된 asset을 삭제했습니다.`);
     } catch (error) {
       setModalNotice(error instanceof Error ? error.message : "삭제에 실패했습니다.");
     }
@@ -1789,24 +1929,18 @@ export function StudioShell({
       setError("입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다.");
       return;
     }
+    const missingPositive = segments.filter((segment) => segment.startImageIndex > 0 && !segment.positivePrompt.trim());
+    if (missingPositive.length) {
+      setError("업로드 이미지 옆 Positive Prompt를 입력하세요. 실내 배경으로 판정된 이미지는 직접 입력이 필요합니다.");
+      return;
+    }
     setRunning(true);
     setError("");
     setNotice("작업을 제출합니다.");
     try {
-      const created = await apiClient.createJob(jobPayloadPreview);
-      setNotice("작업을 제출했습니다. Task History에서 진행 상태를 확인하세요.");
+      await apiClient.createJob(jobPayloadPreview);
+      setNotice("작업을 제출했습니다. 현재 이미지와 프롬프트는 유지됩니다.");
       showToast("작업이 제출되었습니다. 다른 작업을 계속 준비할 수 있습니다.", "success");
-
-      // 제출 이후에는 브라우저가 완료까지 붙잡고 있지 않는다. 같은 워크플로우의
-      // 새 작업을 위한 빈 입력을 준비하고, 방금 생성된 Task가 맨 위에 보이는
-      // 이력으로 즉시 이동한다.
-      try {
-        await loadWorkflowIntoState(selectedWorkflow, { preserveNotice: true });
-      } catch (resetError) {
-        setError(resetError instanceof Error ? resetError.message : "새 작업 화면을 초기화하지 못했습니다.");
-      }
-      await loadHistoryPage(1);
-      onNavigate("review.history");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Generate failed";
       setError(message);
@@ -1856,14 +1990,22 @@ export function StudioShell({
         error={manualError}
         onGoTo={onNavigate}
       />
-    ) : route === "create.load" ? (
-      <Create2aScreen
+    ) : route === "create.load" || route === "create.promptManagement" ? (
+      <PromptManagementScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
+    ) : route === "create.runpodRequests" ? (
+      <RunpodRequestScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
+    ) : route === "create.prompt" || route === "create.confirm" ? (
+      <GrokWorkspaceScreen
         user={user}
         health={health}
         onGoTo={onNavigate}
         workflows={workflows}
         selectedWorkflow={selectedWorkflow}
-        workflowSelectionLocked={workflowSelectionLocked}
+        schema={schema}
+        keyframes={keyframes}
+        segments={segments}
+        running={running}
+        lengthFrames={grokVideoLengthFrames}
         onSelectWorkflow={(workflowId) => {
           if (workflowSelectionLocked) {
             setNotice("생성 중에는 워크플로우를 변경할 수 없습니다. 완료 또는 실패 후 다시 선택하세요.");
@@ -1871,75 +2013,13 @@ export function StudioShell({
           }
           setSelectedWorkflow(workflowId);
         }}
-        schema={schema}
-        keyframes={keyframes}
-        activeImageIndexes={activeImageIndexes}
         onUploadFiles={applySelectedFiles}
         onClearKeyframe={clearKeyframe}
-        onNext={() => onNavigate("create.prompt")}
-      />
-    ) : route === "create.prompt" ? (
-      <Create2bScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        workflowName={selected?.label || selected?.name || selectedWorkflow}
-        segments={segments}
-        selectedSegmentIndex={selectedSegmentIndex}
-        onSelectSegment={setSelectedSegmentIndex}
-        catalog={promptCatalog}
-        loading={promptBuilderLoading}
-        notice={promptBuilderNotice}
-        selectedTermIds={promptSelectedTermIds}
-        activePanel={promptBuilderPanel}
-        systemPrompt={promptSystemPrompt}
-        systemPromptText={promptSystemPromptText}
-        scene={promptScene}
-        generated={promptGenerated}
-        sceneDescription={promptSceneDescription}
-        baseNegativePrompt={selectedSegment?.defaultNegativePrompt || selectedSegment?.negativePrompt || ""}
-        onReloadSystemPrompt={() => void loadPromptSystemPrompt()}
-        onSaveSystemPrompt={() => void savePromptSystemPrompt()}
-        onSystemPromptTextChange={setPromptSystemPromptText}
-        onPanelChange={setPromptBuilderPanel}
-        onToggleTerm={togglePromptTerm}
-        onSceneDescriptionChange={(value) => {
-          setPromptSceneDescription(value);
-          setPromptScene(null);
-          setPromptGenerated(null);
-          setPromptEditorOverrides((items) => {
-            const next = { ...items };
-            delete next[selectedSegmentIndex];
-            return next;
-          });
-        }}
-        onClearSelection={clearPromptBuilderSelection}
-        onGenerate={() => void generatePromptDraft()}
-        onApply={applyPromptSceneToSegment}
-        onEditPrompt={editPromptResult}
-        onResetPrompt={resetPromptResult}
-        promptEditorOverride={promptEditorOverrides[selectedSegmentIndex]}
-        onOpenPromptReuse={() => void goToPromptReuseScreen()}
-        onUpdateConfigValue={updateConfigValue}
-        onResetDefaults={() => void resetSegmentConfigsToDefaults()}
-        onCopyFirstSegmentConfig={copyFirstSegmentConfig}
-        onNext={() => onNavigate("create.confirm")}
-      />
-    ) : route === "create.confirm" ? (
-      <Create2fScreen
-        user={user}
-        health={health}
-        onGoTo={onNavigate}
-        selected={selected || null}
-        selectedWorkflow={selectedWorkflow}
-        keyframes={keyframes}
-        segments={segments}
-        jobPayloadPreview={jobPayloadPreview}
-        running={running}
-        onEditSegments={() => onNavigate("create.prompt")}
-        onRun={() => {
-          void generateVideo();
-        }}
+        onUpdateKeyframePrompt={updateKeyframeImagePrompt}
+        onRegenerateKeyframePrompt={regenerateKeyframeImagePrompt}
+        onUpdateNegativePrompt={updateGrokNegativePrompt}
+        onLengthFramesChange={updateGrokVideoLengthFrames}
+        onRun={() => void generateVideo()}
       />
     ) : route === "review.history" ? (
       <Create3aScreen
@@ -1953,7 +2033,7 @@ export function StudioShell({
         total={historyTotal}
         loading={historyLoading}
         selectedTaskId={selectedHistoryTaskId}
-        deleteTarget={deleteTarget}
+        deleteTargets={deleteTargets}
         deleteError={modalNotice}
         promptReviewItems={promptReviewItems}
         promptReviewLoading={promptReviewLoading}
@@ -1965,9 +2045,10 @@ export function StudioShell({
         onRework={(item) => void applyHistoryRework(item)}
         onSavePromptReview={(segmentIndex, payload) => void savePromptReview(segmentIndex, payload)}
         onSavePromptFeedback={(outputId, payload) => void savePromptFeedback(outputId, payload)}
-        onRequestDelete={(item) => { setModalNotice(""); setDeleteTarget(item); }}
-        onCancelDelete={() => { setModalNotice(""); setDeleteTarget(null); }}
-        onConfirmDelete={() => void deleteHistoryItem()}
+        onRequestDelete={(item) => { setModalNotice(""); setDeleteTargets([item]); }}
+        onRequestBulkDelete={(items) => { setModalNotice(""); setDeleteTargets(items); }}
+        onCancelDelete={() => { setModalNotice(""); setDeleteTargets([]); }}
+        onConfirmDelete={() => void deleteHistoryItems()}
         onCancelTask={(item) => void cancelHistoryTask(item)}
         canRework={canUse(user, "jobs:run")}
         canDelete={canUse(user, "history:delete")}
@@ -2036,6 +2117,8 @@ export function StudioShell({
         onSave={() => void savePromptSystemPrompt()}
         onRevert={(promptText) => void savePromptSystemPrompt(promptText)}
       />
+    ) : route === "admin.grokInstructions" ? (
+      <GrokInstructionAdminScreen user={user} onGoTo={onNavigate} />
     ) : route === "admin.status" ? (
       <Create6cScreen
         user={user}
@@ -2161,17 +2244,19 @@ export function StudioShell({
     ) : route === "admin.auditLog" ? (
       <AdminAuditLogScreen user={user} onGoTo={onNavigate} />
     ) : (
-      // E-06: 구버전 인라인 워크스페이스(studio-grid) JSX는 모든 StudioRoute 분기가
-      // 채워지며 도달 불가능해진 죽은 코드였다(정리 대상). 위 분기 어디에도 걸리지
-      // 않는 라우트는 이제 없지만, 타입상 남는 fallback은 2a(create.load)와 동일한
-      // 화면으로 안전하게 보낸다.
-      <Create2aScreen
+      // 모든 생성 진입점은 Grok 기반 이미지-프롬프트 페어링 화면으로 통일한다.
+      // 타입상 남는 fallback도 구형 생성 화면으로 돌아가지 않도록 같은 화면을 쓴다.
+      <GrokWorkspaceScreen
         user={user}
         health={health}
         onGoTo={onNavigate}
         workflows={workflows}
         selectedWorkflow={selectedWorkflow}
-        workflowSelectionLocked={workflowSelectionLocked}
+        schema={schema}
+        keyframes={keyframes}
+        segments={segments}
+        running={running}
+        lengthFrames={grokVideoLengthFrames}
         onSelectWorkflow={(workflowId) => {
           if (workflowSelectionLocked) {
             setNotice("생성 중에는 워크플로우를 변경할 수 없습니다. 완료 또는 실패 후 다시 선택하세요.");
@@ -2179,16 +2264,17 @@ export function StudioShell({
           }
           setSelectedWorkflow(workflowId);
         }}
-        schema={schema}
-        keyframes={keyframes}
-        activeImageIndexes={activeImageIndexes}
         onUploadFiles={applySelectedFiles}
         onClearKeyframe={clearKeyframe}
-        onNext={() => onNavigate("create.prompt")}
+        onUpdateKeyframePrompt={updateKeyframeImagePrompt}
+        onRegenerateKeyframePrompt={regenerateKeyframeImagePrompt}
+        onUpdateNegativePrompt={updateGrokNegativePrompt}
+        onLengthFramesChange={updateGrokVideoLengthFrames}
+        onRun={() => void generateVideo()}
       />
     )}
     {/* 2026-08-11: 구버전 ConfirmDeleteModal(전역 렌더) 제거 - Create3aScreen이
-       deleteTarget을 받아 자체적으로 v3 스펙 삭제 확인창을 그리므로(reviewScreens.tsx
+       deleteTargets를 받아 자체적으로 v3 스펙 삭제 확인창을 그리므로(reviewScreens.tsx
        213~243번째 줄), 여기서 또 렌더하면 3a에서 확인창이 두 개 겹쳐 떴다.
        E-05: 매뉴얼(6b)도 ManualScreen 전체 화면으로 전환돼 전역 모달 렌더가 없다. */}
     {confirmationRequest ? (

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -28,6 +28,7 @@ from backend.app.services.metadata_service import get_workflow_widget_metadata
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
+PENDING_SUBMISSION_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
 RUNPOD_TIMESTAMP_KEYS = {
     "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
     "cancelledat", "updatedat", "laststartedat", "laststatuschange", "statuschangedat",
@@ -405,6 +406,81 @@ def active_task_ids() -> list[str]:
         session.close()
 
 
+def claim_next_pending_submission() -> dict | None:
+    """Atomically claim the oldest retry-eligible local RunPod submission.
+
+    The claim is persisted before the provider call so browser/session loss
+    cannot make a queued task disappear. The conditional update keeps two app
+    processes from submitting the same task twice.
+    """
+    session = SessionLocal()
+    try:
+        now = now_seoul_naive()
+        candidate_ids = list(session.scalars(
+            select(WorkflowTask.id)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.status == "PENDING_SUBMIT",
+                or_(WorkflowTask.next_dispatch_at.is_(None), WorkflowTask.next_dispatch_at <= now),
+            )
+            .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+            .limit(10)
+        ))
+        for task_id in candidate_ids:
+            result = session.execute(
+                update(WorkflowTask)
+                .where(
+                    WorkflowTask.id == task_id,
+                    WorkflowTask.status == "PENDING_SUBMIT",
+                    WorkflowTask.deleted_at.is_(None),
+                )
+                .values(
+                    status="DISPATCHING",
+                    dispatch_claimed_at=now,
+                    dispatch_attempts=WorkflowTask.dispatch_attempts + 1,
+                    next_dispatch_at=None,
+                    updated_at=now,
+                )
+            )
+            if result.rowcount:
+                task = session.get(WorkflowTask, task_id)
+                if task is not None:
+                    _sync_request_batch(session, task)
+                session.commit()
+                return {"taskId": task_id, "status": "DISPATCHING"}
+        session.rollback()
+        return None
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def release_pending_submission(task_id: str, error: str, *, retry_after_seconds: int = 15) -> None:
+    """Return a claimed submission to the durable queue after a transient failure."""
+    session = SessionLocal()
+    try:
+        now = now_seoul_naive()
+        task = session.get(WorkflowTask, task_id)
+        if not task:
+            raise KeyError(task_id)
+        if task.status != "DISPATCHING":
+            return
+        task.status = "PENDING_SUBMIT"
+        task.dispatch_claimed_at = None
+        task.next_dispatch_at = now + timedelta(seconds=max(1, int(retry_after_seconds)))
+        task.last_dispatch_error = str(error or "RunPod submission deferred")[:4000]
+        task.updated_at = now
+        _sync_request_batch(session, task)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 def task_prompts(task_id: str) -> list[dict]:
     session = SessionLocal()
     try:
@@ -560,6 +636,7 @@ def _record_job_created(session: Session, job: dict, *, resolve_asset: Callable[
     task = _upsert_task(session, job)
     _replace_input_assets(session, task, job, resolve_asset=resolve_asset)
     _replace_task_prompts(session, task, job)
+    _sync_request_batch(session, task)
 
 
 def _record_job_status(session: Session, job: dict, *, resolve_asset: Callable[[str], tuple[dict, Path]] | None) -> None:
@@ -569,6 +646,18 @@ def _record_job_status(session: Session, job: dict, *, resolve_asset: Callable[[
         _replace_task_prompts(session, task, job)
     _replace_output_assets(session, task, job, resolve_asset=resolve_asset)
     _sync_task_prompt_outputs(session, task, job)
+    _sync_request_batch(session, task)
+
+
+def _sync_request_batch(session: Session, task: WorkflowTask) -> None:
+    """Keep the request aggregate derived from the durable task state."""
+    if not task.request_item_id:
+        return
+    # Local import keeps task tracking independent from request-batch creation
+    # and avoids a module cycle during application startup.
+    from backend.app.services.runpod_request_batch_service import sync_request_batch_for_task
+
+    sync_request_batch_for_task(session, task)
 
 
 def _payload_without_seed(payload: dict) -> dict:
@@ -644,6 +733,16 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
     task.payload_json = stored_payload
     task.runpod_submit_json = job.get("runpodSubmit") or {}
     task.runpod_status_json = job.get("runpodStatus") or {}
+    # Queue jobs retain their immutable request references in payload.  The
+    # persistence record must copy them into indexed columns as well; otherwise
+    # a RunPod request batch cannot observe the task after navigation/restart.
+    task.prompt_draft_id = str(job.get("promptDraftId") or payload.get("promptDraftId") or task.prompt_draft_id or "") or None
+    task.request_batch_id = str(job.get("requestBatchId") or payload.get("requestBatchId") or task.request_batch_id or "") or None
+    task.request_item_id = str(job.get("requestItemId") or payload.get("requestItemId") or task.request_item_id or "") or None
+    if status.upper() in ACTIVE_STATES or status.upper() in TERMINAL_STATES:
+        task.dispatch_claimed_at = None
+        task.next_dispatch_at = None
+        task.last_dispatch_error = None
     task.time_context_json = _time_context(task, job, now)
     task.updated_at = now
     session.flush()
@@ -894,7 +993,10 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     item.setdefault("taskId", task.id)
     item.update(_task_timestamp_fields(task, "timestamp", task.started_at or task.created_at))
     item.setdefault("workflowId", task.workflow_id)
-    item.setdefault("workflowName", task.workflow_id)
+    # Older tasks predate the explicit display name. Keep their history readable
+    # without rewriting stored payloads or requiring a data migration.
+    item.setdefault("workflowName", Path(task.workflow_id).stem)
+    item.setdefault("promptDraftId", task.prompt_draft_id or "")
     item.setdefault("runpodJobId", task.runpod_job_id or "")
     item.setdefault("executionMode", task.execution_mode)
     item.setdefault("workerName", task.worker_name or "-")
@@ -933,9 +1035,51 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
         ))
     item["outputAssets"] = output_assets or item.get("outputAssets", [])
     item.setdefault("outputUrl", _first_output_url(item["outputAssets"]))
+    item["runpodResponse"] = _runpod_response_summary(task, item["outputAssets"])
     item.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
     item.setdefault("elapsedSeconds", task.elapsed_seconds)
     return item
+
+
+def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> dict:
+    """Normalize provider timing/output fields without changing raw RunPod storage."""
+    provider_payload = task.runpod_status_json or {}
+    submit_payload = task.runpod_submit_json or {}
+    filename = (
+        _find_provider_value(provider_payload, ("filename", "fileName"))
+        or _find_provider_value(submit_payload, ("filename", "fileName"))
+        or _first_output_filename(output_assets)
+    )
+    return {
+        "filename": filename or None,
+        "delaySeconds": _find_provider_value(submit_payload, ("delayTime", "delay_time", "delaySeconds")),
+        "executionSeconds": _find_provider_value(provider_payload, ("executionTime", "execution_time", "executionSeconds")),
+        "jobId": task.runpod_job_id or _find_provider_value(submit_payload, ("id", "jobId", "job_id")) or None,
+    }
+
+
+def _find_provider_value(payload: object, keys: tuple[str, ...]) -> object | None:
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        for value in payload.values():
+            found = _find_provider_value(value, keys)
+            if found not in (None, ""):
+                return found
+    if isinstance(payload, list):
+        for value in payload:
+            found = _find_provider_value(value, keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _first_output_filename(output_assets: list[dict]) -> str | None:
+    final = next((asset for asset in output_assets if asset.get("outputRole") == "final"), None)
+    asset = final or (output_assets[0] if output_assets else None)
+    return str(asset.get("fileName")) if isinstance(asset, dict) and asset.get("fileName") else None
 
 
 def _assets_by_id(session: Session) -> dict[str, dict]:

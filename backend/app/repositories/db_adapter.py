@@ -172,6 +172,7 @@ class DbStudioRepository:
             "mimeType": payload.get("mimeType") or mime_type,
             "sizeBytes": len(raw),
             "path": str(path),
+            "createdBy": payload.get("createdBy") or None,
             "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         image_width, image_height = image_dimensions(raw, item["mimeType"])

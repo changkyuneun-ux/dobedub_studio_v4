@@ -12,12 +12,6 @@ from backend.app.services.workflow_parser import PARAM_LABELS, PARAM_UI_KEYS
 
 I2V_INPUT_IMAGE_REQUIRED_MESSAGE = "입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다."
 MAX_GENERATION_SEED = (1 << 53) - 1
-RESOLUTION_MULTIPLE = 16
-MIN_RESOLUTION_DIMENSION = 256
-MAX_RESOLUTION_DIMENSION = 1280
-MAX_RESOLUTION_PIXELS = 1_048_576
-
-
 def validate_i2v_input_images(payload: dict, workflow: dict, segments: list[dict]) -> None:
     """Require one uploaded asset for every image input the selected i2v workflow needs."""
     required_count = workflow_parser.keyframe_count(workflow, segments)
@@ -112,6 +106,55 @@ def apply_single_prompt(workflow: dict, positive_text: str | None, negative_text
     return applied
 
 
+def build_submission_request_snapshot(payload: dict, images: list[dict]) -> dict:
+    """Record the user-visible inputs that are about to be embedded in a RunPod request.
+
+    The handler accepts uploaded bytes separately in ``input.images`` while the
+    prompts are written into the patched workflow.  Persisting this compact
+    snapshot makes that pairing inspectable without storing a second copy of
+    the image bytes or server-local file paths.
+    """
+    ordered_keyframes = sorted(
+        (keyframe for keyframe in payload.get("keyframes") or [] if isinstance(keyframe, dict)),
+        key=lambda keyframe: int(keyframe.get("index") or 0),
+    )
+    input_images = []
+    for index, keyframe in enumerate(ordered_keyframes):
+        asset_id = str(keyframe.get("uploadId") or "").strip()
+        if not asset_id:
+            continue
+        runpod_image = images[index] if index < len(images) else {}
+        input_images.append({
+            "slotIndex": int(keyframe.get("index") or index + 1),
+            "assetId": asset_id,
+            "sourceFileName": str(keyframe.get("fileName") or "").strip(),
+            "runpodFileName": str(runpod_image.get("name") or "").strip(),
+        })
+
+    prompts = []
+    settings = []
+    for index, segment in enumerate(payload.get("segments") or [], start=1):
+        if not isinstance(segment, dict):
+            continue
+        config = segment.get("config") if isinstance(segment.get("config"), dict) else {}
+        prompts.append({
+            "segmentIndex": int(segment.get("index") or index),
+            "positivePrompt": str(segment.get("positivePrompt") or ""),
+            "negativePrompt": str(segment.get("negativePromptAddition") or segment.get("negativePrompt") or ""),
+        })
+        settings.append({
+            "segmentIndex": int(segment.get("index") or index),
+            "length": config.get("length") or config.get("frames") or config.get("frame_count"),
+            "fps": config.get("fps") or config.get("output_fps"),
+        })
+    return {
+        "workflowId": str(payload.get("workflowId") or ""),
+        "inputImages": input_images,
+        "prompts": prompts,
+        "videoSettings": settings,
+    }
+
+
 def ui_config_to_param_config(node_config: dict) -> dict:
     return {
         "width": node_config.get("width"),
@@ -130,35 +173,40 @@ def ui_config_to_param_config(node_config: dict) -> dict:
 
 
 def validate_segment_resolution(params: dict, node_config: dict, segment_index: int) -> None:
-    """Validate the direct width/height controls before patching a workflow."""
-    dimensions = {}
+    """Validate dimensions without replacing the Wan node's own size policy.
+
+    Workspace injects the source image dimensions unchanged. Individual Wan
+    nodes may round, scale, or reject a size according to their installed
+    implementation, so the application only rejects non-positive integers.
+    """
     for key in ("width", "height"):
         spec = params.get(key)
         if not spec:
             continue
-        value = node_config.get(key, spec.get("default"))
+        # ui_config_to_param_config intentionally exposes every field.  A
+        # missing field is therefore represented as None rather than being
+        # absent, so get(key, default) alone does not reach the workflow
+        # default.  Draft submissions rely on that fallback when an older
+        # asset record has no stored dimensions.
+        value = node_config.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            value = spec.get("default")
         try:
             dimension = int(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Segment {segment_index} {key} must be an integer.") from exc
-        if dimension < MIN_RESOLUTION_DIMENSION or dimension > MAX_RESOLUTION_DIMENSION:
-            raise ValueError(
-                f"Segment {segment_index} {key} must be between "
-                f"{MIN_RESOLUTION_DIMENSION} and {MAX_RESOLUTION_DIMENSION}."
-            )
-        if dimension % RESOLUTION_MULTIPLE:
-            raise ValueError(f"Segment {segment_index} {key} must be a multiple of {RESOLUTION_MULTIPLE}.")
-        dimensions[key] = dimension
-
-    if len(dimensions) == 2 and dimensions["width"] * dimensions["height"] > MAX_RESOLUTION_PIXELS:
-        raise ValueError(
-            f"Segment {segment_index} resolution must not exceed {MAX_RESOLUTION_PIXELS:,} pixels."
-        )
+        if dimension <= 0:
+            raise ValueError(f"Segment {segment_index} {key} must be greater than zero.")
 
 
-def apply_automatic_generation_seed(workflow: dict, segments: list[dict]) -> dict:
-    """Assign one server-generated seed to the active sampler of every segment."""
-    generation_seed = secrets.randbelow(MAX_GENERATION_SEED) + 1
+def apply_automatic_generation_seed(
+    workflow: dict,
+    segments: list[dict],
+    generation_seed: int | None = None,
+) -> dict:
+    """Assign one server-generated seed to every sampler, preserving queued jobs."""
+    if generation_seed is None:
+        generation_seed = secrets.randbelow(MAX_GENERATION_SEED) + 1
     scope_segments = segments or [{"video_node": None}]
     applied = []
     for index, segment in enumerate(scope_segments, start=1):
@@ -314,7 +362,13 @@ def prepare_workflow_for_job(
         )
 
     patch_summary["nodeConfig"] = apply_node_config_to_workflow(workflow, workflow_id, segment_payloads, workflows_dir)
-    patch_summary["seed"] = apply_automatic_generation_seed(workflow, segments)
+    queued_seed = payload.get("generationSeed")
+    try:
+        queued_seed = int(queued_seed) if queued_seed is not None else None
+    except (TypeError, ValueError):
+        queued_seed = None
+    patch_summary["seed"] = apply_automatic_generation_seed(workflow, segments, queued_seed)
+    patch_summary["requestSnapshot"] = build_submission_request_snapshot(payload, images)
     # 실행 제출 직전의 워크플로우에서 선택된 모델 파일만 스냅샷한다. 메타데이터
     # 카탈로그의 전체 옵션과 달리 이 값은 task_id의 재현/조회 전용이다.
     patch_summary["modelReferences"] = metadata_loader.workflow_model_reference_items(workflow)

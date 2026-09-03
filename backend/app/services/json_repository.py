@@ -294,6 +294,7 @@ def create_upload(assets_path: Path, uploads_dir: Path, payload: dict) -> dict:
         "mimeType": payload.get("mimeType") or mime_type,
         "sizeBytes": len(raw),
         "path": str(path),
+        "createdBy": payload.get("createdBy") or None,
         **timestamp_fields("createdAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="legacy-json-repository"),
     }
     image_width, image_height = image_dimensions(raw, item["mimeType"])

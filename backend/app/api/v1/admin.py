@@ -25,11 +25,100 @@ from backend.app.services.task_policy_service import (
     task_execution_policy_payload,
     update_task_execution_policy,
 )
+from backend.app.services.grok_instruction_service import (
+    copy_instruction_documents,
+    delete_instruction_document,
+    import_markdown_document,
+    list_instruction_documents,
+    list_instruction_source_workflows,
+    save_instruction_document,
+)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+@router.get("/grok-instructions")
+def grok_instructions(workflowId: str, _: CurrentUser = Depends(require_permission("prompt-catalog:read"))):
+    try:
+        return list_instruction_documents(workflowId)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Grok instruction load failed: {exc}") from exc
+
+
+@router.get("/grok-instructions/sources")
+def grok_instruction_sources(_: CurrentUser = Depends(require_permission("prompt-catalog:read"))):
+    try:
+        return {"workflowIds": list_instruction_source_workflows()}
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Grok instruction source load failed: {exc}") from exc
+
+
+@router.post("/grok-instructions")
+def create_grok_instruction(payload: dict, request: Request, current_user: CurrentUser = Depends(require_permission("prompt-catalog:write")), db: Session = Depends(get_db)):
+    try:
+        result = save_instruction_document(payload, document_id=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_log(db, actor_id=current_user.id, action="grok_instruction.create", target_type="grok_instruction", target_id=str((result.get("item") or {}).get("id") or ""), after=result.get("item"), ip=_client_ip(request))
+    return result
+
+
+@router.put("/grok-instructions/{document_id}")
+def update_grok_instruction(document_id: str, payload: dict, request: Request, current_user: CurrentUser = Depends(require_permission("prompt-catalog:write")), db: Session = Depends(get_db)):
+    workflow_id = str(payload.get("workflowId") or "").strip()
+    try:
+        existing = next((item for item in list_instruction_documents(workflow_id)["items"] if item["id"] == document_id), None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    before = existing
+    try:
+        result = save_instruction_document(payload, document_id=document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_log(db, actor_id=current_user.id, action="grok_instruction.update", target_type="grok_instruction", target_id=document_id, before=before, after=result.get("item"), ip=_client_ip(request))
+    return result
+
+
+@router.delete("/grok-instructions/{document_id}")
+def delete_grok_instruction(document_id: str, workflowId: str, request: Request, current_user: CurrentUser = Depends(require_permission("prompt-catalog:write")), db: Session = Depends(get_db)):
+    try:
+        existing = next((item for item in list_instruction_documents(workflowId)["items"] if item["id"] == document_id), None)
+        result = delete_instruction_document(workflowId, document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_log(db, actor_id=current_user.id, action="grok_instruction.delete", target_type="grok_instruction", target_id=document_id, before=existing, ip=_client_ip(request))
+    return result
+
+
+@router.post("/grok-instructions/import-markdown")
+def import_grok_instruction_markdown(payload: dict, request: Request, current_user: CurrentUser = Depends(require_permission("prompt-catalog:write")), db: Session = Depends(get_db)):
+    try:
+        result = import_markdown_document(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Markdown import failed: {exc}") from exc
+    item = result.get("item") or {}
+    record_audit_log(db, actor_id=current_user.id, action="grok_instruction.import_markdown", target_type="grok_instruction", target_id=str(item.get("id") or ""), after=item, ip=_client_ip(request))
+    return result
+
+
+@router.post("/grok-instructions/copy")
+def copy_grok_instruction_documents(payload: dict, request: Request, current_user: CurrentUser = Depends(require_permission("prompt-catalog:write")), db: Session = Depends(get_db)):
+    try:
+        result = copy_instruction_documents(
+            str(payload.get("sourceWorkflowId") or ""),
+            str(payload.get("targetWorkflowId") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_log(db, actor_id=current_user.id, action="grok_instruction.copy", target_type="grok_instruction_set", target_id=str(payload.get("targetWorkflowId") or ""), after=result.get("instructionSet"), ip=_client_ip(request))
+    return result
 
 
 @router.get("/users")

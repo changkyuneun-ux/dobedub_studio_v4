@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DOBEDUB v4 - Grok Auto Prompt Workspace Mockup</title>
+  <style>
+    :root {
+      --ink: #19211e;
+      --muted: #7e8984;
+      --line: #dfe7e2;
+      --canvas: #f7f9f8;
+      --panel: #ffffff;
+      --mint: #e8f5ee;
+      --mint-strong: #d7eee4;
+      --green: #159b68;
+      --green-dark: #0a6e4a;
+      --danger: #cf4434;
+      --shadow: 0 8px 24px rgba(25, 33, 30, .07);
+      font-family: Inter, Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 1180px; color: var(--ink); background: var(--canvas); }
+    button, textarea { font: inherit; }
+    .shell { display: grid; min-height: 100vh; grid-template-columns: 216px minmax(0, 1fr); }
+    .side { display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
+    .brand { display: flex; gap: 10px; align-items: center; height: 72px; padding: 0 18px; font-size: 15px; font-weight: 800; letter-spacing: .03em; }
+    .brand-mark { width: 24px; height: 24px; display: grid; place-items: center; color: white; background: #154d39; border-radius: 5px; font-size: 8px; font-weight: 900; }
+    .admin-link { margin: 4px 12px 18px; padding: 8px 11px; color: var(--green-dark); background: var(--mint); border: 1px solid #c8e5d6; border-radius: 6px; font-size: 12px; font-weight: 700; }
+    .nav-label { padding: 0 18px 7px; color: #9aa59f; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; }
+    .nav { padding: 0 8px 18px; }
+    .nav a { display: block; padding: 9px 12px; border-radius: 6px; color: #4d5852; font-size: 13px; text-decoration: none; }
+    .nav a.active { color: var(--green-dark); background: var(--mint); font-weight: 800; }
+    .nav a:not(.active) { margin: 2px 0; }
+    .side-bottom { margin-top: auto; padding: 16px 18px 20px; border-top: 1px solid var(--line); font-size: 11px; color: #5d6962; }
+    .status { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .main { min-width: 0; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; height: 72px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .eyebrow, .field-label, .mono { color: #89948e; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .09em; text-transform: uppercase; }
+    h1 { margin: 2px 0 0; font-size: 22px; line-height: 1.1; letter-spacing: 0; }
+    .top-meta { display: flex; gap: 10px; align-items: center; }
+    .top-badge { padding: 6px 9px; border-radius: 5px; color: var(--green-dark); background: var(--mint); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .user { font-size: 12px; color: #526058; }
+    .body { display: grid; grid-template-columns: minmax(0, 1fr) 304px; gap: 20px; padding: 24px 28px 38px; }
+    .content { display: grid; gap: 16px; }
+    .card { overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 1px 1px rgba(20, 30, 24, .02); }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 18px; border-bottom: 1px solid #edf1ee; }
+    .card-title { font-weight: 800; font-size: 14px; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .workflow-row { display: flex; gap: 10px; padding: 14px 18px; }
+    .workflow { flex: 0 1 300px; padding: 13px; border: 1px solid #afddc9; border-radius: 7px; background: #f3fbf7; }
+    .workflow strong { display: block; font-size: 13px; }
+    .workflow span { display: block; margin-top: 5px; color: var(--green-dark); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .mapping { display: grid; grid-template-columns: 168px minmax(350px, 1fr); gap: 16px; padding: 18px; }
+    .image-card { border: 1px solid #c6ded3; border-radius: 7px; overflow: hidden; }
+    .image-placeholder { display: flex; position: relative; align-items: center; justify-content: center; height: 150px; overflow: hidden; color: #1e6048; background: #d8efe5; font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .image-placeholder:before, .image-placeholder:after { position: absolute; content: ""; border-radius: 50%; background: #b1deca; }
+    .image-placeholder:before { width: 176px; height: 176px; top: 70px; left: -42px; }
+    .image-placeholder:after { width: 96px; height: 96px; top: 14px; right: -18px; }
+    .image-placeholder span { position: relative; z-index: 1; padding: 7px 8px; background: rgba(255,255,255,.68); border-radius: 4px; }
+    .image-info { padding: 12px; }
+    .image-info strong, .image-info small { display: block; }
+    .image-info strong { font: 800 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .image-info small { margin-top: 5px; color: #647169; font-size: 11px; }
+    .prompt-box { border: 1px solid #b8d9c9; border-radius: 7px; background: #fcfffd; }
+    .prompt-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 13px; border-bottom: 1px solid #e5eee9; }
+    .ai-tag { padding: 4px 7px; color: #06714b; background: var(--mint); border-radius: 4px; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .prompt-area { width: 100%; min-height: 92px; resize: vertical; padding: 13px; color: #34423a; background: transparent; border: 0; outline: 0; font-size: 13px; line-height: 1.6; }
+    .negative-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; border-top: 1px solid #e5eee9; border-bottom: 1px solid #efe4e1; background: #fffdfc; }
+    .negative-head strong { color: #9b4438; }
+    .negative-area { min-height: 76px; background: #fffdfc; }
+    .prompt-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 13px; border-top: 1px solid #e5eee9; }
+    .prompt-note { color: var(--muted); font-size: 11px; }
+    .btn { min-height: 34px; padding: 0 13px; border: 1px solid #cfdad4; border-radius: 5px; color: #34423a; background: white; font-size: 12px; font-weight: 800; }
+    .btn.primary { color: white; background: var(--green); border-color: var(--green); }
+    .btn:disabled { color: #98a49e; background: #edf1ef; border-color: #edf1ef; }
+    .settings-grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; padding: 16px 18px 18px; gap: 12px; }
+    .setting { min-height: 106px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; }
+    .setting.active { border-color: #a9d7c2; background: #f6fcf8; }
+    .setting strong { display: block; margin-top: 9px; font-size: 16px; }
+    .setting small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .lengths { display: flex; gap: 8px; margin-top: 10px; }
+    .length { flex: 1; padding: 9px 7px; border: 1px solid var(--line); border-radius: 5px; color: #6f7a74; background: #fff; font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+    .length.selected { color: var(--green-dark); border-color: #89cdb0; background: var(--mint); }
+    .preflight { padding: 18px; }
+    .preflight-row { display: grid; grid-template-columns: 112px minmax(0, 1.5fr) minmax(0, 1fr) 124px; gap: 12px; align-items: center; padding: 12px; border: 1px solid #e7ece9; border-radius: 6px; font-size: 12px; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4d5852; }
+    .ready { color: var(--green-dark); font-weight: 800; }
+    .right { display: grid; align-content: start; gap: 14px; }
+    .summary { padding: 17px; }
+    .summary h2 { margin: 0 0 14px; font-size: 15px; }
+    .summary-row { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid #edf1ee; font-size: 12px; }
+    .summary-row span { color: var(--muted); }
+    .summary-row strong { text-align: right; }
+    .callout { padding: 15px 17px; border: 1px solid #cae4d7; border-radius: 8px; color: #256047; background: var(--mint); font-size: 12px; line-height: 1.55; }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .submit { width: 100%; min-height: 45px; border: 0; border-radius: 6px; color: white; background: var(--green); font-size: 14px; font-weight: 800; }
+    .footer-note { padding: 0 28px 28px; color: #87918c; font-size: 11px; }
+    @media (max-width: 1240px) { .body { grid-template-columns: minmax(0, 1fr) 274px; padding: 18px; } .mapping { grid-template-columns: 150px minmax(300px, 1fr); } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand"><span class="brand-mark">DD</span> DOBEDUB</div>
+      <div class="admin-link">관리자 콘솔 →</div>
+      <div class="nav-label">GENERATE</div>
+      <nav class="nav">
+        <a class="active" href="#workspace">Workspace</a>
+        <a href="#history">Task History</a>
+        <a href="#library">Prompt Library</a>
+        <a href="#assets">Assets</a>
+      </nav>
+      <div class="nav-label">HELP</div>
+      <nav class="nav"><a href="#manual">User Manual</a><a href="#status">System Status</a><a href="#metadata">Metadata</a></nav>
+      <div class="side-bottom"><div class="status"><i class="dot"></i> ComfyUI · ONLINE</div><div class="status"><i class="dot"></i> Grok Vision · READY</div><hr style="border:0;border-top:1px solid var(--line);margin:14px 0"><strong>장균은</strong><br><small>SUPER_ADMIN</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">GENERATE · WORKSPACE · GROK PROMPT</div><h1>이미지-프롬프트 페어링 설정</h1></div>
+        <div class="top-meta"><span class="top-badge">READY TO RUN</span><span class="user">워크플로우 기본 설정 적용</span></div>
+      </header>
+      <section class="body" id="workspace">
+        <div class="content">
+          <section class="card">
+            <div class="card-head"><div class="card-title">Workflow</div><div class="meta">1 keyframe · 1 segment</div></div>
+            <div class="workflow-row"><div class="workflow"><strong>Wan 1-images · I2V</strong><span>1 kf · 1 seg · ACTIVE ✓</span></div></div>
+          </section>
+          <section class="card">
+            <div class="card-head"><div class="card-title">Keyframe Image &amp; Positive Prompt</div><div class="meta">업로드 완료 후 슬롯별 자동 생성</div></div>
+            <div class="mapping">
+              <article class="image-card">
+                <div class="image-placeholder"><span>INPUT IMAGE</span></div>
+                <div class="image-info"><strong>SLOT 01 · upload.png</strong><small>asset_ef73a2 · 원본 <b>720 × 1280</b></small><small>WAN 적용 <b>720 × 1280</b></small></div>
+              </article>
+              <article class="prompt-box">
+                <div class="prompt-head"><div><strong>Positive Prompt</strong><span class="meta"> · SLOT 01에 매핑 · 정적 캐릭터</span></div><span class="ai-tag">GROK · AUTO READY</span></div>
+                <textarea class="prompt-area" aria-label="Grok positive prompt">Animate the character from the input image. She sways gently from side to side, causing her hair to sway softly in sync with the movement. No camera movement. Animated webtoon art style, smooth movement.</textarea>
+                <div class="prompt-actions"><span class="prompt-note">업로드 완료 후 자동 생성됨 · 판정: 정적 캐릭터 · 원본 이미지와 이 문장이 함께 RunPod에 전달됨 · 직접 편집 가능</span><button class="btn" type="button">재생성</button></div>
+                <div class="negative-head"><div><strong>Negative Prompt</strong><span class="meta"> · workflow 기본값</span></div><button class="btn" type="button">기본값 복원</button></div>
+                <textarea class="prompt-area negative-area" aria-label="Workflow negative prompt">low quality, noisy frames, compression artifacts, camera movement, face distortion, background change</textarea>
+              </article>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-head"><div class="card-title">실행 설정</div><div class="meta">필수값만 선택 · 나머지는 workflow 기본값</div></div>
+            <div class="settings-grid">
+              <div class="setting active"><div class="field-label">VIDEO LENGTH</div><div class="lengths"><button class="length" type="button">49<br><small>약 3초</small></button><button class="length selected" type="button">81<br><small>약 5초 · 기본</small></button><button class="length" type="button">161<br><small>약 10초</small></button></div></div>
+              <div class="setting"><div class="field-label">WAN RESOLUTION</div><strong>720 × 1280</strong><small>이미지에서 계산 · 자동 주입</small></div>
+              <div class="setting"><div class="field-label">FPS</div><strong>16</strong><small>고정</small></div>
+              <div class="setting"><div class="field-label">SEED</div><strong>자동</strong><small>실행 시 서버 생성</small></div>
+            </div>
+          </section>
+        </div>
+        <aside class="right">
+          <section class="card summary"><h2>Run Summary</h2><div class="summary-row"><span>Workflow</span><strong>Wan 1-images</strong></div><div class="summary-row"><span>Keyframes</span><strong>1 / 1</strong></div><div class="summary-row"><span>Positive Prompt</span><strong>Grok · SLOT 01</strong></div><div class="summary-row"><span>Output</span><strong>720 × 1280<br>81 frames · 16 FPS</strong></div><div class="summary-row"><span>Seed</span><strong>서버 자동 생성</strong></div></section>
+          <div class="callout"><strong>워크플로우 기본값 유지</strong>steps, CFG, motion, VAE, codec과 모델 값은 UI에서 조절하지 않으며 등록된 workflow 기본값을 그대로 사용합니다.</div>
+          <button class="submit" type="button">RunPod에 실행 요청 →</button>
+        </aside>
+      </section>
+      <div class="footer-note">STATIC UX ARTIFACT ONLY · 2026-08-31 · 구현 전 검토용 · 실제 API 호출 및 업로드 동작 없음</div>
+    </main>
+  </div>
+</body>
+</html>

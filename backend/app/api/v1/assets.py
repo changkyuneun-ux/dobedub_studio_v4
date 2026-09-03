@@ -11,7 +11,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.app.core.security import CurrentUser, current_user_from_asset_session, has_permission, require_permission
 from backend.app.core.observability import observe_asset_stream, request_timing
+from backend.app.db.session import SessionLocal
 from backend.app.services import studio_api_service
+from backend.app.services.upload_cleanup_service import delete_unsubmitted_upload
 
 router = APIRouter(tags=["assets"])
 
@@ -47,11 +49,11 @@ def list_assets(
 
 
 @router.post("/uploads", status_code=201)
-def create_upload(payload: dict, _: CurrentUser = Depends(require_permission("jobs:run"))):
+def create_upload(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
     if not payload.get("fileName") or not payload.get("dataUrl"):
         raise HTTPException(status_code=400, detail="fileName and dataUrl are required")
     try:
-        asset = studio_api_service.create_upload(payload)
+        asset = studio_api_service.create_upload({**payload, "createdBy": current_user.id})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -63,6 +65,21 @@ def create_upload(payload: dict, _: CurrentUser = Depends(require_permission("jo
         "imageHeight": asset.get("imageHeight"),
         "downloadUrl": f"/api/files/{asset['assetId']}",
     }
+
+
+@router.delete("/uploads/{asset_id}")
+def delete_upload(asset_id: str, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    session = SessionLocal()
+    try:
+        return delete_unsubmitted_upload(session, asset_id, created_by=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="업로드 이미지를 찾을 수 없습니다.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        session.close()
 
 
 @router.get("/files/{asset_id}")

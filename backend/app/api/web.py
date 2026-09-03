@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from backend.app.core.config import get_settings
 
@@ -22,7 +22,20 @@ def index_html_page() -> str:
 
 @router.get("/")
 def index():
-    return RedirectResponse(url="/studio/app", status_code=307)
+    # ECS Express health checks use the root path. Keep this endpoint successful
+    # while letting interactive browsers enter the React studio route immediately.
+    return HTMLResponse(
+        """<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content="0; url=/studio/app" />
+    <title>DOBEDUB STUDIO</title>
+    <script>window.location.replace('/studio/app');</script>
+  </head>
+  <body><a href="/studio/app">DOBEDUB STUDIO로 이동</a></body>
+</html>"""
+    )
 
 
 @router.get("/index.html")

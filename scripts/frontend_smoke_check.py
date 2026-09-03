@@ -83,12 +83,30 @@ def main() -> None:
     assert 'sandbox="allow-same-origin"' in access_screens
     assert 'sandbox="allow-scripts"' not in access_screens
 
-    # A submitted task moves to History; the browser does not wait on a progress/result route.
-    assert "Task History에서 진행 상태를 확인하세요" in studio_shell
-    assert 'onNavigate("review.history")' in studio_shell
+    # Prompt/RunPod workspaces survive route remounts. The server-side batch is
+    # canonical while sessionStorage keeps the in-progress selection/UI state.
+    prompt_management = (PROJECT_ROOT / "frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+    runpod_requests = (PROJECT_ROOT / "frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
+    durable_workspace = (PROJECT_ROOT / "frontend/src/state/durableWorkspace.ts").read_text(encoding="utf-8")
+    assert "Prompt Generation Dashboard" in prompt_management
+    assert "RunPod Progress Dashboard" in runpod_requests
+    assert "loadPromptWorkspace" in prompt_management
+    assert "savePromptWorkspace" in prompt_management
+    assert "activePromptGenerationBatch" in prompt_management
+    assert "loadRunpodWorkspace" in runpod_requests
+    assert "saveRunpodWorkspace" in runpod_requests
+    assert "activeRunpodRequestBatch" in runpod_requests
+    assert "createRunpodRequestBatch" in runpod_requests
+    # Submitting a durable RunPod request must keep the operator on the
+    # request-management screen so the batch can be monitored in place.
+    assert 'onGoTo("review.history")' not in runpod_requests
+    assert "setRequestBatch(batch);" in runpod_requests
+    assert "await load(false);" in runpod_requests
+    assert "runpodRequestQueue({ workerId:" in runpod_requests
+    assert "promptWorkspaceFromBatch" in durable_workspace
+    assert "workflowSelectionLocked = running" in studio_shell
     assert "async function cancelHistoryTask" in studio_shell
     assert "onCancelTask" in studio_shell
-    assert "workflowSelectionLocked = running" in studio_shell
     assert "Task History" in create_screens
 
     # Confirmations must use the app-owned v4 dialog rather than a browser-native prompt.

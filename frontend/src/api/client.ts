@@ -304,6 +304,166 @@ export type UploadResponse = {
   downloadUrl: string;
 };
 
+export type GrokImagePromptDraftResponse = {
+  draftId: string;
+  assetId: string;
+  workflowId: string;
+  promptBatchId?: string | null;
+  slotIndex: number;
+  status: "READY" | "GENERATING" | "MANUAL_REQUIRED" | "FAILED" | string;
+  provider: string;
+  model: string;
+  instructionVersion: string;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  positivePrompt: string;
+  imageType: string;
+  warnings: string[];
+  error?: string | null;
+  cached?: boolean;
+  requestedFrames?: number | null;
+  negativePrompt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  asset?: {
+    assetId?: string;
+    fileName?: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    imageWidth?: number | null;
+    imageHeight?: number | null;
+  } | null;
+  runpodTaskId?: string | null;
+  runpodStatus?: string | null;
+  grokResponse?: {
+    endpoint?: string | null;
+    model?: string | null;
+    latencyMs?: number | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+  } | null;
+};
+
+export type PromptGenerationBatchResponse = {
+  id: string;
+  workflowId: string;
+  status: string;
+  totalCount: number;
+  completedCount: number;
+  failedCount: number;
+  pendingCount: number;
+  items: GrokImagePromptDraftResponse[];
+};
+
+export type PromptDraftListResponse = {
+  items: GrokImagePromptDraftResponse[];
+  workerStats: Array<{
+    workerId?: string | null;
+    workerName?: string | null;
+    total: number;
+    pendingCount: number;
+    generatingCount: number;
+    readyCount: number;
+    failedCount: number;
+  }>;
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type RunpodRequestItemResponse = {
+  id: string;
+  sequenceNo: number;
+  promptDraftId?: string | null;
+  assetId: string;
+  asset?: UploadResponse | null;
+  workflowId: string;
+  positivePrompt: string;
+  negativePrompt?: string | null;
+  requestedFrames: number;
+  status: string;
+  taskId?: string | null;
+  runpodJobId?: string | null;
+  failureMessage?: string | null;
+  workerId?: string | null;
+  workerName?: string | null;
+};
+
+export type RunpodRequestBatchResponse = {
+  id: string;
+  workflowId: string;
+  status: string;
+  requestedCount: number;
+  queuedCount: number;
+  inProgressCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  submittedBy?: string | null;
+  submittedByName?: string | null;
+  items: RunpodRequestItemResponse[];
+};
+
+export type RunpodRequestDashboardResponse = {
+  totals: {
+    incomplete: number;
+    requestWaiting: number;
+    runpodQueued: number;
+    inProgress: number;
+    failed: number;
+  };
+  workers: Array<{
+    workerId?: string | null;
+    workerName?: string | null;
+    incomplete: number;
+    requestWaiting: number;
+    runpodQueued: number;
+    inProgress: number;
+    failed: number;
+  }>;
+};
+
+export type RunpodRequestQueueItemResponse = RunpodRequestItemResponse & {
+  kind: "PROMPT_DRAFT" | "REQUEST_ITEM";
+  requestBatchId?: string | null;
+  promptBatchId?: string | null;
+  canSubmit: boolean;
+  updatedAt?: string | null;
+};
+
+export type RunpodRequestQueueResponse = {
+  items: RunpodRequestQueueItemResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type GrokInstructionDocument = {
+  id: string;
+  code: string;
+  title: string;
+  role: "CORE" | "ROUTER" | "GUIDE" | string;
+  contentMarkdown: string;
+  source?: string | null;
+  sortOrder: number;
+  version: number;
+  isActive: boolean;
+};
+
+export type GrokInstructionSetResponse = {
+  items: GrokInstructionDocument[];
+  instructionSet: Record<string, unknown>;
+  item?: GrokInstructionDocument;
+};
+
+export type GrokInstructionPayload = Omit<GrokInstructionDocument, "id" | "version"> & {
+  workflowId: string;
+};
+
 export type OutputAsset = {
   assetId?: string;
   fileName?: string;
@@ -494,6 +654,13 @@ export type HistoryItem = {
   workflowId?: string;
   workflowName?: string;
   workflow?: string;
+  promptDraftId?: string;
+  runpodResponse?: {
+    filename?: string | null;
+    delaySeconds?: number | string | null;
+    executionSeconds?: number | string | null;
+    jobId?: string | null;
+  };
   // 2026-08-11: 백엔드 _task_to_history_item()이 이미 내려주고 있었지만 타입에는
   // 빠져 있던 필드 - 3a 우측 패널 Overview 섹션(runpod_job_id 노출)에서 사용.
   runpodJobId?: string;
@@ -866,6 +1033,11 @@ export const apiClient = {
   // 명시 전송하므로 이 기본값은 호출부가 실수로 pageSize를 생략했을 때의
   // 안전망일 뿐이다.
   history: (page = 1, pageSize = 20) => requestJson<HistoryResponse>(`/api/history?page=${page}&pageSize=${pageSize}`),
+  // Task History is intentionally split into two fixed 20-row contracts. Keeping
+  // these endpoints separate prevents prompt-generation history from inheriting
+  // RunPod pagination and sorting behavior.
+  promptHistory: (page = 1) => requestJson<PromptDraftListResponse>(`/api/history/prompts?page=${page}`),
+  runpodHistory: (page = 1) => requestJson<HistoryResponse>(`/api/history/runpod?page=${page}`),
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
   // 2026-08-11: Asset 관리 통합 - collectionId/uncategorized 필터 추가(사이드바
   // 컬렉션 선택에 대응).
@@ -954,6 +1126,71 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  generateImagePromptDraft: (payload: {
+    assetId: string;
+    workflowId: string;
+    slotIndex: number;
+    regenerate?: boolean;
+  }) =>
+    requestJson<GrokImagePromptDraftResponse>("/api/prompts/image-drafts/generate", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  createImagePromptBatch: (payload: {
+    workflowId: string;
+    items: Array<{ assetId: string; slotIndex: number; requestedFrames?: number; negativePrompt?: string }>;
+  }) =>
+    requestJson<PromptGenerationBatchResponse>("/api/prompts/image-drafts/batches", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  promptGenerationBatch: (batchId: string) =>
+    requestJson<PromptGenerationBatchResponse>(`/api/prompts/image-drafts/batches/${encodeURIComponent(batchId)}`),
+  activePromptGenerationBatch: () =>
+    requestJson<{ item: PromptGenerationBatchResponse | null }>("/api/prompts/image-drafts/batches/active"),
+  activePromptGenerationBatches: () =>
+    requestJson<{ items: PromptGenerationBatchResponse[] }>("/api/prompts/image-drafts/batches/active-list"),
+  imagePromptDrafts: (params: { workerId?: string; workflowId?: string; status?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    if (params.status) query.set("status", params.status);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 50));
+    return requestJson<PromptDraftListResponse>(`/api/prompts/image-drafts?${query.toString()}`);
+  },
+  updateImagePromptDraft: (draftId: string, payload: { positivePrompt?: string; negativePrompt?: string; requestedFrames?: number }) =>
+    requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  retryImagePromptDraft: (draftId: string) =>
+    requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),
+  grokInstructions: (workflowId: string) =>
+    requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions?workflowId=${encodeURIComponent(workflowId)}`),
+  grokInstructionSourceWorkflows: () =>
+    requestJson<{ workflowIds: string[] }>("/api/admin/grok-instructions/sources"),
+  grokInstructionStatus: (workflowId: string) =>
+    requestJson<{ workflowId: string; configured: boolean; count: number }>(`/api/prompts/image-drafts/instruction-status?workflowId=${encodeURIComponent(workflowId)}`),
+  createGrokInstruction: (payload: GrokInstructionPayload) =>
+    requestJson<GrokInstructionSetResponse>("/api/admin/grok-instructions", { method: "POST", body: JSON.stringify(payload) }),
+  updateGrokInstruction: (documentId: string, payload: GrokInstructionPayload) =>
+    requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions/${encodeURIComponent(documentId)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteGrokInstruction: (documentId: string, workflowId: string) =>
+    requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions/${encodeURIComponent(documentId)}?workflowId=${encodeURIComponent(workflowId)}`, { method: "DELETE" }),
+  importGrokInstructionMarkdown: (payload: {
+    workflowId: string;
+    fileName: string;
+    contentMarkdown: string;
+    title?: string;
+    code?: string;
+    role?: "CORE" | "ROUTER" | "GUIDE";
+    sortOrder?: number;
+    isActive?: boolean;
+  }) =>
+    requestJson<GrokInstructionSetResponse>("/api/admin/grok-instructions/import-markdown", { method: "POST", body: JSON.stringify(payload) }),
+  copyGrokInstructions: (payload: { sourceWorkflowId: string; targetWorkflowId: string }) =>
+    requestJson<GrokInstructionSetResponse & { copiedFromWorkflowId?: string }>("/api/admin/grok-instructions/copy", { method: "POST", body: JSON.stringify(payload) }),
   promptGenerationStatus: (requestId: string) =>
     requestJson<PromptGenerationStatusResponse>(`/api/prompts/generate/${encodeURIComponent(requestId)}`),
   savePromptFeedback: (payload: {
@@ -977,11 +1214,43 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  deleteUnsubmittedUpload: (assetId: string) =>
+    requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
+      method: "DELETE"
+    }),
   createJob: (payload: unknown) =>
     requestJson<JobCreateResponse>("/api/jobs", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  createJobFromPromptDraft: (promptDraftId: string) =>
+    requestJson<JobCreateResponse>("/api/jobs/from-prompt-draft", {
+      method: "POST",
+      body: JSON.stringify({ promptDraftId })
+    }),
+  createRunpodRequestBatch: (payload: { workerId?: string; items: Array<{ promptDraftId: string; workflowId?: string; requestedFrames?: number }> }) =>
+    requestJson<RunpodRequestBatchResponse>("/api/jobs/request-batches", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  runpodRequestBatch: (batchId: string) =>
+    requestJson<RunpodRequestBatchResponse>(`/api/jobs/request-batches/${encodeURIComponent(batchId)}`),
+  activeRunpodRequestBatch: (workerId?: string) =>
+    requestJson<{ item: RunpodRequestBatchResponse | null }>(`/api/jobs/request-batches/active${workerId ? `?workerId=${encodeURIComponent(workerId)}` : ""}`),
+  runpodRequestDashboard: (params: { workerId?: string; workflowId?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    return requestJson<RunpodRequestDashboardResponse>(`/api/jobs/request-batches/dashboard${query.size ? `?${query.toString()}` : ""}`);
+  },
+  runpodRequestQueue: (params: { workerId?: string; workflowId?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 10));
+    return requestJson<RunpodRequestQueueResponse>(`/api/jobs/request-batches/queue?${query.toString()}`);
+  },
   jobStatus: (taskId: string) => requestJson<JobStatusResponse>(`/api/jobs/${encodeURIComponent(taskId)}`),
   jobPrompts: (taskId: string) => requestJson<TaskPromptResponse>(`/api/jobs/${encodeURIComponent(taskId)}/prompts`),
   updateJobPromptReview: (taskId: string, segmentIndex: number, payload: Record<string, unknown>) =>

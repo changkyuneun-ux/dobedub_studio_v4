@@ -37,6 +37,11 @@ export type KeyframeState = {
   dimensionText: string;
   uploading: boolean;
   error: string;
+  grokStatus: "IDLE" | "GENERATING" | "READY" | "MANUAL_REQUIRED" | "FAILED";
+  grokPrompt: string;
+  grokImageType: string;
+  grokWarnings: string[];
+  grokError: string;
 };
 
 export function formatUploadSize(sizeBytes?: number | null): string {
@@ -131,7 +136,12 @@ export function createKeyframe(index: number): KeyframeState {
     metaText: "이미지 선택 대기",
     dimensionText: "",
     uploading: false,
-    error: ""
+    error: "",
+    grokStatus: "IDLE",
+    grokPrompt: "",
+    grokImageType: "",
+    grokWarnings: [],
+    grokError: ""
   };
 }
 
