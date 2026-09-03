@@ -118,14 +118,15 @@ def prompt_generation_batch_payload(db: Session, batch_id: str) -> dict[str, Any
         .where(ImagePromptDraft.prompt_batch_id == batch_id)
         .order_by(ImagePromptDraft.slot_index.asc(), ImagePromptDraft.created_at.asc())
     ).all()
+    counts = _batch_counts_from_drafts(batch, drafts)
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
-        "status": batch.status,
-        "totalCount": batch.total_count,
-        "completedCount": batch.completed_count,
-        "failedCount": batch.failed_count,
-        "pendingCount": max(0, batch.total_count - batch.completed_count - batch.failed_count),
+        "status": counts["status"],
+        "totalCount": counts["total"],
+        "completedCount": counts["completed"],
+        "failedCount": counts["failed"],
+        "pendingCount": counts["pending"],
         "items": [_draft_payload(db, draft) for draft in drafts],
     }
 
@@ -146,7 +147,8 @@ def list_active_prompt_generation_batches(db: Session, *, created_by: str) -> li
         )
         .order_by(PromptGenerationBatch.created_at.desc(), PromptGenerationBatch.id.desc())
     ).all()
-    return [prompt_generation_batch_payload(db, batch.id) for batch in batches]
+    payloads = [prompt_generation_batch_payload(db, batch.id) for batch in batches]
+    return [payload for payload in payloads if payload["status"] in {BATCH_PENDING, BATCH_GENERATING}]
 
 
 def list_prompt_drafts(
@@ -157,6 +159,7 @@ def list_prompt_drafts(
     status: str = "",
     page: int = 1,
     page_size: int = 50,
+    include_worker_stats: bool = True,
 ) -> dict[str, Any]:
     """Return the current user's image-scoped prompts for RunPod request selection."""
     statement = select(ImagePromptDraft)
@@ -178,12 +181,14 @@ def list_prompt_drafts(
         .offset((safe_page - 1) * safe_page_size)
         .limit(safe_page_size)
     ).all()
-    stats_statement = select(ImagePromptDraft.created_by, ImagePromptDraft.status, func.count()).group_by(ImagePromptDraft.created_by, ImagePromptDraft.status)
-    if created_by is not None:
-        stats_statement = stats_statement.where(ImagePromptDraft.created_by == created_by)
-    if workflow_id:
-        stats_statement = stats_statement.where(ImagePromptDraft.workflow_id == workflow_id)
-    stats_rows = db.execute(stats_statement).all()
+    stats_rows = []
+    if include_worker_stats:
+        stats_statement = select(ImagePromptDraft.created_by, ImagePromptDraft.status, func.count()).group_by(ImagePromptDraft.created_by, ImagePromptDraft.status)
+        if created_by is not None:
+            stats_statement = stats_statement.where(ImagePromptDraft.created_by == created_by)
+        if workflow_id:
+            stats_statement = stats_statement.where(ImagePromptDraft.workflow_id == workflow_id)
+        stats_rows = db.execute(stats_statement).all()
     user_names = _user_names(db, {
         str(worker_id)
         for worker_id, _draft_status, _count in stats_rows
@@ -329,6 +334,20 @@ def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
         batch.status = BATCH_COMPLETED_WITH_ERRORS if batch.failed_count else BATCH_COMPLETED
     else:
         batch.status = BATCH_GENERATING
+
+
+def _batch_counts_from_drafts(batch: PromptGenerationBatch, drafts: list[ImagePromptDraft]) -> dict[str, Any]:
+    total = len(drafts) if drafts else int(batch.total_count or 0)
+    completed = sum(draft.status in {DRAFT_READY, "MANUAL_REQUIRED"} for draft in drafts)
+    failed = sum(draft.status == DRAFT_FAILED for draft in drafts)
+    pending = sum(draft.status == DRAFT_PENDING for draft in drafts)
+    if completed + failed >= total and total:
+        status = BATCH_COMPLETED_WITH_ERRORS if failed else BATCH_COMPLETED
+    elif any(draft.status == DRAFT_GENERATING for draft in drafts) or completed or failed:
+        status = BATCH_GENERATING
+    else:
+        status = BATCH_PENDING
+    return {"total": total, "completed": completed, "failed": failed, "pending": pending, "status": status}
 
 
 def _draft_payloads(

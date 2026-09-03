@@ -39,6 +39,7 @@ def prompt_history(
             created_by=created_by,
             page=page,
             page_size=20,
+            include_worker_stats=False,
         )
     except SQLAlchemyError as exc:
         LOGGER.exception("Prompt history query failed")

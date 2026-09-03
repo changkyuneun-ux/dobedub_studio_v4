@@ -65,13 +65,13 @@ def test_prompt_management_can_delete_unsubmitted_uploads() -> None:
     assert "업로드 이미지 삭제" in screen
 
 
-def test_prompt_history_uses_worker_names_and_exposes_worker_generation_stats() -> None:
+def test_prompt_history_uses_worker_names_without_worker_generation_stats() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
     assert "createdByName?: string | null" in client
-    assert "setWorkerStats(response.workerStats" in source
-    assert "사용자별 생성 통계" in source
+    assert "setWorkerStats(response.workerStats" not in source
+    assert "사용자별 생성 통계" not in source
     assert "item.createdByName || item.createdBy" in source
 
 

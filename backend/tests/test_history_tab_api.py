@@ -79,7 +79,7 @@ def test_prompt_history_returns_image_prompt_and_grok_metadata(api_client):
     }
 
 
-def test_prompt_history_returns_worker_names_and_per_worker_stats(api_client):
+def test_prompt_history_returns_worker_names_without_per_worker_stats(api_client):
     session = SessionLocal()
     try:
         session.add_all([
@@ -106,10 +106,7 @@ def test_prompt_history_returns_worker_names_and_per_worker_stats(api_client):
     assert response.status_code == 200
     body = response.json()
     assert {item["createdByName"] for item in body["items"]} >= {"작업자 A", "작업자 B"}
-    worker_stats = {item["workerId"]: item for item in body["workerStats"]}
-    assert worker_stats["history-worker-a"]["workerName"] == "작업자 A"
-    assert worker_stats["history-worker-a"]["readyCount"] == 1
-    assert worker_stats["history-worker-b"]["failedCount"] == 1
+    assert body["workerStats"] == []
 
 
 def test_prompt_history_database_errors_return_actionable_message(api_client, monkeypatch):

@@ -8,8 +8,7 @@ import {
   TaskPromptReviewFlags,
   TaskPromptItem,
   TaskModelReference,
-  GrokImagePromptDraftResponse,
-  PromptDraftListResponse
+  GrokImagePromptDraftResponse
 } from "../api/client";
 import { StudioRoute } from "../router";
 import { User } from "../auth";
@@ -580,7 +579,6 @@ export function Create3aScreen({
 
 function PromptGenerationHistory() {
   const [items, setItems] = useState<GrokImagePromptDraftResponse[]>([]);
-  const [workerStats, setWorkerStats] = useState<PromptDraftListResponse["workerStats"]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -596,13 +594,11 @@ function PromptGenerationHistory() {
         if (!active) return;
         setItems(response.items);
         setTotal(response.total);
-        setWorkerStats(response.workerStats || []);
       })
       .catch((error: Error) => {
         if (!active) return;
         setItems([]);
         setTotal(0);
-        setWorkerStats([]);
         setNotice(error.message || "프롬프트 이력을 불러오지 못했습니다.");
       })
       .finally(() => {
@@ -618,7 +614,7 @@ function PromptGenerationHistory() {
   const pageEnd = Math.min(total, page * pageSize);
 
   return (
-    <div className="v3-prompt-history-layout">
+    <div className="v3-prompt-history-layout is-single">
       <div className="v3-card v3-prompt-history-card">
       <div className="v3-card-header">
         <div className="v3-card-header-title">프롬프트 생성 이력</div>
@@ -670,13 +666,6 @@ function PromptGenerationHistory() {
         </div>
       </div>
       </div>
-      <aside className="v3-card v3-prompt-worker-dashboard">
-        <div className="v3-card-header">
-          <div className="v3-card-header-title">사용자별 생성 통계</div>
-          <span className="v3-card-header-meta">현재 조회 범위</span>
-        </div>
-        {!workerStats.length ? <p className="v3-muted-text">표시할 프롬프트 생성 이력이 없습니다.</p> : <div className="v3-prompt-worker-stat-list">{workerStats.map((worker) => <div key={worker.workerId || "unknown"}><b>{worker.workerName || worker.workerId || "알 수 없음"}</b><span>전체 {worker.total} · 완료 {worker.readyCount} · 생성 중 {worker.generatingCount} · 실패 {worker.failedCount}</span></div>)}</div>}
-      </aside>
     </div>
   );
 }

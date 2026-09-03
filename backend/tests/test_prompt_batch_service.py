@@ -123,6 +123,64 @@ def test_active_prompt_generation_batches_are_user_scoped_and_newest_first(db_se
     assert [batch["id"] for batch in batches] == ["pgb_worker_a_new", "pgb_worker_a_old"]
 
 
+def test_prompt_generation_batch_payload_counts_current_draft_statuses(db_session):
+    db_session.add_all([
+        _asset("asset_batch_ready_1"),
+        _asset("asset_batch_ready_2"),
+        PromptGenerationBatch(
+            id="pgb_stale_counts",
+            workflow_id="1-images.json",
+            status=service.BATCH_GENERATING,
+            total_count=2,
+            completed_count=0,
+            failed_count=0,
+            created_by="worker_a",
+        ),
+        ImagePromptDraft(
+            id="draft_batch_ready_1",
+            asset_id="asset_batch_ready_1",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_READY,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            positive_prompt="ready 1",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_stale_counts",
+            created_by="worker_a",
+        ),
+        ImagePromptDraft(
+            id="draft_batch_ready_2",
+            asset_id="asset_batch_ready_2",
+            workflow_id="1-images.json",
+            slot_index=2,
+            status=service.DRAFT_READY,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            positive_prompt="ready 2",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_stale_counts",
+            created_by="worker_a",
+        ),
+    ])
+    db_session.commit()
+
+    payload = service.prompt_generation_batch_payload(db_session, "pgb_stale_counts")
+    active_batches = service.list_active_prompt_generation_batches(db_session, created_by="worker_a")
+
+    assert payload["status"] == service.BATCH_COMPLETED
+    assert payload["completedCount"] == 2
+    assert payload["failedCount"] == 0
+    assert payload["pendingCount"] == 0
+    assert active_batches == []
+
+
 def test_ready_drafts_can_be_listed_edited_and_retried(db_session, monkeypatch):
     db_session.add(_asset("asset_edit"))
     db_session.add(
