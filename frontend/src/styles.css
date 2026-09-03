@@ -6745,9 +6745,17 @@ button {
 .v3-prompt-batch-dashboard-title { align-items: center; background: var(--v3-bg-canvas); border-bottom: 1px solid var(--v3-border-inner); display: flex; gap: 10px; justify-content: space-between; padding: 9px 11px; }
 .v3-prompt-batch-dashboard-title b { color: var(--v3-accent-text); font-family: var(--v3-font-mono); font-size: 10px; }
 .v3-prompt-batch-dashboard-title span { color: var(--v3-text-secondary); font-size: 10px; }
+.v3-prompt-batch-progress-list { border: 1px solid var(--v3-border-inner); border-radius: 7px; display: grid; overflow: hidden; }
+.v3-prompt-batch-progress-head, .v3-prompt-batch-progress-row { align-items: center; display: grid; gap: 10px; grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.7fr) minmax(220px, 1fr); padding: 10px 12px; }
+.v3-prompt-batch-progress-head { background: var(--v3-bg-canvas); color: var(--v3-text-muted); font-size: 10px; text-transform: uppercase; }
+.v3-prompt-batch-progress-head b { color: var(--v3-text-heading); }
+.v3-prompt-batch-progress-head span { justify-self: end; }
+.v3-prompt-batch-progress-row { border-top: 1px solid var(--v3-border-inner); }
+.v3-prompt-batch-progress-row b { color: var(--v3-accent-text); font-family: var(--v3-font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-prompt-batch-progress-row span, .v3-prompt-batch-progress-row small { color: var(--v3-text-secondary); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-grok-editor-empty { align-items: center; color: var(--v3-text-muted); display: flex; min-height: 250px; padding: 20px; }
 @media (max-width: 1100px) { .v3-prompt-upload-layout { grid-template-columns: 150px minmax(0, 1fr); }.v3-prompt-batch-action { grid-column: 1 / -1; grid-template-columns: repeat(3, 1fr) minmax(190px, 1fr); align-items: center; }.v3-prompt-batch-action .v3-primary-button { margin-top: 0; }.v3-prompt-dashboard, .v3-runpod-progress-grid { grid-template-columns: repeat(3, minmax(120px, 1fr)); }.v3-prompt-dashboard .is-total, .v3-runpod-progress-grid .is-total { grid-column: span 2; } }
-@media (max-width: 720px) { .v3-prompt-upload-layout, .v3-prompt-batch-action, .v3-prompt-dashboard, .v3-runpod-progress-grid { grid-template-columns: 1fr; }.v3-prompt-batch-action > * { grid-column: auto; }.v3-prompt-dashboard .is-total, .v3-runpod-progress-grid .is-total { grid-column: auto; } }
+@media (max-width: 720px) { .v3-prompt-upload-layout, .v3-prompt-batch-action, .v3-prompt-dashboard, .v3-runpod-progress-grid, .v3-prompt-batch-progress-head, .v3-prompt-batch-progress-row { grid-template-columns: 1fr; }.v3-prompt-batch-action > * { grid-column: auto; }.v3-prompt-dashboard .is-total, .v3-runpod-progress-grid .is-total { grid-column: auto; }.v3-prompt-batch-progress-head span { justify-self: start; } }
 
 /* History separates the immutable Grok prompt audit from execution history.
    The RunPod table remains unchanged behind the second tab. */

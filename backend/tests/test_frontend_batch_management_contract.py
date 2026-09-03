@@ -136,7 +136,7 @@ def test_instruction_admin_clears_the_editor_and_limits_copy_sources_to_configur
     assert "<select aria-label=\"Target Workflow\"" in screen
 
 
-def test_prompt_management_keeps_each_active_batch_visible_and_clears_only_the_composer() -> None:
+def test_prompt_management_uses_one_aggregate_dashboard_and_paginates_active_batches() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
 
@@ -145,7 +145,12 @@ def test_prompt_management_keeps_each_active_batch_visible_and_clears_only_the_c
     assert "activePromptGenerationBatches(" in screen
     assert "setUploads([]);" in screen
     assert "setDrafts({});" in screen
+    assert "PROMPT_BATCH_PROGRESS_PAGE_SIZE = 10" in screen
+    assert "activeBatchDashboard" in screen
+    assert "paginatedActivePromptGenerationBatches" in screen
+    assert "v3-prompt-batch-progress-list" in screen
     assert "v3-prompt-batch-dashboard" in screen
+    assert "activePromptGenerationBatches.map((activeBatch) => { const activeItems" not in screen
     assert "promptMappingRows" in screen
     assert "activePromptMappingRows" in screen
     assert "batchId: batch.id" in screen

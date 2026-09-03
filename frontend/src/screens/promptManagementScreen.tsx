@@ -13,6 +13,7 @@ type UploadItem = PromptUploadItem;
 type PromptMappingRow = { upload: UploadItem; draft?: GrokImagePromptDraftResponse; batchId?: string };
 
 const workflowName = (workflow: WorkflowItem) => workflow.label || workflow.name || workflow.id;
+const PROMPT_BATCH_PROGRESS_PAGE_SIZE = 10;
 
 export function PromptManagementScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [initialWorkspace] = useState(() => loadPromptWorkspace(user.id));
@@ -26,6 +27,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   const [busy, setBusy] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [notice, setNotice] = useState("");
+  const [activeBatchPage, setActiveBatchPage] = useState(1);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId);
@@ -58,6 +60,23 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     ...activePromptMappingRows,
     ...uploads.map((upload) => ({ upload, draft: drafts[upload.assetId] }))
   ], [activePromptMappingRows, drafts, uploads]);
+  const activeBatchDashboard = useMemo(() => {
+    const items = activePromptGenerationBatches.flatMap((batch) => batch.items);
+    const total = items.length;
+    const waiting = items.filter((item) => item.status === "PENDING").length;
+    const generatingCount = items.filter((item) => item.status === "GENERATING").length;
+    const readyCount = items.filter((item) => item.status === "READY" || item.status === "MANUAL_REQUIRED").length;
+    const failedCount = items.filter((item) => item.status === "FAILED").length;
+    return { total, waiting, generatingCount, readyCount, failedCount };
+  }, [activePromptGenerationBatches]);
+  const activeBatchPageCount = Math.max(1, Math.ceil(activePromptGenerationBatches.length / PROMPT_BATCH_PROGRESS_PAGE_SIZE));
+  const safeActiveBatchPage = Math.min(activeBatchPage, activeBatchPageCount);
+  const activeBatchStart = activePromptGenerationBatches.length ? (safeActiveBatchPage - 1) * PROMPT_BATCH_PROGRESS_PAGE_SIZE + 1 : 0;
+  const activeBatchEnd = Math.min(activePromptGenerationBatches.length, safeActiveBatchPage * PROMPT_BATCH_PROGRESS_PAGE_SIZE);
+  const paginatedActivePromptGenerationBatches = activePromptGenerationBatches.slice(
+    (safeActiveBatchPage - 1) * PROMPT_BATCH_PROGRESS_PAGE_SIZE,
+    safeActiveBatchPage * PROMPT_BATCH_PROGRESS_PAGE_SIZE
+  );
 
   useEffect(() => {
     if (!workflowId) {
@@ -104,6 +123,10 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     }, 2000);
     return () => window.clearInterval(timer);
   }, [activePromptGenerationBatches.length]);
+
+  useEffect(() => {
+    setActiveBatchPage((current) => Math.min(current, activeBatchPageCount));
+  }, [activeBatchPageCount]);
 
   function selectWorkflow(id: string) {
     setWorkflowId(id);
@@ -155,6 +178,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
         }))
       });
       setActivePromptGenerationBatches((current) => [next, ...current.filter((batch) => batch.id !== next.id)]);
+      setActiveBatchPage(1);
       setUploads([]);
       setDrafts({});
     } catch (error) {
@@ -230,7 +254,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
 
       <section className="v3-card">
         <div className="v3-card-header"><div className="v3-card-header-title">Prompt Generation Dashboard</div><span className="v3-muted-text">Grok 요청 진행 상태</span></div>
-        {!activePromptGenerationBatches.length ? <div className="v3-empty-panel">진행 중인 프롬프트 생성 배치가 없습니다. 새 이미지를 업로드해 요청을 시작하세요.</div> : <div className="v3-prompt-batch-dashboard-list">{activePromptGenerationBatches.map((activeBatch) => { const activeItems = activeBatch.items; const generatingCount = activeItems.filter((item) => item.status === "GENERATING").length; const readyCount = activeItems.filter((item) => item.status === "READY" || item.status === "MANUAL_REQUIRED").length; const failedCount = activeItems.filter((item) => item.status === "FAILED").length; return <div className="v3-prompt-batch-dashboard" key={activeBatch.id}><div className="v3-prompt-batch-dashboard-title"><b>{activeBatch.id}</b><span>{workflowName(workflows.find((workflow) => workflow.id === activeBatch.workflowId) || { id: activeBatch.workflowId } as WorkflowItem)}</span></div><div className="v3-prompt-dashboard"><div className="is-total"><small>ALL IMAGES</small><strong>{activeBatch.totalCount}</strong><i><b style={{ width: `${activeBatch.totalCount ? (activeBatch.pendingCount / activeBatch.totalCount) * 100 : 0}%` }} /><b style={{ width: `${activeBatch.totalCount ? (generatingCount / activeBatch.totalCount) * 100 : 0}%` }} /><b style={{ width: `${activeBatch.totalCount ? (readyCount / activeBatch.totalCount) * 100 : 0}%` }} /><b style={{ width: `${activeBatch.totalCount ? (failedCount / activeBatch.totalCount) * 100 : 0}%` }} /></i></div><div><small>WAITING</small><strong>{activeBatch.pendingCount}</strong></div><div><small>GENERATING</small><strong>{generatingCount}</strong></div><div><small>COMPLETED</small><strong>{readyCount}</strong></div><div><small>FAILED</small><strong>{failedCount}</strong></div></div></div>; })}</div>}
+        {!activePromptGenerationBatches.length ? <div className="v3-empty-panel">진행 중인 프롬프트 생성 배치가 없습니다. 새 이미지를 업로드해 요청을 시작하세요.</div> : <div className="v3-prompt-batch-dashboard-list"><div className="v3-prompt-batch-dashboard"><div className="v3-prompt-batch-dashboard-title"><b>통합 진행 현황</b><span>{activePromptGenerationBatches.length}개 배치</span></div><div className="v3-prompt-dashboard"><div className="is-total"><small>ALL IMAGES</small><strong>{activeBatchDashboard.total}</strong><i><b style={{ width: `${activeBatchDashboard.total ? (activeBatchDashboard.waiting / activeBatchDashboard.total) * 100 : 0}%` }} /><b style={{ width: `${activeBatchDashboard.total ? (activeBatchDashboard.generatingCount / activeBatchDashboard.total) * 100 : 0}%` }} /><b style={{ width: `${activeBatchDashboard.total ? (activeBatchDashboard.readyCount / activeBatchDashboard.total) * 100 : 0}%` }} /><b style={{ width: `${activeBatchDashboard.total ? (activeBatchDashboard.failedCount / activeBatchDashboard.total) * 100 : 0}%` }} /></i></div><div><small>WAITING</small><strong>{activeBatchDashboard.waiting}</strong></div><div><small>GENERATING</small><strong>{activeBatchDashboard.generatingCount}</strong></div><div><small>COMPLETED</small><strong>{activeBatchDashboard.readyCount}</strong></div><div><small>FAILED</small><strong>{activeBatchDashboard.failedCount}</strong></div></div></div><div className="v3-prompt-batch-progress-list"><div className="v3-prompt-batch-progress-head"><b>진행 내역</b><span>{activeBatchStart}–{activeBatchEnd} / {activePromptGenerationBatches.length}건</span></div>{paginatedActivePromptGenerationBatches.map((activeBatch) => { const activeItems = activeBatch.items; const waitingCount = activeItems.filter((item) => item.status === "PENDING").length; const generatingCount = activeItems.filter((item) => item.status === "GENERATING").length; const readyCount = activeItems.filter((item) => item.status === "READY" || item.status === "MANUAL_REQUIRED").length; const failedCount = activeItems.filter((item) => item.status === "FAILED").length; return <div className="v3-prompt-batch-progress-row" key={activeBatch.id}><b>{activeBatch.id}</b><span>{workflowName(workflows.find((workflow) => workflow.id === activeBatch.workflowId) || { id: activeBatch.workflowId } as WorkflowItem)}</span><small>전체 {activeBatch.totalCount} · 대기 {waitingCount} · 생성 {generatingCount} · 완료 {readyCount} · 실패 {failedCount}</small></div>; })}<div className="v3-pagination"><span className="v3-pagination-meta">{activeBatchStart}–{activeBatchEnd} / {activePromptGenerationBatches.length}</span><div className="v3-pagination-controls"><button className="v3-page-button" type="button" disabled={safeActiveBatchPage <= 1} onClick={() => setActiveBatchPage((value) => Math.max(1, value - 1))}>이전</button><span className="v3-page-button is-current">{safeActiveBatchPage}</span><button className="v3-page-button" type="button" disabled={safeActiveBatchPage >= activeBatchPageCount} onClick={() => setActiveBatchPage((value) => Math.min(activeBatchPageCount, value + 1))}>다음</button></div></div></div></div>}
         <p className="v3-prompt-dashboard-note">배치별 항목이 모두 완료 또는 실패하면 이 목록에서 빠지고 Prompt History에 남습니다. 새 업로드와 새 요청은 진행 중 배치와 독립적으로 계속할 수 있습니다.</p>
       </section>
 
