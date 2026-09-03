@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,7 +40,7 @@ def _load_manifest(path: Path) -> dict:
 
 def _write_manifest(path: Path, manifest: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(path)
 
