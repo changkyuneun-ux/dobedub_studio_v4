@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy.exc import OperationalError
+
 from backend.app.core.security import create_access_token
 from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
@@ -108,6 +110,38 @@ def test_prompt_history_returns_worker_names_and_per_worker_stats(api_client):
     assert worker_stats["history-worker-a"]["workerName"] == "작업자 A"
     assert worker_stats["history-worker-a"]["readyCount"] == 1
     assert worker_stats["history-worker-b"]["failedCount"] == 1
+
+
+def test_prompt_history_database_errors_return_actionable_message(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    from backend.app.api.v1 import history as history_api
+
+    def fail_prompt_history(*_args, **_kwargs):
+        raise OperationalError(
+            "select image_prompt_drafts",
+            {},
+            Exception("(1038) Out of sort memory, consider increasing server sort buffer size"),
+        )
+
+    monkeypatch.setattr(history_api.prompt_batch_service, "list_prompt_drafts", fail_prompt_history)
+
+    response = api_client.get("/api/history/prompts?page=1", headers=_authorized_headers())
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "프롬프트 이력 조회에 실패했습니다. 최신 DB 인덱스 마이그레이션 적용 상태를 확인해주세요."
 
 
 def test_runpod_history_returns_task_and_provider_response(api_client):

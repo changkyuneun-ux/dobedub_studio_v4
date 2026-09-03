@@ -160,15 +160,19 @@ def list_prompt_drafts(
 ) -> dict[str, Any]:
     """Return the current user's image-scoped prompts for RunPod request selection."""
     statement = select(ImagePromptDraft)
+    count_statement = select(func.count(ImagePromptDraft.id))
     if created_by is not None:
         statement = statement.where(ImagePromptDraft.created_by == created_by)
+        count_statement = count_statement.where(ImagePromptDraft.created_by == created_by)
     if workflow_id:
         statement = statement.where(ImagePromptDraft.workflow_id == workflow_id)
+        count_statement = count_statement.where(ImagePromptDraft.workflow_id == workflow_id)
     if status:
         statement = statement.where(ImagePromptDraft.status == status.upper())
+        count_statement = count_statement.where(ImagePromptDraft.status == status.upper())
     safe_page = max(1, int(page or 1))
     safe_page_size = max(1, min(200, int(page_size or 50)))
-    total = int(db.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+    total = int(db.scalar(count_statement) or 0)
     rows = db.scalars(
         statement.order_by(ImagePromptDraft.updated_at.desc(), ImagePromptDraft.id.desc())
         .offset((safe_page - 1) * safe_page_size)
@@ -179,10 +183,20 @@ def list_prompt_drafts(
         stats_statement = stats_statement.where(ImagePromptDraft.created_by == created_by)
     if workflow_id:
         stats_statement = stats_statement.where(ImagePromptDraft.workflow_id == workflow_id)
+    stats_rows = db.execute(stats_statement).all()
+    user_names = _user_names(db, {
+        str(worker_id)
+        for worker_id, _draft_status, _count in stats_rows
+        if worker_id
+    } | {
+        str(draft.created_by)
+        for draft in rows
+        if draft.created_by
+    })
     worker_stats: dict[str, dict[str, Any]] = {}
-    for worker_id, draft_status, count in db.execute(stats_statement).all():
+    for worker_id, draft_status, count in stats_rows:
         key = str(worker_id or "")
-        entry = worker_stats.setdefault(key, {"workerId": worker_id, "workerName": _user_name(db, worker_id), "total": 0, "pendingCount": 0, "generatingCount": 0, "readyCount": 0, "failedCount": 0})
+        entry = worker_stats.setdefault(key, {"workerId": worker_id, "workerName": user_names.get(key, worker_id), "total": 0, "pendingCount": 0, "generatingCount": 0, "readyCount": 0, "failedCount": 0})
         entry["total"] += int(count or 0)
         normalized = str(draft_status or "").upper()
         if normalized == DRAFT_READY:
@@ -193,7 +207,7 @@ def list_prompt_drafts(
             entry["generatingCount"] += int(count or 0)
         else:
             entry["pendingCount"] += int(count or 0)
-    return {"items": [_draft_payload(db, draft) for draft in rows], "workerStats": list(worker_stats.values()), "page": safe_page, "pageSize": safe_page_size, "total": total}
+    return {"items": _draft_payloads(db, rows, user_names=user_names), "workerStats": list(worker_stats.values()), "page": safe_page, "pageSize": safe_page_size, "total": total}
 
 
 def update_prompt_draft(
@@ -317,23 +331,90 @@ def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
         batch.status = BATCH_GENERATING
 
 
-def _draft_payload(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
-    attempt = db.scalar(
-        select(PromptGenerationAttempt)
-        .where(PromptGenerationAttempt.draft_id == draft.id)
-        .order_by(PromptGenerationAttempt.attempt_no.desc())
-        .limit(1)
+def _draft_payloads(
+    db: Session,
+    drafts: list[ImagePromptDraft],
+    *,
+    user_names: dict[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    if not drafts:
+        return []
+    draft_ids = [draft.id for draft in drafts]
+    assets = {
+        asset.id: asset
+        for asset in db.scalars(select(Asset).where(Asset.id.in_({draft.asset_id for draft in drafts}))).all()
+    }
+    attempts = _latest_attempts_by_draft(db, draft_ids)
+    runpod_tasks = _latest_runpod_tasks_by_draft(db, draft_ids)
+    names = dict(user_names or {})
+    missing_user_ids = {
+        str(draft.created_by)
+        for draft in drafts
+        if draft.created_by and str(draft.created_by) not in names
+    }
+    if missing_user_ids:
+        names.update(_user_names(db, missing_user_ids))
+    return [
+        _draft_payload_from_related(
+            draft,
+            asset=assets.get(draft.asset_id),
+            attempt=attempts.get(draft.id),
+            runpod_task=runpod_tasks.get(draft.id),
+            created_by_name=names.get(str(draft.created_by or ""), draft.created_by),
+        )
+        for draft in drafts
+    ]
+
+
+def _latest_attempts_by_draft(db: Session, draft_ids: list[str]) -> dict[str, PromptGenerationAttempt]:
+    latest_attempt_numbers = (
+        select(
+            PromptGenerationAttempt.draft_id.label("draft_id"),
+            func.max(PromptGenerationAttempt.attempt_no).label("attempt_no"),
+        )
+        .where(PromptGenerationAttempt.draft_id.in_(draft_ids))
+        .group_by(PromptGenerationAttempt.draft_id)
+        .subquery()
     )
-    asset = db.get(Asset, draft.asset_id)
-    # A draft can be re-submitted after a failed RunPod task. The newest task is
-    # the relevant status for the prompt-history row, while each task remains
-    # independently available in RunPod history.
-    runpod_task = db.scalar(
+    attempts = db.scalars(
+        select(PromptGenerationAttempt).join(
+            latest_attempt_numbers,
+            (PromptGenerationAttempt.draft_id == latest_attempt_numbers.c.draft_id)
+            & (PromptGenerationAttempt.attempt_no == latest_attempt_numbers.c.attempt_no),
+        )
+    ).all()
+    latest: dict[str, PromptGenerationAttempt] = {}
+    for attempt in sorted(attempts, key=lambda item: (item.draft_id, item.attempt_no, item.id)):
+        latest[attempt.draft_id] = attempt
+    return latest
+
+
+def _latest_runpod_tasks_by_draft(db: Session, draft_ids: list[str]) -> dict[str, WorkflowTask]:
+    tasks = db.scalars(
         select(WorkflowTask)
-        .where(WorkflowTask.prompt_draft_id == draft.id, WorkflowTask.deleted_at.is_(None))
-        .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
-        .limit(1)
-    )
+        .where(WorkflowTask.prompt_draft_id.in_(draft_ids), WorkflowTask.deleted_at.is_(None))
+        .order_by(WorkflowTask.prompt_draft_id.asc(), WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+    ).all()
+    latest: dict[str, WorkflowTask] = {}
+    for task in tasks:
+        draft_id = str(task.prompt_draft_id or "")
+        if draft_id and draft_id not in latest:
+            latest[draft_id] = task
+    return latest
+
+
+def _draft_payload(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
+    return _draft_payloads(db, [draft])[0]
+
+
+def _draft_payload_from_related(
+    draft: ImagePromptDraft,
+    *,
+    asset: Asset | None,
+    attempt: PromptGenerationAttempt | None,
+    runpod_task: WorkflowTask | None,
+    created_by_name: str | None,
+) -> dict[str, Any]:
     return {
         "draftId": draft.id,
         "assetId": draft.asset_id,
@@ -344,7 +425,7 @@ def _draft_payload(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
         "model": draft.model,
         "instructionVersion": draft.instruction_version,
         "createdBy": draft.created_by,
-        "createdByName": _user_name(db, draft.created_by),
+        "createdByName": created_by_name,
         "createdAt": draft.created_at.isoformat() if draft.created_at else None,
         "updatedAt": draft.updated_at.isoformat() if draft.updated_at else None,
         "requestedFrames": draft.requested_frames,
@@ -370,6 +451,16 @@ def _draft_payload(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
             "outputTokens": attempt.output_tokens if attempt else None,
         },
     }
+
+
+def _user_names(db: Session, user_ids: set[str]) -> dict[str, str | None]:
+    if not user_ids:
+        return {}
+    users = db.scalars(select(User).where(User.id.in_(user_ids))).all()
+    names = {user.id: user.name for user in users}
+    for user_id in user_ids:
+        names.setdefault(user_id, user_id)
+    return names
 
 
 def _user_name(db: Session, user_id: str | None) -> str | None:

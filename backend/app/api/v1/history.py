@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
@@ -8,6 +11,7 @@ from backend.app.db.session import get_db
 from backend.app.services import prompt_batch_service, studio_api_service
 
 router = APIRouter(prefix="/history", tags=["history"])
+LOGGER = logging.getLogger(__name__)
 
 
 @router.get("")
@@ -29,12 +33,19 @@ def prompt_history(
     # A manager needs the per-worker operational dashboard. Other users keep
     # the original isolation and only receive their own prompt history.
     created_by = None if has_permission(current_user.permissions, "jobs:manage") else current_user.id
-    return prompt_batch_service.list_prompt_drafts(
-        db,
-        created_by=created_by,
-        page=page,
-        page_size=20,
-    )
+    try:
+        return prompt_batch_service.list_prompt_drafts(
+            db,
+            created_by=created_by,
+            page=page,
+            page_size=20,
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.exception("Prompt history query failed")
+        raise HTTPException(
+            status_code=503,
+            detail="프롬프트 이력 조회에 실패했습니다. 최신 DB 인덱스 마이그레이션 적용 상태를 확인해주세요.",
+        ) from exc
 
 
 @router.get("/runpod")

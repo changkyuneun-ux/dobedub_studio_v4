@@ -144,6 +144,61 @@ def main():
 
     os.environ.pop("PRESERVE_EXISTING_CATALOG_DATA", None)
 
+    # Production RDS may have role_permissions drifted away from the local seed.
+    # Verify later migrations repair the OPERATOR baseline without touching users.
+    with tempfile.TemporaryDirectory(prefix="dobedub-db-rbac-drift-") as tmp:
+        database_path = Path(tmp) / "dobedub-rbac-drift.db"
+        os.environ["DATABASE_URL"] = f"sqlite:///{database_path}"
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+
+        command.upgrade(config, "20260903_0030")
+        engine = create_engine(os.environ["DATABASE_URL"], future=True)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "delete from role_permissions where role_id = "
+                    "(select id from roles where code = 'OPERATOR')"
+                )
+            )
+            connection.execute(
+                text(
+                    "insert into users (id, name, role, created_at, updated_at) "
+                    "values ('operator_smoke', 'Operator Smoke', 'OPERATOR', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            operator_permissions = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "select permissions.code "
+                        "from role_permissions "
+                        "join roles on roles.id = role_permissions.role_id "
+                        "join permissions on permissions.id = role_permissions.permission_id "
+                        "where roles.code = 'OPERATOR'"
+                    )
+                )
+            }
+            expected_operator_permissions = {
+                "workflows:read",
+                "prompts:build",
+                "prompts:reuse",
+                "prompts:review",
+                "jobs:run",
+                "jobs:cancel",
+                "history:read",
+                "metadata:read",
+                "system:read",
+                "manual:read",
+            }
+            assert expected_operator_permissions.issubset(operator_permissions), sorted(operator_permissions)
+            user_count = connection.execute(
+                text("select count(*) from users where id = 'operator_smoke'")
+            ).scalar_one()
+            assert user_count == 1, user_count
+
     print("OK db migration smoke check passed")
 
 

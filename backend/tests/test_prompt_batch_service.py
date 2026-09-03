@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
+from sqlalchemy import event, inspect
+
+from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
 from backend.app.services import prompt_batch_service as service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokImagePromptResult
@@ -230,3 +234,115 @@ def test_management_draft_listing_includes_worker_names_and_statistics(db_sessio
     stats = {item["workerId"]: item for item in payload["workerStats"]}
     assert stats["worker_a"]["readyCount"] == 1
     assert stats["worker_b"]["failedCount"] == 1
+
+
+def test_prompt_history_listing_batches_related_records_instead_of_querying_per_row(db_session):
+    base_time = now_seoul_naive()
+    for index in range(8):
+        worker_id = f"worker_history_{index}"
+        asset_id = f"asset_history_{index}"
+        draft_id = f"draft_history_{index}"
+        db_session.add(User(id=worker_id, name=f"작업자 {index}", role="OPERATOR"))
+        db_session.add(_asset(asset_id))
+        db_session.add(ImagePromptDraft(
+            id=draft_id,
+            asset_id=asset_id,
+            workflow_id="1-images.json",
+            slot_index=index + 1,
+            status=service.DRAFT_READY,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            positive_prompt=f"ready prompt {index}",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            created_by=worker_id,
+            updated_at=base_time + timedelta(seconds=index),
+        ))
+        db_session.add(PromptGenerationAttempt(
+            id=f"attempt_old_{index}",
+            draft_id=draft_id,
+            attempt_no=1,
+            status=service.DRAFT_FAILED,
+            endpoint="https://api.x.ai/v1/responses",
+            model="grok-test",
+            response_json={},
+        ))
+        db_session.add(PromptGenerationAttempt(
+            id=f"attempt_new_{index}",
+            draft_id=draft_id,
+            attempt_no=2,
+            status=service.DRAFT_READY,
+            endpoint="https://api.x.ai/v1/responses",
+            model="grok-test",
+            latency_ms=100 + index,
+            input_tokens=10 + index,
+            output_tokens=20 + index,
+            response_json={},
+        ))
+        db_session.add(WorkflowTask(
+            id=f"task_old_{index}",
+            workflow_id="1-images.json",
+            status="FAILED",
+            positive_prompts=[],
+            negative_prompts=[],
+            config_json={},
+            wan_node_config={},
+            patch_summary={},
+            payload_json={},
+            runpod_submit_json={},
+            runpod_status_json={},
+            prompt_draft_id=draft_id,
+            created_at=base_time + timedelta(seconds=index),
+        ))
+        db_session.add(WorkflowTask(
+            id=f"task_new_{index}",
+            workflow_id="1-images.json",
+            status="COMPLETED",
+            positive_prompts=[],
+            negative_prompts=[],
+            config_json={},
+            wan_node_config={},
+            patch_summary={},
+            payload_json={},
+            runpod_submit_json={},
+            runpod_status_json={},
+            prompt_draft_id=draft_id,
+            created_at=base_time + timedelta(minutes=1, seconds=index),
+        ))
+    db_session.commit()
+
+    statements: list[str] = []
+
+    def before_cursor_execute(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", before_cursor_execute)
+    try:
+        payload = service.list_prompt_drafts(db_session, created_by=None, page_size=8)
+    finally:
+        event.remove(bind, "before_cursor_execute", before_cursor_execute)
+
+    assert payload["total"] == 8
+    assert len(payload["items"]) == 8
+    assert payload["items"][0]["runpodTaskId"] == "task_new_7"
+    assert payload["items"][0]["grokResponse"]["inputTokens"] == 17
+    assert len(statements) <= 8
+
+
+def test_prompt_history_tables_have_mysql_friendly_lookup_indexes(db_session):
+    indexes = {
+        table_name: {index["name"] for index in inspect(db_session.get_bind()).get_indexes(table_name)}
+        for table_name in ("image_prompt_drafts", "prompt_generation_attempts", "workflow_tasks")
+    }
+
+    assert "ix_image_prompt_drafts_owner_workflow_status_updated" in indexes["image_prompt_drafts"]
+    assert "ix_image_prompt_drafts_owner_updated_id" in indexes["image_prompt_drafts"]
+    assert "ix_image_prompt_drafts_workflow_status_updated" in indexes["image_prompt_drafts"]
+    assert "ix_image_prompt_drafts_workflow_updated_id" in indexes["image_prompt_drafts"]
+    assert "ix_image_prompt_drafts_workflow_owner_status" in indexes["image_prompt_drafts"]
+    assert "ix_image_prompt_drafts_updated_id" in indexes["image_prompt_drafts"]
+    assert "ix_prompt_generation_attempts_draft_attempt_latest" in indexes["prompt_generation_attempts"]
+    assert "ix_workflow_tasks_prompt_draft_latest" in indexes["workflow_tasks"]

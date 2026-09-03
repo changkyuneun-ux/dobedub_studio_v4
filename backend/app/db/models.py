@@ -179,6 +179,7 @@ class WorkflowTask(Base):
         # Durable local submission queue scan order. Existing RunPod status
         # values remain intact; only PENDING_SUBMIT is locally introduced.
         Index("ix_workflow_tasks_dispatch", "status", "next_dispatch_at", "created_at"),
+        Index("ix_workflow_tasks_prompt_draft_latest", "prompt_draft_id", "deleted_at", "created_at", "id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -623,6 +624,12 @@ class ImagePromptDraft(Base):
     __table_args__ = (
         Index("ix_image_prompt_drafts_asset_workflow_slot", "asset_id", "workflow_id", "slot_index"),
         Index("ix_image_prompt_drafts_created_by_status", "created_by", "status"),
+        Index("ix_image_prompt_drafts_owner_workflow_status_updated", "created_by", "workflow_id", "status", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_owner_updated_id", "created_by", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_workflow_status_updated", "workflow_id", "status", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_workflow_updated_id", "workflow_id", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_workflow_owner_status", "workflow_id", "created_by", "status"),
+        Index("ix_image_prompt_drafts_updated_id", "updated_at", "id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -667,6 +674,7 @@ class PromptGenerationAttempt(Base):
     __tablename__ = "prompt_generation_attempts"
     __table_args__ = (
         Index("ix_prompt_generation_attempts_draft", "draft_id", "attempt_no"),
+        Index("ix_prompt_generation_attempts_draft_attempt_latest", "draft_id", "attempt_no", "id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
