@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from backend.app.core.timezone_utils import now_seoul_naive
-from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestItem, User, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
 from backend.app.services.runpod_request_batch_service import (
     create_request_batch,
@@ -247,6 +247,45 @@ def test_request_queue_and_dashboard_share_one_filtered_incomplete_scope(db_sess
         "inProgress": 1,
         "failed": 0,
     }
+
+
+def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_session):
+    """A draft with no WorkflowTask is still unrequested even after a failed batch attempt."""
+    db_session.add_all([
+        _asset("asset_failed_before_task"),
+        _draft("asset_failed_before_task", draft_id="draft_failed_before_task", positive="retryable"),
+        RunpodRequestBatch(
+            id="rpb_failed_before_task",
+            workflow_id="1-images.json",
+            requested_count=1,
+            queued_count=0,
+            failed_count=1,
+            status="FAILED",
+            created_by="operator",
+            submitted_by="operator",
+        ),
+        RunpodRequestItem(
+            id="rpi_failed_before_task",
+            request_batch_id="rpb_failed_before_task",
+            sequence_no=1,
+            prompt_draft_id="draft_failed_before_task",
+            asset_id="asset_failed_before_task",
+            workflow_id="1-images.json",
+            positive_prompt="retryable",
+            requested_frames=81,
+            status="FAILED",
+            failure_message="RunPod task was not created",
+        ),
+    ])
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+    dashboard = request_batch_dashboard(db_session, created_by="operator")
+
+    assert [(item["kind"], item["promptDraftId"], item["canSubmit"]) for item in queue["items"]] == [
+        ("PROMPT_DRAFT", "draft_failed_before_task", True),
+    ]
+    assert dashboard["totals"]["requestWaiting"] == 1
 
 
 def test_request_batch_summary_follows_persisted_task_status(db_session):

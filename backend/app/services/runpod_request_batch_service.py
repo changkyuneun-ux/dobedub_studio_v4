@@ -305,15 +305,31 @@ def _request_queue_entries(
         })
         entries.append(payload)
 
-    # A draft can be requested more than once only through a deliberately new
-    # draft.  Excluding every already snapshotted draft prevents a submitted
-    # item and its source draft from appearing as duplicate queue rows.
+    # A draft should disappear from the "requestable" list only while it is in
+    # an active request batch, or after a real WorkflowTask has been created.
+    # A failed pre-submission request item has no RunPod task behind it; Prompt
+    # History still shows that draft as "미요청", so it must be requestable again.
     requested_draft_ids = {
         str(draft_id)
         for draft_id in db.scalars(
-            select(RunpodRequestItem.prompt_draft_id).where(RunpodRequestItem.prompt_draft_id.is_not(None))
+            select(RunpodRequestItem.prompt_draft_id)
+            .join(RunpodRequestBatch, RunpodRequestItem.request_batch_id == RunpodRequestBatch.id)
+            .where(
+                RunpodRequestItem.prompt_draft_id.is_not(None),
+                RunpodRequestBatch.status.not_in(terminal_batches),
+                RunpodRequestItem.status.not_in(terminal_items),
+            )
         ).all()
     }
+    requested_draft_ids.update(
+        str(draft_id)
+        for draft_id in db.scalars(
+            select(WorkflowTask.prompt_draft_id).where(
+                WorkflowTask.prompt_draft_id.is_not(None),
+                WorkflowTask.deleted_at.is_(None),
+            )
+        ).all()
+    )
     draft_statement = select(ImagePromptDraft).where(
         ImagePromptDraft.status == "READY",
         ImagePromptDraft.positive_prompt.is_not(None),
