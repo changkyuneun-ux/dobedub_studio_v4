@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
@@ -131,22 +131,32 @@ def prompt_generation_batch_payload(db: Session, batch_id: str) -> dict[str, Any
     }
 
 
-def latest_active_prompt_generation_batch(db: Session, *, created_by: str) -> dict[str, Any] | None:
+def latest_active_prompt_generation_batch(db: Session, *, created_by: str | None) -> dict[str, Any] | None:
     """Return the newest unfinished batch for the legacy durable-workspace API."""
     batches = list_active_prompt_generation_batches(db, created_by=created_by)
     return batches[0] if batches else None
 
 
-def list_active_prompt_generation_batches(db: Session, *, created_by: str) -> list[dict[str, Any]]:
+def list_active_prompt_generation_batches(db: Session, *, created_by: str | None) -> list[dict[str, Any]]:
     """Return every unfinished prompt batch for the operator dashboard."""
-    batches = db.scalars(
+    active_draft_exists = (
+        select(ImagePromptDraft.id)
+        .where(
+            ImagePromptDraft.prompt_batch_id == PromptGenerationBatch.id,
+            ImagePromptDraft.status.in_((DRAFT_PENDING, DRAFT_GENERATING)),
+        )
+        .exists()
+    )
+    statement = (
         select(PromptGenerationBatch)
         .where(
-            PromptGenerationBatch.created_by == created_by,
-            PromptGenerationBatch.status.in_((BATCH_PENDING, BATCH_GENERATING)),
+            or_(PromptGenerationBatch.status.in_((BATCH_PENDING, BATCH_GENERATING)), active_draft_exists),
         )
         .order_by(PromptGenerationBatch.created_at.desc(), PromptGenerationBatch.id.desc())
-    ).all()
+    )
+    if created_by is not None:
+        statement = statement.where(PromptGenerationBatch.created_by == created_by)
+    batches = db.scalars(statement).all()
     payloads = [prompt_generation_batch_payload(db, batch.id) for batch in batches]
     return [payload for payload in payloads if payload["status"] in {BATCH_PENDING, BATCH_GENERATING}]
 

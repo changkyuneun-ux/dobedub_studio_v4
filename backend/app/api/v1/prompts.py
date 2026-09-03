@@ -529,7 +529,8 @@ def active_image_prompt_batches(
     current_user: CurrentUser = Depends(require_permission("prompts:build")),
     db: Session = Depends(get_db),
 ):
-    return {"items": list_active_prompt_generation_batches(db, created_by=current_user.id)}
+    created_by = None if has_permission(current_user.permissions, "jobs:manage") else current_user.id
+    return {"items": list_active_prompt_generation_batches(db, created_by=created_by)}
 
 
 @router.get("/image-drafts/batches/{batch_id}")

@@ -123,6 +123,66 @@ def test_active_prompt_generation_batches_are_user_scoped_and_newest_first(db_se
     assert [batch["id"] for batch in batches] == ["pgb_worker_a_new", "pgb_worker_a_old"]
 
 
+def test_active_prompt_generation_batches_can_include_every_worker_for_managers(db_session):
+    db_session.add_all([
+        PromptGenerationBatch(
+            id="pgb_worker_a_active",
+            workflow_id="1-images.json",
+            status=service.BATCH_PENDING,
+            total_count=1,
+            created_by="worker_a",
+        ),
+        PromptGenerationBatch(
+            id="pgb_worker_b_active",
+            workflow_id="Pickme_Workflow.json",
+            status=service.BATCH_GENERATING,
+            total_count=1,
+            created_by="worker_b",
+        ),
+    ])
+    db_session.commit()
+
+    batches = service.list_active_prompt_generation_batches(db_session, created_by=None)
+
+    assert [batch["id"] for batch in batches] == ["pgb_worker_b_active", "pgb_worker_a_active"]
+
+
+def test_active_prompt_generation_batches_keep_stale_completed_batches_with_active_drafts(db_session):
+    db_session.add_all([
+        _asset("asset_stale_active"),
+        PromptGenerationBatch(
+            id="pgb_stale_completed_with_generating_draft",
+            workflow_id="1-images.json",
+            status=service.BATCH_COMPLETED,
+            total_count=1,
+            completed_count=1,
+            failed_count=0,
+            created_by="worker_a",
+        ),
+        ImagePromptDraft(
+            id="draft_stale_active",
+            asset_id="asset_stale_active",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_GENERATING,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_stale_completed_with_generating_draft",
+            created_by="worker_a",
+        ),
+    ])
+    db_session.commit()
+
+    batches = service.list_active_prompt_generation_batches(db_session, created_by="worker_a")
+
+    assert [batch["id"] for batch in batches] == ["pgb_stale_completed_with_generating_draft"]
+    assert batches[0]["status"] == service.BATCH_GENERATING
+
+
 def test_prompt_generation_batch_payload_counts_current_draft_statuses(db_session):
     db_session.add_all([
         _asset("asset_batch_ready_1"),
