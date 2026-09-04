@@ -2190,12 +2190,33 @@ python3 -m compileall -q backend/app
 Expected: 전부 PASS. 두 번째 명령이 중요하다 — 복구기는 대화형 경로의 item에도 작동하므로,
 정상 흐름의 item을 가로채지 않는지 여기서 확인된다.
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 7: 커밋 — 반드시 두 개로 나눈다**
+
+복구기는 **대화형 경로의 기존 결함도 고치므로 배치와 독립적인 가치가 있다.** 배치 기능이 지연되거나
+축소되면 복구기만 main으로 cherry-pick할 수 있어야 하므로, 완료 판정식과 섞지 않는다:
 
 ```bash
+# 1) 공유 결함 수정 — 단독으로 cherry-pick 가능해야 한다
 git add backend/app/services/batch_job_service.py backend/app/main.py backend/tests/test_batch_job_service.py
-git commit -m "fix(batch): recover orphaned request items and settle batches on remainder"
+git commit -m "fix(runpod): materialize request items whose task creation died
+
+create_runpod_request_batch commits its items, then creates one task per item.
+A process killed between those steps leaves items no code path picks up —
+the dispatcher only claims tasks, and the failure handler only runs on an
+exception, not on SIGKILL. This affects the interactive request screen too,
+not just batch jobs."
+
+# 2) 배치 전용 — 완료 판정식
+git add backend/app/services/batch_job_service.py backend/tests/test_batch_job_service.py
+git commit -m "fix(batch): settle batches on remainder instead of count equality"
 ```
+
+> **분리 여부 결정 (2026-09-04):** 재작업 R-A~R-E를 별도 선행 브랜치로 떼지 않는다.
+> 다섯 중 넷(R-A·R-B·R-C·R-D)이 배치 전용이고 — `promote_ready_batch_drafts`는 배치에만 존재하며,
+> `create_prompt_generation_batch`의 `commit=False`와 `create_runpod_request_batch`의
+> `batch_job_id`는 기본값으로 기존 호출자를 바꾸지 않는다 — `batch_job_id` 컬럼은 이미 이 브랜치에
+> 커밋돼 있어 분리 비용만 든다. 진짜 공유 가치가 있는 것은 이 복구기 하나뿐이므로,
+> 브랜치를 쪼개는 대신 **커밋을 쪼개** cherry-pick 가능성만 확보한다.
 
 ---
 
