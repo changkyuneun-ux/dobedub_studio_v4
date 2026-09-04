@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from backend.app.services.runpod_client import idle_worker_capacity
-from backend.app.services.task_tracking_service import claim_next_pending_submission, release_pending_submission
+from backend.app.services.task_tracking_service import (
+    claim_next_pending_submission,
+    recover_stale_dispatching_submissions,
+    release_pending_submission,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +20,7 @@ class RunpodDispatchRuntime:
 
 def dispatch_next_pending_submission(runtime: RunpodDispatchRuntime) -> dict:
     """Submit one oldest queued task only when Serverless capacity is idle."""
+    recover_stale_dispatching_submissions()
     try:
         health = runtime.connection_status()
         if not health.get("ok"):

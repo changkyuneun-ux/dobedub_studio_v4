@@ -137,7 +137,7 @@ export function Create3aScreen({
   const [runpodHistoryNotice, setRunpodHistoryNotice] = useState("");
   const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "completed" | "failed">("all");
+  const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
@@ -155,7 +155,7 @@ export function Create3aScreen({
     setRunpodHistoryLoading(true);
     setRunpodHistoryNotice("");
     setSelectedRunpodTaskIds([]);
-    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter })
+    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter })
       .then((response) => {
         if (!active) return;
         setRunpodHistoryItems(response.items);
@@ -173,13 +173,13 @@ export function Create3aScreen({
     return () => {
       active = false;
     };
-  }, [historyTab, runpodPage, runpodWorkflowFilter]);
+  }, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter]);
 
   const filteredHistory = runpodHistoryItems.filter((item) => {
-    if (statusFilter === "all") return true;
-    if (statusFilter === "active") return !isTerminalHistoryStatus(item.status);
-    if (statusFilter === "completed") return isSuccessStatus(item.status);
-    if (statusFilter === "failed") return isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
+    if (runpodResultFilter === "all") return true;
+    if (runpodResultFilter === "active") return !isTerminalHistoryStatus(item.status);
+    if (runpodResultFilter === "completed") return isSuccessStatus(item.status);
+    if (runpodResultFilter === "failed") return isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
     return true;
   });
   const selectedItem = historyTab === "runpod"
@@ -245,8 +245,8 @@ export function Create3aScreen({
             <button
               key={key}
               type="button"
-              className={`v3-segment-nav-item ${statusFilter === key ? "is-active" : ""}`}
-              onClick={() => setStatusFilter(key)}
+              className={`v3-segment-nav-item ${runpodResultFilter === key ? "is-active" : ""}`}
+              onClick={() => { setRunpodResultFilter(key); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}
             >
               <div className="v3-segment-nav-head"><span>{label}</span><span>{count}</span></div>
             </button>

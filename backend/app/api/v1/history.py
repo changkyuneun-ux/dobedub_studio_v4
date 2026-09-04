@@ -57,10 +57,11 @@ def prompt_history(
 def runpod_history(
     page: int = 1,
     workflowId: str = "",
+    resultStatus: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     """RunPod task history, deliberately fixed to 20 rows per page."""
-    return studio_api_service.paginated_runpod_history(page, workflow_id=workflowId)
+    return studio_api_service.paginated_runpod_history(page, workflow_id=workflowId, result_status=resultStatus)
 
 
 @router.post("/{task_id}/delete")

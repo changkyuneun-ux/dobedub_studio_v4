@@ -272,6 +272,46 @@ def test_runpod_history_filters_by_workflow(api_client):
     assert [item["taskId"] for item in body["items"]] == ["task_history_workflow_b"]
 
 
+def test_runpod_history_filters_by_result_status_and_workflow(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            WorkflowTask(id="task_history_completed_a", workflow_id="1-images.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_history_failed_a", workflow_id="1-images.json", status="FAILED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_history_active_a", workflow_id="1-images.json", status="QUEUED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_history_failed_b", workflow_id="Pickme_Workflow.json", status="FAILED", worker_name="History User", user_id="history-user", payload_json={}),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    failed = api_client.get(
+        "/api/history/runpod?page=1&workflowId=1-images.json&resultStatus=FAILED",
+        headers=_authorized_headers(),
+    )
+    active = api_client.get(
+        "/api/history/runpod?page=1&workflowId=1-images.json&resultStatus=ACTIVE",
+        headers=_authorized_headers(),
+    )
+
+    assert failed.status_code == 200
+    failed_body = failed.json()
+    assert failed_body["total"] == 1
+    assert [item["taskId"] for item in failed_body["items"]] == ["task_history_failed_a"]
+    assert active.status_code == 200
+    active_body = active.json()
+    assert active_body["total"] == 1
+    assert [item["taskId"] for item in active_body["items"]] == ["task_history_active_a"]
+
+
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
@@ -281,5 +321,6 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("runpodStatus", params.runpodStatus)' in client
     assert "runpodHistory: (params:" in client
     assert 'query.set("workflowId", params.workflowId)' in client
+    assert 'query.set("resultStatus", params.resultStatus)' in client
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in screen
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter })" in screen

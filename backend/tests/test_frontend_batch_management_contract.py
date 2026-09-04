@@ -98,7 +98,7 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in source
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter })" in source
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter })" in source
     assert "runpodResponse?.filename" in source
     assert "promptHistory" in source
     assert "runpodHistory" in source

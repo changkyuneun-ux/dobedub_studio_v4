@@ -100,8 +100,51 @@ def test_claim_and_release_keep_task_waiting_until_capacity_is_available(db_sess
     assert stored.next_dispatch_at is not None
 
 
+def test_claim_recovers_stale_dispatching_submission_without_runpod_job(db_session):
+    stale_claimed_at = now_seoul_naive() - timedelta(minutes=10)
+    db_session.add_all([
+        WorkflowTask(
+            id="task_stale_dispatch",
+            workflow_id="1-images.json",
+            status="DISPATCHING",
+            runpod_job_id=None,
+            dispatch_claimed_at=stale_claimed_at,
+            dispatch_attempts=1,
+            created_at=stale_claimed_at,
+        ),
+        WorkflowTask(
+            id="task_recent_dispatch",
+            workflow_id="1-images.json",
+            status="DISPATCHING",
+            runpod_job_id=None,
+            dispatch_claimed_at=now_seoul_naive(),
+            dispatch_attempts=1,
+        ),
+    ])
+    db_session.commit()
+
+    claimed = claim_next_pending_submission()
+
+    assert claimed is not None
+    assert claimed["taskId"] == "task_stale_dispatch"
+    db_session.expire_all()
+    recovered = db_session.get(WorkflowTask, "task_stale_dispatch")
+    recent = db_session.get(WorkflowTask, "task_recent_dispatch")
+    assert recovered.status == "DISPATCHING"
+    assert recovered.dispatch_attempts == 2
+    assert recovered.dispatch_claimed_at is not None
+    assert recovered.dispatch_claimed_at > stale_claimed_at
+    assert recovered.last_dispatch_error == "Recovered stale RunPod submission claim"
+    assert recent.status == "DISPATCHING"
+    assert recent.dispatch_attempts == 1
+
+
 def test_dispatcher_waits_for_idle_worker_then_dispatches_one_task(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.app.services.runpod_dispatch_service.recover_stale_dispatching_submissions",
+        lambda: 0,
+    )
     monkeypatch.setattr(
         "backend.app.services.runpod_dispatch_service.claim_next_pending_submission",
         lambda: {"taskId": "task_oldest", "status": "DISPATCHING"},
@@ -124,8 +167,39 @@ def test_dispatcher_waits_for_idle_worker_then_dispatches_one_task(monkeypatch):
     assert calls == ["task_oldest"]
 
 
+def test_dispatcher_recovers_stale_dispatching_claim_before_capacity_check(db_session):
+    stale_claimed_at = now_seoul_naive() - timedelta(minutes=10)
+    db_session.add(WorkflowTask(
+        id="task_stale_waiting_capacity",
+        workflow_id="1-images.json",
+        status="DISPATCHING",
+        runpod_job_id=None,
+        dispatch_claimed_at=stale_claimed_at,
+        dispatch_attempts=1,
+        created_at=stale_claimed_at,
+    ))
+    db_session.commit()
+
+    result = dispatch_next_pending_submission(RunpodDispatchRuntime(
+        dry_run=False,
+        connection_status=lambda: {"ok": True, "workers": {"idle": 0}},
+        dispatch_task=lambda _task_id: (_ for _ in ()).throw(AssertionError("should not dispatch without capacity")),
+    ))
+
+    assert result["status"] == "waiting"
+    db_session.expire_all()
+    stored = db_session.get(WorkflowTask, "task_stale_waiting_capacity")
+    assert stored.status == "PENDING_SUBMIT"
+    assert stored.dispatch_claimed_at is None
+    assert stored.last_dispatch_error == "Recovered stale RunPod submission claim"
+
+
 def test_dispatcher_checks_worker_capacity_even_when_legacy_dry_run_is_enabled(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.app.services.runpod_dispatch_service.recover_stale_dispatching_submissions",
+        lambda: 0,
+    )
     monkeypatch.setattr(
         "backend.app.services.runpod_dispatch_service.claim_next_pending_submission",
         lambda: {"taskId": "task_oldest", "status": "DISPATCHING"},

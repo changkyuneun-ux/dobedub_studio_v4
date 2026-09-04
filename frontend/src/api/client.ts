@@ -1043,10 +1043,11 @@ export const apiClient = {
     if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
     return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
   },
-  runpodHistory: (params: { page?: number; workflowId?: string } = {}) => {
+  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     if (params.workflowId) query.set("workflowId", params.workflowId);
+    if (params.resultStatus) query.set("resultStatus", params.resultStatus);
     return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
   },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.

@@ -29,6 +29,7 @@ from backend.app.services.metadata_service import get_workflow_widget_metadata
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 PENDING_SUBMISSION_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
+STALE_DISPATCH_CLAIM_SECONDS = 300
 RUNPOD_TIMESTAMP_KEYS = {
     "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
     "cancelledat", "updatedat", "laststartedat", "laststatuschange", "statuschangedat",
@@ -69,22 +70,32 @@ def record_job_status(job: dict, *, resolve_asset: Callable[[str], tuple[dict, P
 MAX_HISTORY_PAGE_SIZE = 200
 
 
-def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE, *, workflow_id: str = "") -> list[dict]:
+def task_history_items(
+    page: int = 1,
+    page_size: int = MAX_HISTORY_PAGE_SIZE,
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+) -> list[dict]:
     session = SessionLocal()
     try:
         safe_page = max(1, int(page or 1))
         safe_page_size = max(1, min(MAX_HISTORY_PAGE_SIZE, int(page_size or MAX_HISTORY_PAGE_SIZE)))
+        conditions = [WorkflowTask.deleted_at.is_(None)]
+        if workflow_id:
+            conditions.append(WorkflowTask.workflow_id == workflow_id)
+        result_condition = _history_result_status_condition(result_status)
+        if result_condition is not None:
+            conditions.append(result_condition)
         id_statement = (
             select(WorkflowTask.id)
             # 작업 생성 직후부터 같은 Task History에서 상태를 추적한다. 완료/실패만
             # 보이던 이전 필터는 활성 Task를 숨겨 멀티 작업 운영을 불가능하게 했다.
-            .where(WorkflowTask.deleted_at.is_(None))
+            .where(*conditions)
             .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
             .offset((safe_page - 1) * safe_page_size)
             .limit(safe_page_size)
         )
-        if workflow_id:
-            id_statement = id_statement.where(WorkflowTask.workflow_id == workflow_id)
         task_ids = list(session.scalars(id_statement))
         if not task_ids:
             return []
@@ -110,20 +121,37 @@ def task_history_items(page: int = 1, page_size: int = MAX_HISTORY_PAGE_SIZE, *,
         session.close()
 
 
-def task_history_total(*, workflow_id: str = "") -> int:
+def task_history_total(*, workflow_id: str = "", result_status: str = "") -> int:
     session = SessionLocal()
     try:
+        conditions = [WorkflowTask.deleted_at.is_(None)]
+        if workflow_id:
+            conditions.append(WorkflowTask.workflow_id == workflow_id)
+        result_condition = _history_result_status_condition(result_status)
+        if result_condition is not None:
+            conditions.append(result_condition)
         statement = (
             select(func.count())
             .select_from(WorkflowTask)
             # soft delete된 작업은 총계에서도 제외(목록과 페이지네이션 일치).
-            .where(WorkflowTask.deleted_at.is_(None))
+            .where(*conditions)
         )
-        if workflow_id:
-            statement = statement.where(WorkflowTask.workflow_id == workflow_id)
         return int(session.scalar(statement) or 0)
     finally:
         session.close()
+
+
+def _history_result_status_condition(value: str):
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized in {"COMPLETED", "SUCCESS"}:
+        return WorkflowTask.status.in_({"COMPLETED", "SUCCESS"})
+    if normalized == "FAILED":
+        return WorkflowTask.status.in_({"FAILED", "CANCELLED", "TIMED_OUT"})
+    if normalized in {"ACTIVE", "RUNNING", "IN_PROGRESS"}:
+        return or_(WorkflowTask.status.is_(None), WorkflowTask.status.not_in(TERMINAL_STATES))
+    return None
 
 
 def list_assets(
@@ -428,6 +456,7 @@ def claim_next_pending_submission() -> dict | None:
     session = SessionLocal()
     try:
         now = now_seoul_naive()
+        _recover_stale_dispatching_submissions(session, now)
         candidate_ids = list(session.scalars(
             select(WorkflowTask.id)
             .where(
@@ -467,6 +496,46 @@ def claim_next_pending_submission() -> dict | None:
         raise
     finally:
         session.close()
+
+
+def recover_stale_dispatching_submissions() -> int:
+    """Return abandoned RunPod submission claims to the durable queue."""
+    session = SessionLocal()
+    try:
+        recovered = _recover_stale_dispatching_submissions(session, now_seoul_naive())
+        session.commit()
+        return recovered
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _recover_stale_dispatching_submissions(session: Session, now: datetime) -> int:
+    cutoff = now - timedelta(seconds=STALE_DISPATCH_CLAIM_SECONDS)
+    stale_tasks = session.scalars(
+        select(WorkflowTask)
+        .where(
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.status == "DISPATCHING",
+            WorkflowTask.runpod_job_id.is_(None),
+            WorkflowTask.dispatch_claimed_at.is_not(None),
+            WorkflowTask.dispatch_claimed_at <= cutoff,
+        )
+        .order_by(WorkflowTask.dispatch_claimed_at.asc(), WorkflowTask.id.asc())
+        .limit(10)
+    ).all()
+    for task in stale_tasks:
+        task.status = "PENDING_SUBMIT"
+        task.dispatch_claimed_at = None
+        task.next_dispatch_at = None
+        task.last_dispatch_error = "Recovered stale RunPod submission claim"
+        task.updated_at = now
+        _sync_request_batch(session, task)
+    if stale_tasks:
+        session.flush()
+    return len(stale_tasks)
 
 
 def release_pending_submission(task_id: str, error: str, *, retry_after_seconds: int = 15) -> None:
