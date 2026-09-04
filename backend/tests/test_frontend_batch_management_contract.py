@@ -176,9 +176,13 @@ def test_runpod_request_queue_uses_fixed_ten_row_pages_and_shared_dashboard_scop
 
     assert "runpodRequestQueue" in client
     assert "statusFilter?: string" in client
+    assert "runpodRequestDashboard: ()" in client
     assert "const ALL_REQUEST_STATUS_FILTER = \"requestable\";" in screen
     assert "statusFilter" in screen
+    assert "전체 상태" in screen
     assert "latestLoadRequestRef" in screen
+    assert "apiClient.runpodRequestDashboard()" in screen
+    assert "apiClient.runpodRequestDashboard({" not in screen
     assert "requestDashboard?.totals.incomplete, requestPage, workerFilter, workflowFilter, statusFilter" in screen
     assert "pageSize: 10" in screen
     assert "페이지당 10건" in screen

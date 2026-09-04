@@ -105,23 +105,11 @@ def active_runpod_request_batch(
 
 @router.get("/request-batches/dashboard")
 def runpod_request_dashboard(
-    workerId: str = "",
-    workflowId: str = "",
-    statusFilter: str = "",
     current_user: CurrentUser = Depends(require_permission("jobs:run")),
 ):
-    selected_worker = workerId.strip()
     can_manage = has_permission(current_user.permissions, "jobs:manage")
-    if selected_worker in {"*", "all"}:
-        if not can_manage:
-            raise HTTPException(status_code=403, detail="전체 작업자 조회에는 jobs:manage 권한이 필요합니다.")
-        selected_worker = ""
-    elif selected_worker and selected_worker != current_user.id and not can_manage:
-        raise HTTPException(status_code=403, detail="다른 작업자 조회에는 jobs:manage 권한이 필요합니다.")
     return studio_api_service.runpod_request_dashboard(
-        worker_id=selected_worker or (None if can_manage and workerId.strip() in {"*", "all"} else current_user.id),
-        workflow_id=workflowId.strip(),
-        status_filter=statusFilter.strip(),
+        worker_id=None if can_manage else current_user.id,
     )
 
 

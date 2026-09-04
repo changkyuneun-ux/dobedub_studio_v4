@@ -1249,13 +1249,8 @@ export const apiClient = {
     requestJson<RunpodRequestBatchResponse>(`/api/jobs/request-batches/${encodeURIComponent(batchId)}`),
   activeRunpodRequestBatch: (workerId?: string) =>
     requestJson<{ item: RunpodRequestBatchResponse | null }>(`/api/jobs/request-batches/active${workerId ? `?workerId=${encodeURIComponent(workerId)}` : ""}`),
-  runpodRequestDashboard: (params: { workerId?: string; workflowId?: string; statusFilter?: string } = {}) => {
-    const query = new URLSearchParams();
-    if (params.workerId) query.set("workerId", params.workerId);
-    if (params.workflowId) query.set("workflowId", params.workflowId);
-    if (params.statusFilter) query.set("statusFilter", params.statusFilter);
-    return requestJson<RunpodRequestDashboardResponse>(`/api/jobs/request-batches/dashboard${query.size ? `?${query.toString()}` : ""}`);
-  },
+  runpodRequestDashboard: () =>
+    requestJson<RunpodRequestDashboardResponse>("/api/jobs/request-batches/dashboard"),
   runpodRequestQueue: (params: { workerId?: string; workflowId?: string; statusFilter?: string; page?: number; pageSize?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.workerId) query.set("workerId", params.workerId);

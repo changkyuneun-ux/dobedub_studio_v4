@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from backend.app.core.security import create_access_token
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
+from backend.app.db.session import SessionLocal
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
 from backend.app.services.runpod_request_batch_service import (
     create_request_batch,
@@ -46,6 +48,11 @@ def _asset(asset_id: str) -> Asset:
         image_width=720,
         image_height=1280,
     )
+
+
+def _headers(user_id: str, *, name: str | None = None, role: str = "OPERATOR") -> dict[str, str]:
+    token = create_access_token({"id": user_id, "name": name or user_id, "role": role})
+    return {"Authorization": f"Bearer {token['accessToken']}"}
 
 
 def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_session):
@@ -283,22 +290,56 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
 
     all_rows = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
     requestable = request_batch_queue(db_session, created_by="operator", status_filter="requestable")
-    requestable_dashboard = request_batch_dashboard(db_session, created_by="operator", status_filter="requestable")
+    unfiltered_dashboard = request_batch_dashboard(db_session)
     progress = request_batch_queue(db_session, created_by="operator", status_filter="inProgress")
 
     assert all_rows["total"] == 5
     assert [(item["kind"], item["promptDraftId"], item["canSubmit"]) for item in requestable["items"]] == [
         ("PROMPT_DRAFT", "draft_filter_ready", True),
     ]
-    assert requestable_dashboard["totals"] == {
-        "incomplete": 1,
-        "requestWaiting": 1,
-        "runpodQueued": 0,
-        "inProgress": 0,
-        "failed": 0,
+    assert unfiltered_dashboard["totals"] == {
+        "incomplete": 5,
+        "requestWaiting": 2,
+        "runpodQueued": 1,
+        "inProgress": 1,
+        "failed": 1,
     }
     assert progress["total"] == 1
     assert progress["items"][0]["promptDraftId"] == "draft_filter_progress"
+
+
+def test_request_dashboard_ignores_list_filters_but_preserves_permission_scope(api_client):
+    session = SessionLocal()
+    try:
+        worker_draft = _draft("asset_dashboard_scope_worker", draft_id="draft_dashboard_scope_worker", positive="worker")
+        worker_draft.created_by = "dashboard-worker"
+        manager_draft = _draft("asset_dashboard_scope_manager", draft_id="draft_dashboard_scope_manager", positive="manager")
+        manager_draft.created_by = "dashboard-manager"
+        session.add_all([
+            User(id="dashboard-worker", name="작업자", role="OPERATOR", permissions_json=["jobs:run"], is_active=True),
+            User(id="dashboard-manager", name="관리자", role="ADMIN", permissions_json=["admin:*"], is_active=True),
+            _asset("asset_dashboard_scope_worker"),
+            _asset("asset_dashboard_scope_manager"),
+            worker_draft,
+            manager_draft,
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    manager_response = api_client.get(
+        "/api/jobs/request-batches/dashboard?workerId=dashboard-worker&workflowId=missing&statusFilter=failed",
+        headers=_headers("dashboard-manager", name="관리자", role="ADMIN"),
+    )
+    worker_response = api_client.get(
+        "/api/jobs/request-batches/dashboard?workerId=dashboard-manager&workflowId=missing&statusFilter=failed",
+        headers=_headers("dashboard-worker", name="작업자"),
+    )
+
+    assert manager_response.status_code == 200
+    assert manager_response.json()["totals"]["incomplete"] == 2
+    assert worker_response.status_code == 200
+    assert worker_response.json()["totals"]["incomplete"] == 1
 
 
 def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_session):

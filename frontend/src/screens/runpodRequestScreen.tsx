@@ -20,7 +20,7 @@ const REQUEST_STATUS_FILTERS = [
   { value: "runpodQueued", label: "RunPod 큐" },
   { value: "inProgress", label: "실행 중" },
   { value: "failed", label: "실패" },
-  { value: "all", label: "전체 미완료" }
+  { value: "all", label: "전체 상태" }
 ];
 
 function workflowName(workflow: WorkflowItem | undefined, fallback: string) {
@@ -69,7 +69,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
         apiClient.imagePromptDrafts({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, pageSize: 1 }),
         apiClient.runpodConnection(),
         requestedBatch,
-        apiClient.runpodRequestDashboard({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, statusFilter })
+        apiClient.runpodRequestDashboard()
       ]);
       if (loadRequestId !== latestLoadRequestRef.current) return;
       setQueue(requestQueue);
