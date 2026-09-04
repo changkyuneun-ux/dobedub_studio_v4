@@ -46,7 +46,7 @@
 **세션 스크래치**이므로, 다른 사람이나 새 세션은 그것을 볼 수 없다. 진행 상태는 반드시
 이 표를 갱신해서 남긴다.
 
-**실행 순서:** R-A → R-B → R-C → R-D → Task 4 → Task 5 → … → Task 12.
+**실행 순서:** R-A → R-B → R-C → R-D → R-E → Task 4 → Task 5 → … → Task 12.
 Task 1·2·3 본문은 이미 수행된 기록으로만 남겨 둔다(재수행 금지).
 
 **3차 개정에서 새로 확정된 결함 5건** — 상세와 가드레일은 아래 사이드 이펙트 절의
@@ -59,6 +59,8 @@ SE-11 ~ SE-15 참조. 요약:
 | 128건 승격이 monitor_loop 장기 점유 | RunPod 상태 폴링·프롬프트 처리 지연 | R-D |
 | 대시보드가 비정규화 카운터를 안 쓰고 매번 재계산 | 3초 폴링 × 활성 배치 수만큼 GROUP BY | R-A + Task 4 |
 | 배포 게이트 누락 | 이미지가 마이그레이션보다 먼저 뜨면 **Task History 전면 장애** | Task 12 |
+| 고아 request item | task 없는 item 하나가 배치를 **영구 대기**시킴. 대화형 경로에도 있는 기존 결함 | R-E |
+| 만료 없는 선점 | 컨테이너가 죽으면 draft가 **영구 선점**되어 다시 승격되지 않음 | R-D |
 
 **main에서 확인된 사실 (계획의 전제):**
 
@@ -106,14 +108,26 @@ SE-11 ~ SE-15 참조. 요약:
 > 같은 파일에 이어 쓰는 태스크(3·4)는 이 헬퍼를 재사용하고 시그니처를 그에 맞게 고쳐 쓸 것.
 > 새 테스트 파일을 만드는 태스크(5·6·7·8)는 같은 패턴을 그 파일 안에 정의할 것.
 
-**알면서 수용한 리스크 (사용자 결정, 2026-09-04):**
+**철회된 결정 (2026-09-04 3차 개정):** 2차 개정에서 "단일 인스턴스 운영을 전제로 중복 승격
+위험을 수용한다"고 적었던 문구는 **틀렸으므로 철회한다.** 배포 전략이 ECS Express Canary이고
+(`docs/ecs-express-deployment-runbook.md:18`) Canary 구간에는 구·신 revision이 동시에 살아
+각자 monitor_loop을 돌린다. 정상 운영이 단일 인스턴스여도 **배포할 때마다** 중복 승격 창이 열린다.
+SE-11 / G-10(R-D)이 유일한 방어 수단이며 선택 사항이 아니다.
 
-`promote_ready_batch_drafts()`의 멱등성은 **순차 호출에만** 보장된다. 앱 인스턴스가 둘 이상이면
-각 프로세스의 monitor_loop이 같은 draft를 동시에 승격해 RunPod 작업이 중복 생성될 수 있다(실제 과금).
-**단일 인스턴스 운영을 전제로 이 리스크를 수용한다.** 다중 인스턴스로 전환한다면 승격 시 draft를
-조건부 UPDATE로 선점하는 방식이 필요하다 — `task_tracking_service.claim_next_pending_submission()`이
-같은 목적으로 쓰는 패턴이 그대로 참고가 된다. `prompt_draft_id` 유니크 인덱스는 **쓸 수 없다**:
-사용자가 같은 draft를 정당하게 재제출하는 기존 동작을 깨뜨린다.
+**처리량 기대치 (명시하지 않으면 오해를 부르는 값):**
+
+이 기능의 판매 포인트는 "무인 대량 처리"지만, 실제 소요 시간은 기존 파이프라인의 직렬 구조가 정한다.
+128장 배치 기준:
+
+| 단계 | 제약 | 소요 |
+|---|---|---|
+| 프롬프트 생성 | `process_next_prompt_generation_draft()`가 **주기당 1건**, 주기 5초 | 최소 **약 11분** (Grok 지연 별도) |
+| 승격 | 주기당 20건(G-12) | 약 35초 |
+| 영상 생성 | `max_active_tasks_per_user=3`, 디스패치 주기당 1건 | 영상 1건 5분 가정 시 **약 3.5시간** |
+
+G-1(공정 스케줄링)이 적용되면 대화형 사용자의 요청이 배치보다 먼저 나가므로 위 값은 하한이다.
+이는 결함이 아니라 기존 큐 설계의 귀결이며, 이 계획은 처리량을 바꾸지 않는다.
+사용자에게 "몇 시간 걸린다"는 기대치를 화면에서 전달할지는 별도 판단 사항이다.
 
 **main과 달라 계획을 고친 부분 (아래 태스크에 반영됨):**
 
@@ -279,6 +293,37 @@ Task 2 리뷰는 이 창을 놓쳤다 — "지시문 없는 워크플로"(쓰기
 
 > **판단:** FK는 추가하지 않는다. 실질적 위험(중복 승격)은 G-10의 원자적 claim이 해소한다.
 > 대신 Task 12에 orphan 검증 쿼리를 두어 배포 후 점검한다.
+
+### SE-17 (치명) request item은 있는데 WorkflowTask가 없으면 배치가 영구 대기한다
+
+**이것은 배치가 만든 결함이 아니라, 기존 대화형 경로에 이미 있는 결함을 배치가 증폭시킨 것이다.**
+
+`studio_api_service.create_runpod_request_batch()`는 두 단계로 나뉘어 있다:
+
+1. `create_request_batch(...)` — `RunpodRequestItem` N건을 만들고 **commit** 한다
+2. `for item in batch["items"]:` — 항목마다 `create_job()`으로 `WorkflowTask`를 만든다 (`:487-506`)
+
+1단계가 커밋된 뒤 2단계 도중 **프로세스가 죽으면** `task_id IS NULL`인 item이 `PENDING_SUBMIT`
+상태로 남는다. 예외가 났을 때만 `mark_request_item_failed()`가 돌기 때문에, 컨테이너 종료·배포 중단은
+아무 표시도 남기지 않는다.
+
+대화형 경로에서는 항목이 3~10건이고 사용자가 화면에서 재시도할 수 있어 눈에 띄지 않았다.
+배치는 다르다 — 항목이 128건이라 창이 훨씬 넓고, 지켜보는 사람이 없으며, **완료 판정식이
+그 틈을 영구 고착으로 바꾼다.**
+
+계획의 판정식 `counts["promptReady"] == counts["videoRequested"]`는 **독립적으로 관리되는 두 모집단의
+동등성**이다. `videoRequested`는 `workflow_tasks` 행 수이므로, task가 안 만들어진 item이 하나라도
+있으면 이 식은 영원히 거짓이고 배치는 대시보드에서 사라지지 않는다.
+
+> **가드레일 G-15 (R-E):** 두 가지를 함께 한다.
+>
+> 1. **고아 item 복구기(materializer).** monitor가 `task_id IS NULL`이고 `PENDING_SUBMIT`이며
+>    일정 시간 지난 `runpod_request_items`를 찾아 누락된 task를 만든다(또는 재시도 한도 초과 시
+>    item을 FAILED로 확정한다). 이는 **대화형 경로도 함께 고친다.**
+> 2. **완료 판정을 동등성이 아니라 잔여 검사로 바꾼다.** "모든 draft가 종료 상태이고,
+>    이 배치의 모든 request item이 종료 상태" 이면 완료다. 두 모집단을 비교하지 않으므로
+>    카운트가 어긋나 배치가 고착되는 **버그 부류 자체가 사라진다.** item 상태는
+>    `runpod_request_batch_service.refresh_request_batch_summary()`가 이미 task로부터 동기화한다.
 
 ---
 
@@ -1158,6 +1203,26 @@ git commit -m "feat(batch): promote ready batch prompts into RunPod requests"
 0033은 어떤 운영 DB에서도 실행된 적이 없다. 리비전을 쪼개면 배포 시 one-off 마이그레이션이
 두 번 필요해질 뿐이다. **머지 이후라면 절대 이렇게 하지 말 것** — 그때는 0034를 새로 만든다.
 
+> **Step 0의 사전 확인이 이 판단의 전제다.** alembic은 이미 적용된 리비전을 다시 실행하지 않으므로,
+> **어느 환경에서든 0033이 이미 적용됐다면 그 환경은 이 수정을 영원히 받지 못한다.**
+> 운영 RDS는 `1d3eee1` 기준이라 0033이 없지만, 개발자 로컬 DB나 별도 검증 DB에서 이미 돌렸을 수 있다.
+> 하나라도 적용된 환경이 있으면 **0033 수정을 포기하고 0034로 분리한다.**
+
+- [ ] **Step 0: 0033 적용 여부 사전 확인 (F)**
+
+Run:
+```bash
+python3 -m alembic current
+ls -1 data/*.db 2>/dev/null | while read db; do
+  echo "--- $db"; DATABASE_URL="sqlite:///$db" python3 -m alembic current 2>/dev/null | tail -1
+done
+```
+
+Expected: 어느 것도 `20260904_0033`을 출력하지 않아야 한다. 2026-09-04 확인 시점의 로컬 개발 DB는
+`20260903_0031`이었다. **하나라도 `20260904_0033`이면 이 태스크를 중단하고**, 이 태스크와 R-D의
+스키마 변경을 새 리비전 `20260904_0034_batch_durability.py`(`down_revision = "20260904_0033"`)로
+옮긴 뒤 진행한다. 운영 RDS는 배포 시 `--check`로 판정하므로 여기서 확인할 필요가 없다.
+
 **Interfaces:**
 - Consumes: Task 1의 `BatchJob`
 - Produces: `BatchJob`에 컬럼 5개 추가 — `prompt_waiting_count`, `prompt_generating_count`,
@@ -1208,7 +1273,18 @@ Expected: FAIL — 두 테스트 모두 AssertionError
             sa.Column("runpod_in_progress_count", sa.Integer(), nullable=False, server_default="0"),
 ```
 
-같은 `upgrade()`의 링크 컬럼 루프 **다음**에 복합 인덱스를 추가한다. 기존 관례대로 존재 확인 후 생성한다:
+같은 `upgrade()`의 링크 컬럼 루프 **다음**에 승격 선점 컬럼을 먼저 추가한다.
+아래 인덱스가 이 컬럼을 참조하므로 순서가 중요하다:
+
+```python
+    # G-10: 승격 선점 lease. ECS Canary 구간에 구·신 revision이 동시에 승격해
+    # RunPod에 이중 제출하는 것을 조건부 UPDATE로 막는다. 플래그가 아니라 만료가 있는
+    # lease인 이유는 R-D 참조 — 프로세스가 죽으면 release가 돌지 않기 때문이다.
+    if "image_prompt_drafts" in tables and "promotion_claimed_at" not in _columns(inspector, "image_prompt_drafts"):
+        op.add_column("image_prompt_drafts", sa.Column("promotion_claimed_at", sa.DateTime(), nullable=True))
+```
+
+그 다음 복합 인덱스를 추가한다. 기존 관례대로 존재 확인 후 생성한다:
 
 ```python
     # G-13: 대시보드와 monitor가 함께 쓰는 집계 경로.
@@ -1216,6 +1292,11 @@ Expected: FAIL — 두 테스트 모두 AssertionError
     aggregation_indexes = (
         ("image_prompt_drafts", "ix_image_prompt_drafts_batch_status", ["batch_job_id", "status"]),
         ("workflow_tasks", "ix_workflow_tasks_batch_deleted_status", ["batch_job_id", "deleted_at", "status"]),
+        # R-D의 승격 후보 조회 전용. WHERE status='READY' AND (claim IS NULL OR claim <= cutoff)를
+        # 5초마다 돌리므로 status·claim이 인덱스에 함께 있어야 한다.
+        ("image_prompt_drafts", "ix_image_prompt_drafts_promotion", ["status", "promotion_claimed_at", "batch_job_id"]),
+        # SE-17 복구기 전용. task_id IS NULL AND status='PENDING_SUBMIT' 스캔.
+        ("runpod_request_items", "ix_runpod_request_items_orphan", ["status", "task_id"]),
     )
     for table, index_name, columns in aggregation_indexes:
         if table not in tables:
@@ -1247,6 +1328,21 @@ Expected: FAIL — 두 테스트 모두 AssertionError
     runpod_pending_submit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     runpod_queued_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     runpod_in_progress_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+```
+
+같은 파일의 `ImagePromptDraft`에 승격 선점 컬럼을 추가한다 (R-D가 사용한다):
+
+```python
+    # 승격 선점 lease. NULL이거나 STALE_PROMOTION_CLAIM_SECONDS 이전이면 재선점 가능하다(G-10).
+    promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+```
+
+`downgrade()`의 인덱스 제거 목록에 `ix_image_prompt_drafts_promotion`·`ix_runpod_request_items_orphan`을
+포함하고, `promotion_claimed_at` 컬럼 제거도 넣는다:
+
+```python
+    if "image_prompt_drafts" in tables and "promotion_claimed_at" in _columns(inspector, "image_prompt_drafts"):
+        op.drop_column("image_prompt_drafts", "promotion_claimed_at")
 ```
 
 - [ ] **Step 5: 테스트 통과 + 마이그레이션 실물 검증**
@@ -1540,8 +1636,14 @@ git commit -m "fix(batch): own the batch creation transaction end to end"
 - [ ] **Step 1: 실패 테스트 작성**
 
 ```python
-def test_claim_is_exclusive_across_processes(db_session, monkeypatch):
-    """SE-11: 두 번째 호출자는 이미 선점된 draft를 가져가면 안 된다."""
+def test_claim_is_exclusive_across_independent_sessions(db_session, monkeypatch):
+    """SE-11: Canary 구간의 두 프로세스를 독립 Session 두 개로 모사한다.
+
+    같은 Session에서 두 번 부르면 SQLAlchemy identity map과 단일 트랜잭션 때문에
+    조건부 UPDATE의 경합을 전혀 재현하지 못한다 — 반드시 별도 Session이어야 한다.
+    """
+    from backend.app.db.session import SessionLocal
+
     db_session.add(_user("operator_1"))
     _seed_assets(db_session, 3)
     monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
@@ -1555,11 +1657,77 @@ def test_claim_is_exclusive_across_processes(db_session, monkeypatch):
         draft.positive_prompt = "ok"
     db_session.commit()
 
-    first = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
-    second = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
+    session_a, session_b = SessionLocal(), SessionLocal()
+    try:
+        claimed_a = batch_job_service.claim_batch_drafts_for_promotion(session_a, limit=10)
+        claimed_b = batch_job_service.claim_batch_drafts_for_promotion(session_b, limit=10)
+    finally:
+        session_a.close()
+        session_b.close()
 
-    assert len(first) == 3
-    assert second == [], "이미 선점된 draft를 두 번째 호출이 다시 가져갔다 — 중복 제출이 발생한다"
+    ids_a = {draft_id for _batch, _owner, draft_id in claimed_a}
+    ids_b = {draft_id for _batch, _owner, draft_id in claimed_b}
+    assert len(ids_a) == 3
+    assert ids_a & ids_b == set(), "두 프로세스가 같은 draft를 선점했다 — RunPod 이중 제출이 발생한다"
+
+
+def test_expired_claim_is_reclaimed_after_a_process_dies(db_session, monkeypatch):
+    """SE-11 후속: 승격 도중 컨테이너가 죽으면 release가 못 돈다. lease가 회수해야 한다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="operator_1",
+    )
+    draft = db_session.scalars(
+        select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])
+    ).one()
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    # 프로세스가 선점 직후 죽은 상태를 모사한다 — request item은 만들어지지 않았다.
+    draft.promotion_claimed_at = datetime.utcnow() - timedelta(
+        seconds=batch_job_service.STALE_PROMOTION_CLAIM_SECONDS + 60
+    )
+    db_session.commit()
+
+    reclaimed = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
+
+    assert [draft_id for _b, _o, draft_id in reclaimed] == [draft.id], "만료된 선점이 회수되지 않아 draft가 영구 방치된다"
+
+
+def test_expired_claim_is_not_reclaimed_when_the_request_item_exists(db_session, monkeypatch):
+    """선점이 만료됐더라도 request item이 있으면 제출은 실제로 일어난 것이다 — 재승격 금지."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="operator_1",
+    )
+    draft = db_session.scalars(
+        select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])
+    ).one()
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    draft.promotion_claimed_at = datetime.utcnow() - timedelta(
+        seconds=batch_job_service.STALE_PROMOTION_CLAIM_SECONDS + 60
+    )
+    request_batch = RunpodRequestBatch(
+        id="rpb_existing", workflow_id="Blowbang1.json", requested_count=1,
+        status="QUEUED", created_by="operator_1", batch_job_id=created["id"],
+    )
+    db_session.add(request_batch)
+    db_session.add(RunpodRequestItem(
+        id="rpi_existing", request_batch_id=request_batch.id, sequence_no=1,
+        prompt_draft_id=draft.id, asset_id=draft.asset_id, workflow_id="Blowbang1.json",
+        positive_prompt="ok", requested_frames=81, status="PENDING_SUBMIT",
+    ))
+    db_session.commit()
+
+    assert batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10) == []
 
 
 def test_claim_respects_the_per_cycle_limit(db_session, monkeypatch):
@@ -1609,30 +1777,14 @@ def test_already_promoted_drafts_are_never_reclaimed(db_session, monkeypatch):
 Run: `python3 -m pytest backend/tests/test_batch_job_service.py -rf -k "claim or per_cycle or reclaimed"`
 Expected: FAIL — `claim_batch_drafts_for_promotion`이 없어 `AttributeError`
 
-- [ ] **Step 3: 선점 컬럼 추가 (0033 리비전에 이어서)**
+- [ ] **Step 3: 스키마는 R-A에서 이미 끝났음을 확인**
 
-`20260904_0033_batch_jobs.py`의 `upgrade()`, 링크 컬럼 루프 다음에 추가한다:
+`promotion_claimed_at` 컬럼과 `ix_image_prompt_drafts_promotion` 인덱스는 **R-A가 이미 추가했다.**
+같은 마이그레이션 파일을 두 태스크가 나눠 고치면 인덱스가 컬럼보다 먼저 생성되는 순서 문제가 생기므로,
+스키마 변경은 전부 R-A에 모았다. 여기서는 확인만 한다:
 
-```python
-    # G-10: 승격 선점 표식. ECS Canary 구간에 구·신 revision이 동시에 승격해
-    # RunPod에 이중 제출하는 것을 조건부 UPDATE로 막는다.
-    if "image_prompt_drafts" in tables and "promotion_claimed_at" not in _columns(inspector, "image_prompt_drafts"):
-        op.add_column("image_prompt_drafts", sa.Column("promotion_claimed_at", sa.DateTime(), nullable=True))
-```
-
-`downgrade()`에도 대응 제거를 넣는다:
-
-```python
-    if "image_prompt_drafts" in tables and "promotion_claimed_at" in _columns(inspector, "image_prompt_drafts"):
-        op.drop_column("image_prompt_drafts", "promotion_claimed_at")
-```
-
-`backend/app/db/models.py`의 `ImagePromptDraft`에 추가한다:
-
-```python
-    # 승격 선점 시각. NULL이면 아직 아무 프로세스도 가져가지 않은 상태다(G-10).
-    promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-```
+Run: `python3 -c "from backend.app.db.models import ImagePromptDraft; print(ImagePromptDraft.promotion_claimed_at)"`
+Expected: 컬럼 객체가 출력된다. `AttributeError`가 나면 R-A가 완료되지 않은 것이므로 먼저 R-A를 끝낸다.
 
 - [ ] **Step 4: 원자적 claim 구현**
 
@@ -1641,6 +1793,40 @@ Expected: FAIL — `claim_batch_drafts_for_promotion`이 없어 `AttributeError`
 
 ```python
 PROMOTION_LIMIT_PER_CYCLE = 20
+# task_tracking_service.STALE_DISPATCH_CLAIM_SECONDS(=300)와 같은 값·같은 의미다.
+# 이 저장소는 이미 같은 문제를 같은 방식으로 푼다 — 선점 표식에 만료를 두고,
+# "실제로는 일어나지 않았음"을 확인한 뒤에만 회수한다.
+STALE_PROMOTION_CLAIM_SECONDS = 300
+
+
+def _unpromoted_ready_drafts(limit: int, cutoff: datetime):
+    """Candidate query: READY batch drafts with no request item and a free/expired claim.
+
+    NOT EXISTS keeps this O(candidates). Loading every historical
+    RunpodRequestItem.prompt_draft_id into a Python set — the obvious
+    alternative — grows without bound and runs every 5 seconds forever.
+    """
+    already_promoted = (
+        select(RunpodRequestItem.id)
+        .where(RunpodRequestItem.prompt_draft_id == ImagePromptDraft.id)
+        .exists()
+    )
+    return (
+        select(ImagePromptDraft.id, ImagePromptDraft.batch_job_id, BatchJob.created_by)
+        .join(BatchJob, BatchJob.id == ImagePromptDraft.batch_job_id)
+        .where(
+            BatchJob.status == BATCH_JOB_INCOMPLETE,
+            ImagePromptDraft.status == "READY",
+            # 미선점이거나, 선점 후 만료된 것(프로세스가 죽어 release가 못 돈 경우).
+            or_(
+                ImagePromptDraft.promotion_claimed_at.is_(None),
+                ImagePromptDraft.promotion_claimed_at <= cutoff,
+            ),
+            ~already_promoted,
+        )
+        .order_by(ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
+        .limit(limit)
+    )
 
 
 def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[str, str, str]]:
@@ -1649,34 +1835,29 @@ def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[s
     A conditional UPDATE is the only thing standing between an ECS Canary
     rollout — where the old and new revision both run the monitor loop — and a
     duplicated, separately billed RunPod submission for every draft in flight.
+
+    The claim is a lease, not a flag. A container killed mid-promotion never
+    runs its release, so a plain flag would strand those drafts forever; an
+    expired claim is reclaimable, but only while no request item exists for the
+    draft — that item is the proof the submission actually happened.
     """
-    promoted_ids = set(db.scalars(
-        select(RunpodRequestItem.prompt_draft_id).where(RunpodRequestItem.prompt_draft_id.is_not(None))
-    ))
-    candidates = db.execute(
-        select(ImagePromptDraft.id, ImagePromptDraft.batch_job_id, BatchJob.created_by)
-        .join(BatchJob, BatchJob.id == ImagePromptDraft.batch_job_id)
-        .where(
-            BatchJob.status == BATCH_JOB_INCOMPLETE,
-            ImagePromptDraft.status == "READY",
-            ImagePromptDraft.promotion_claimed_at.is_(None),
-        )
-        .order_by(ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
-        .limit(limit * 2)
-    ).all()
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=STALE_PROMOTION_CLAIM_SECONDS)
+    candidates = db.execute(_unpromoted_ready_drafts(limit, cutoff)).all()
 
     claimed: list[tuple[str, str, str]] = []
-    now = datetime.utcnow()
     for draft_id, batch_job_id, owner_id in candidates:
-        if len(claimed) >= limit:
-            break
-        if draft_id in promoted_ids or not owner_id:
+        if not owner_id:
             continue
         result = db.execute(
             ImagePromptDraft.__table__.update()
             .where(
                 ImagePromptDraft.id == draft_id,
-                ImagePromptDraft.promotion_claimed_at.is_(None),
+                # 경합하는 다른 프로세스가 그 사이에 선점했다면 rowcount가 0이 된다.
+                or_(
+                    ImagePromptDraft.promotion_claimed_at.is_(None),
+                    ImagePromptDraft.promotion_claimed_at <= cutoff,
+                ),
             )
             .values(promotion_claimed_at=now)
         )
@@ -1687,7 +1868,11 @@ def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[s
 
 
 def release_promotion_claim(db: Session, draft_ids: list[str]) -> None:
-    """Hand drafts back when the submission never happened, so a later cycle retries."""
+    """Hand drafts back when the submission never happened, so a later cycle retries.
+
+    Best-effort only — a killed process never reaches here. The lease expiry in
+    claim_batch_drafts_for_promotion() is what actually guarantees recovery.
+    """
     if not draft_ids:
         return
     db.execute(
@@ -1697,6 +1882,8 @@ def release_promotion_claim(db: Session, draft_ids: list[str]) -> None:
     )
     db.commit()
 ```
+
+`from datetime import datetime, timedelta` 와 `from sqlalchemy import or_` 를 import에 추가한다.
 
 - [ ] **Step 5: `promote_ready_batch_drafts`를 claim 기반으로 교체**
 
@@ -1768,6 +1955,246 @@ Expected: 전부 PASS / exit 0
 ```bash
 git add backend/app/db/migrations/versions/20260904_0033_batch_jobs.py backend/app/db/models.py backend/app/services/batch_job_service.py backend/tests/test_batch_job_service.py
 git commit -m "fix(batch): claim drafts atomically and cap promotion per cycle"
+```
+
+---
+
+## Task R-E: 고아 request item 복구와 잔여 기반 완료 판정 (G-15 · SE-17)
+
+**Files:**
+- Modify: `backend/app/services/batch_job_service.py`
+- Modify: `backend/app/main.py` (monitor 단계 추가)
+- Test: `backend/tests/test_batch_job_service.py`
+
+**이 태스크는 배치만의 문제가 아니다.** `create_runpod_request_batch()`가 request item을 commit한 뒤
+항목마다 task를 만드는 2단계 구조는 **기존 대화형 경로에도 있다**(`studio_api_service.py:487-506`).
+프로세스가 그 사이에 죽으면 `task_id IS NULL`인 item이 남고, 예외가 아닌 강제 종료라 실패 표시조차 없다.
+복구기는 대화형 경로도 함께 고친다 — 리뷰 시 반드시 대화형 회귀망을 함께 돌린다.
+
+**Interfaces:**
+- Produces: `STALE_ORPHAN_ITEM_SECONDS = 300`, `MAX_MATERIALIZE_ATTEMPTS = 3`
+- Produces: `materialize_orphan_request_items() -> dict` — 반환 `{"materialized": int, "failed": int}`
+- Produces: `_batch_is_settled(db, batch) -> bool` — Task 4의 완료 판정이 이것을 쓴다
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+```python
+def test_orphan_request_item_gets_its_task_created(db_session, monkeypatch):
+    """SE-17: item만 commit되고 task 생성 전에 죽은 경우를 복구한다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="operator_1",
+    )
+    draft = db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])).one()
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    request_batch = RunpodRequestBatch(
+        id="rpb_orphan", workflow_id="Blowbang1.json", requested_count=1, status="QUEUED",
+        created_by="operator_1", batch_job_id=created["id"],
+    )
+    db_session.add(request_batch)
+    db_session.add(RunpodRequestItem(
+        id="rpi_orphan", request_batch_id=request_batch.id, sequence_no=1,
+        prompt_draft_id=draft.id, asset_id=draft.asset_id, workflow_id="Blowbang1.json",
+        positive_prompt="ok", requested_frames=81, status="PENDING_SUBMIT",
+        task_id=None,  # 프로세스가 여기서 죽었다
+        created_at=datetime.utcnow() - timedelta(seconds=batch_job_service.STALE_ORPHAN_ITEM_SECONDS + 60),
+    ))
+    db_session.commit()
+
+    result = batch_job_service.materialize_orphan_request_items()
+
+    db_session.expire_all()
+    item = db_session.get(RunpodRequestItem, "rpi_orphan")
+    assert result["materialized"] == 1
+    assert item.task_id is not None, "고아 item의 task가 만들어지지 않아 배치가 영구 대기한다"
+
+
+def test_recent_orphan_items_are_left_alone(db_session, monkeypatch):
+    """정상 생성 중인 item을 복구기가 가로채면 안 된다."""
+    # 위와 같은 준비를 하되 created_at을 now로 둔다.
+    ...  # 위 테스트에서 created_at만 datetime.utcnow()로 바꿔 복제한다
+    assert batch_job_service.materialize_orphan_request_items()["materialized"] == 0
+
+
+def test_orphan_item_is_failed_after_the_attempt_limit(db_session, monkeypatch):
+    """복구가 반복 실패하면 item을 FAILED로 확정해 배치가 종료될 수 있게 한다."""
+    # materialize 내부의 task 생성을 항상 raise 하도록 monkeypatch 하고
+    # MAX_MATERIALIZE_ATTEMPTS 회 호출한 뒤 item.status == "FAILED" 를 확인한다.
+    ...
+
+
+def test_batch_settles_even_when_an_item_never_became_a_task(db_session, monkeypatch):
+    """G-15: 완료 판정이 두 모집단의 동등성이 아니라 잔여 검사여야 한다."""
+    # draft 2건 모두 READY, item 2건 중 1건은 COMPLETED task, 1건은 FAILED(task 없음).
+    # 이전 판정식(promptReady == videoRequested)이면 영원히 INCOMPLETE였다.
+    batch_job_service.refresh_batch_job_counters()
+    db_session.expire_all()
+    assert db_session.get(BatchJob, batch_id).status == "COMPLETE"
+```
+
+`...`로 둔 두 테스트는 위 첫 테스트의 준비 코드를 복제해 해당 조건만 바꿔 완성한다.
+`from datetime import datetime, timedelta` 를 테스트 파일 import에 추가한다.
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `python3 -m pytest backend/tests/test_batch_job_service.py -rf -k "orphan or settles"`
+Expected: FAIL — `materialize_orphan_request_items`가 없어 `AttributeError`
+
+- [ ] **Step 3: 복구기 구현**
+
+`backend/app/services/batch_job_service.py`에 추가한다. R-D의 lease와 같은 사고방식이다 —
+"충분히 오래됐고, 실제로는 일어나지 않았음"을 확인한 뒤에만 개입한다:
+
+```python
+STALE_ORPHAN_ITEM_SECONDS = 300
+MAX_MATERIALIZE_ATTEMPTS = 3
+
+
+def materialize_orphan_request_items() -> dict[str, Any]:
+    """Create the WorkflowTask for request items whose creation loop died.
+
+    create_runpod_request_batch() commits its items, then creates one task per
+    item. A container killed between those two steps leaves items that no code
+    path will ever pick up: the dispatcher only claims tasks, and the failure
+    handler only runs on an exception, not on SIGKILL. Those items then pin
+    their batch open forever.
+
+    This also repairs the interactive path, which has the same two-phase gap.
+    """
+    from backend.app.services import studio_api_service
+    from backend.app.services.runpod_request_batch_service import attach_task_to_request_item, mark_request_item_failed
+
+    cutoff = datetime.utcnow() - timedelta(seconds=STALE_ORPHAN_ITEM_SECONDS)
+    db = SessionLocal()
+    try:
+        orphans = db.execute(
+            select(RunpodRequestItem.id, RunpodRequestBatch.created_by)
+            .join(RunpodRequestBatch, RunpodRequestBatch.id == RunpodRequestItem.request_batch_id)
+            .where(
+                RunpodRequestItem.task_id.is_(None),
+                RunpodRequestItem.status == "PENDING_SUBMIT",
+                RunpodRequestItem.created_at <= cutoff,
+            )
+            .order_by(RunpodRequestItem.created_at.asc())
+            .limit(PROMOTION_LIMIT_PER_CYCLE)
+        ).all()
+    finally:
+        db.close()
+
+    materialized = 0
+    failed = 0
+    for item_id, owner_id in orphans:
+        try:
+            job_payload = studio_api_service.job_payload_from_request_item(
+                item_id, user={"id": owner_id}, worker_id=owner_id
+            )
+            job = studio_api_service.create_job(job_payload, user=_submitter_user(owner_id))
+            link_db = SessionLocal()
+            try:
+                attach_task_to_request_item(link_db, item_id=item_id, task_id=job["taskId"])
+            finally:
+                link_db.close()
+            materialized += 1
+        except Exception as exc:  # noqa: BLE001
+            attempts = _MATERIALIZE_ATTEMPTS.get(item_id, 0) + 1
+            _MATERIALIZE_ATTEMPTS[item_id] = attempts
+            if attempts >= MAX_MATERIALIZE_ATTEMPTS:
+                # 무한 재시도로 배치를 영구 대기시키느니, 실패로 확정해 종료시킨다.
+                fail_db = SessionLocal()
+                try:
+                    mark_request_item_failed(fail_db, item_id=item_id, message=f"복구 {attempts}회 실패: {exc}")
+                finally:
+                    fail_db.close()
+                _MATERIALIZE_ATTEMPTS.pop(item_id, None)
+                failed += 1
+    return {"materialized": materialized, "failed": failed}
+```
+
+모듈 상단에 `_MATERIALIZE_ATTEMPTS: dict[str, int] = {}`를 둔다. `_PROMOTION_FAILURES`와 마찬가지로
+프로세스 로컬이며, 재시작 시 초기화되어 다시 3회를 시도한다 — 그 편이 영구 실패보다 안전하다.
+
+`studio_api_service`에 `create_job`이 모듈 레벨로 노출돼 있지 않으면, `create_runpod_request_batch`가
+쓰는 것과 같은 import 경로를 찾아 맞춘다:
+
+Run: `grep -n "^from\|^import\|def create_job" backend/app/services/studio_api_service.py | grep -i "create_job"`
+
+- [ ] **Step 4: 완료 판정을 잔여 검사로 바꾼다**
+
+`batch_job_service.py`에 추가한다. Task 4의 `refresh_batch_job_counters()`가 이 함수를 쓴다:
+
+```python
+NON_TERMINAL_ITEM_STATES = frozenset({"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"})
+
+
+def _batch_is_settled(db: Session, batch: BatchJob) -> bool:
+    """A batch is done when nothing is left running — not when two counts match.
+
+    The earlier formula compared two independently maintained populations
+    (`promptReady == videoRequested`). Any gap between them — an item whose task
+    never materialized, a draft counted differently — froze the batch forever.
+    Asking "is anything still in flight?" cannot drift.
+    """
+    pending_drafts = db.scalar(
+        select(func.count())
+        .select_from(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status.notin_(TERMINAL_DRAFT_STATES),
+        )
+    ) or 0
+    if pending_drafts:
+        return False
+
+    pending_items = db.scalar(
+        select(func.count())
+        .select_from(RunpodRequestItem)
+        .join(RunpodRequestBatch, RunpodRequestBatch.id == RunpodRequestItem.request_batch_id)
+        .where(
+            RunpodRequestBatch.batch_job_id == batch.id,
+            RunpodRequestItem.status.in_(NON_TERMINAL_ITEM_STATES),
+        )
+    ) or 0
+    return pending_items == 0
+```
+
+`runpod_request_items.status`는 `runpod_request_batch_service.refresh_request_batch_summary()`가
+task로부터 이미 동기화하고 있으므로 새로 유지할 상태가 아니다.
+
+- [ ] **Step 5: monitor에 복구 단계 추가**
+
+`backend/app/main.py`의 `monitor_loop`, 배치 승격 단계 **다음**에 넣는다.
+G-3에 따라 독립 try/except로 감싼다:
+
+```python
+                try:
+                    await asyncio.to_thread(materialize_orphan_request_items)
+                except Exception:
+                    LOGGER.exception("Orphan request item recovery failed")
+```
+
+import에 `materialize_orphan_request_items`를 추가한다.
+
+- [ ] **Step 6: 테스트 통과 + 대화형 회귀 확인**
+
+Run:
+```bash
+python3 -m pytest backend/tests/test_batch_job_service.py -rf
+python3 -m pytest backend/tests/test_durable_runpod_request_batch.py backend/tests/test_runpod_submission_queue.py -rf
+python3 -m compileall -q backend/app
+```
+Expected: 전부 PASS. 두 번째 명령이 중요하다 — 복구기는 대화형 경로의 item에도 작동하므로,
+정상 흐름의 item을 가로채지 않는지 여기서 확인된다.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add backend/app/services/batch_job_service.py backend/app/main.py backend/tests/test_batch_job_service.py
+git commit -m "fix(batch): recover orphaned request items and settle batches on remainder"
 ```
 
 ---
@@ -1977,9 +2404,10 @@ def refresh_batch_job_counters() -> dict[str, Any]:
             batch.runpod_pending_submit_count = counts["videoPendingSubmit"]
             batch.runpod_queued_count = counts["videoQueued"]
             batch.runpod_in_progress_count = counts["videoInProgress"]
-            drafts_settled = counts["promptTerminal"] >= batch.total_images
-            tasks_settled = counts["videoTerminal"] >= counts["videoRequested"]
-            if drafts_settled and tasks_settled and counts["promptReady"] == counts["videoRequested"]:
+            # G-15: 두 모집단의 동등성(promptReady == videoRequested)이 아니라
+            # 잔여 검사를 쓴다. 동등성은 어느 한쪽에 틈이 생기면 배치를 영구
+            # 고착시켰다(SE-17). R-E에서 정의한다.
+            if _batch_is_settled(db, batch):
                 batch.status = BATCH_JOB_COMPLETE
                 completed += 1
             refreshed += 1
@@ -3892,7 +4320,12 @@ git commit -m "docs: document the batch job management screen"
 | SE-14 카운터 미사용 (높음) | G-13 저장 카운터 + 복합 인덱스 | R-A, Task 4 |
 | SE-15 배포 게이트 (치명) | G-14 `--check` → one-off → Canary | Task 12 Step 5 |
 | SE-16 참조 무결성 (중간) | FK 미도입 + orphan 쿼리 | Task 12 Step 4 |
+| SE-17 고아 request item (치명) | G-15 복구기 + 잔여 기반 완료 판정 | R-E |
 | `batchJobId` 인젝션 (치명) | keyword 인자로 승격 | R-B |
+| 만료 없는 선점 (치명) | lease + 만료 회수, 기존 `_recover_stale_dispatching_submissions` 패턴 | R-D |
+| 승격 후보 전량 메모리 로드 (높음) | `NOT EXISTS` 상관 서브쿼리 + 전용 복합 인덱스 | R-A, R-D |
+| 동시성 테스트 부재 (높음) | 독립 Session 2개 + stale 회수 + item 존재 시 재승격 금지 | R-D |
+| 0033 수정 전제 미확인 (중간) | R-A Step 0 사전 확인, 적용 이력 있으면 0034 분리 | R-A |
 
 **스펙 커버리지** — 스펙 §별 대응 태스크:
 
