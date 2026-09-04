@@ -384,7 +384,8 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "runpodDateFrom" in screen
     assert "runpodDateTo" in screen
     assert "selectedPromptHistoryDraftId" in screen
-    assert "selectPromptHistoryItem(response.items[0] || null)" in screen
+    assert "setItems(response.items)" in screen
+    assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen
     assert "apiClient.retryImagePromptDraft(item.draftId)" in screen
     assert "워크플로우 내장 Negative Prompt" in screen
     assert "Grok API 응답" in screen

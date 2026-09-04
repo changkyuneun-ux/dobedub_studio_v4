@@ -635,7 +635,6 @@ function PromptGenerationHistory({
         if (!active) return;
         setItems(response.items);
         setTotal(response.total);
-        selectPromptHistoryItem(response.items[0] || null);
       })
       .catch((error: Error) => {
         if (!active) return;
@@ -649,7 +648,11 @@ function PromptGenerationHistory({
     return () => {
       active = false;
     };
-  }, [page, generationFilter, runpodFilter, onSelectGrokItem]);
+  }, [page, generationFilter, runpodFilter]);
+
+  useEffect(() => {
+    selectPromptHistoryItem(items[0] || null);
+  }, [items]);
 
   async function retryPromptHistoryItem(item: GrokImagePromptDraftResponse) {
     setRetryingDraftId(item.draftId);
