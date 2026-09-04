@@ -17,8 +17,7 @@ import { AppShell } from "../components/AppShell";
 import {
   formatTimestamp,
   isSuccessStatus,
-  isTerminalHistoryStatus,
-  copyText
+  isTerminalHistoryStatus
 } from "../helpers/format";
 import { positivePromptEntries, negativePromptEntries } from "../helpers/prompts";
 import {
@@ -210,9 +209,6 @@ export function Create3aScreen({
   const toggleAllRunpodSelection = () => {
     setSelectedRunpodTaskIds(allTerminalItemsSelected ? [] : terminalRunpodItems.map((item) => item.taskId));
   };
-  const completedCount = runpodHistoryItems.filter((item) => isSuccessStatus(item.status)).length;
-  const activeCount = runpodHistoryItems.filter((item) => !isTerminalHistoryStatus(item.status)).length;
-  const failedCount = runpodHistoryItems.filter((item) => isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status)).length;
   const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
   const isFailedSelected = selectedItem ? isTerminalHistoryStatus(selectedItem.status) && !isSuccessStatus(selectedItem.status) : false;
   const output = selectedItem ? historyOutputAsset(selectedItem) : null;
@@ -234,32 +230,6 @@ export function Create3aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="TASK HISTORY"
       headerTitle="작업 이력"
-      sidebarExtra={
-        <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>FILTER · {runpodHistoryTotal}</div>
-          <div className="v3-runpod-filter-bar" style={{ padding: "0 10px 8px" }}>
-            <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
-            <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
-            <label>실행일 시작<input type="date" value={runpodDateFrom} onChange={(event) => { setRunpodDateFrom(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
-            <label>실행일 종료<input type="date" value={runpodDateTo} onChange={(event) => { setRunpodDateTo(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
-          </div>
-          {([
-            ["all", "전체", runpodHistoryItems.length],
-            ["active", "진행", activeCount],
-            ["completed", "완료", completedCount],
-            ["failed", "실패", failedCount]
-          ] as const).map(([key, label, count]) => (
-            <button
-              key={key}
-              type="button"
-              className={`v3-segment-nav-item ${runpodResultFilter === key ? "is-active" : ""}`}
-              onClick={() => { setRunpodResultFilter(key); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}
-            >
-              <div className="v3-segment-nav-head"><span>{label}</span><span>{count}</span></div>
-            </button>
-          ))}
-        </div>
-      }
       sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 20건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
         historyTab === "prompt" ? (
@@ -448,25 +418,34 @@ export function Create3aScreen({
         <PromptGenerationHistory user={user} onSelectGrokItem={setSelectedPromptHistoryItem} />
       ) : (
         <>
-      <div className="v3-inline-actions" style={{ margin: "12px 0" }}>
-        <button
-          className="v3-secondary-button"
-          type="button"
-          disabled={!selectedDownloadItems.length}
-          onClick={() => selectedDownloadItems.forEach((item) => onDownload(item))}
-        >
-          선택 다운로드 ({selectedDownloadItems.length})
-        </button>
-        {canDelete ? (
+      <div className="v3-runpod-history-toolbar">
+        <div className="v3-runpod-filter-bar v3-runpod-history-filters">
+          <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
+          <label>실행일 시작<input type="date" value={runpodDateFrom} onChange={(event) => { setRunpodDateFrom(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
+          <label>실행일 종료<input type="date" value={runpodDateTo} onChange={(event) => { setRunpodDateTo(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
+          <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
+          <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option></select></label>
+        </div>
+        <div className="v3-inline-actions v3-runpod-history-actions">
           <button
-            className="v3-danger-button"
+            className="v3-secondary-button"
             type="button"
-            disabled={!selectedRunpodItems.length}
-            onClick={() => onRequestBulkDelete(selectedRunpodItems)}
+            disabled={!selectedDownloadItems.length}
+            onClick={() => selectedDownloadItems.forEach((item) => onDownload(item))}
           >
-            선택 삭제 ({selectedRunpodItems.length})
+            선택 다운로드 ({selectedDownloadItems.length})
           </button>
-        ) : null}
+          {canDelete ? (
+            <button
+              className="v3-danger-button"
+              type="button"
+              disabled={!selectedRunpodItems.length}
+              onClick={() => onRequestBulkDelete(selectedRunpodItems)}
+            >
+              선택 삭제 ({selectedRunpodItems.length})
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="v3-card">
         <div className="v3-review-table-head" style={{ gridTemplateColumns: "32px 36px 70px 96px 130px 120px 82px 72px 72px minmax(150px, .8fr) 86px 52px", minWidth: 1120 }}>
@@ -685,7 +664,7 @@ function PromptGenerationHistory({
         <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option></select></label>
       </div>
       <div className="v3-prompt-history-head">
-        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>워크플로우 내장 Negative Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span><span>복사</span>
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>워크플로우 내장 Negative Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
       </div>
       {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
@@ -715,14 +694,6 @@ function PromptGenerationHistory({
             <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
-            <button
-              className="v3-text-link-button"
-              type="button"
-              disabled={!item.positivePrompt}
-              onClick={(event) => { event.stopPropagation(); copyText(item.positivePrompt || ""); }}
-            >
-              Copy
-            </button>
           </div>
         );
       })}

@@ -99,6 +99,8 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
 
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in source
     assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in source
+    assert "v3-runpod-history-toolbar" in source
+    assert "v3-runpod-history-actions" in source
     assert "runpodResponse?.filename" in source
     assert "promptHistory" in source
     assert "runpodHistory" in source
@@ -211,7 +213,12 @@ def test_admin_navigation_uses_the_korean_prompt_instruction_label() -> None:
     assert 'key: "adminGrokInstructions", label: "프롬프트 지시 관리"' in source
 
 
-def test_prompt_library_menu_is_disabled_in_generate_sidebar() -> None:
+def test_prompt_library_menu_is_removed_from_generate_sidebar() -> None:
     source = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
 
-    assert '{ key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse", unimplemented: true }' in source
+    nav_start = source.index("const GENERATE_NAV_ITEMS")
+    nav_end = source.index("const ADMIN_NAV_ITEMS")
+    generate_nav = source[nav_start:nav_end]
+
+    assert "promptLibrary" not in generate_nav
+    assert "Prompt Library" not in generate_nav

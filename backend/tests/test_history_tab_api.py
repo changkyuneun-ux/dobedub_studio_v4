@@ -380,6 +380,8 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("dateTo", params.dateTo)' in client
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in screen
     assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in screen
+    assert "v3-runpod-history-toolbar" in screen
+    assert "v3-runpod-history-actions" in screen
     assert "runpodWorkerFilter" in screen
     assert "runpodDateFrom" in screen
     assert "runpodDateTo" in screen
@@ -388,6 +390,8 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen
     assert "apiClient.retryImagePromptDraft(item.draftId)" in screen
     assert "워크플로우 내장 Negative Prompt" in screen
+    assert "<span>복사</span>" not in screen
+    assert ">Copy</button>" not in screen
     assert "Grok API 응답" in screen
     assert 'historyTab === "prompt" ?' in screen
     assert "<PromptGrokResponseDetail item={selectedPromptHistoryItem} />" in screen

@@ -27,8 +27,8 @@ export const AppShellChromeContext = React.createContext<AppShellChrome | null>(
 // 순서대로 이관). 지금은 신규 화면을 지을 때 쓸 재사용 가능한 뼈대만 갖춘 상태다.
 //
 // 사이드바 상단 고정 메뉴는 두 가지 영역(area)으로 나뉜다 - design_handoff의
-// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(Workspace / Prompt Library /
-// Task History / Assets)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
+// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(프롬프트 생성 관리 /
+// RunPod 요청 관리 / Task History / Assets)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
 // 프롬프트 카탈로그 / 워크플로 정의 / Sandbox Pod / 감사 로그)을 공통으로 반복한다.
 // 각 화면이 다르게 그리는 부분(스텝 트래커, 필터, 카탈로그 트리 등)은 sidebarExtra로,
 // 화면 하단 고정 정보(서비스 상태, 보관 기한 안내 등)는 sidebarFooter로 화면이 채운다.
@@ -50,13 +50,10 @@ type NavItem = {
 };
 
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
-// 2026-08-11: Task History를 Prompt Library보다 위로 이동(사용자 요청) - 작업
-// 이력 확인이 더 빈번한 진입점이라는 판단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
   { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
-  { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse", unimplemented: true },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "Asset 관리" 한
   // 화면으로 통합 - 사이드바 메뉴도 Assets 하나로 줄었다(컬렉션은 그 화면
   // 안의 필터로 이동).
