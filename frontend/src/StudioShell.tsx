@@ -210,6 +210,7 @@ export function StudioShell({
   const [assetsPage, setAssetsPage] = useState(1);
   const [assetsPageSize, setAssetsPageSize] = useState<20 | 50>(20);
   const [assetsTotal, setAssetsTotal] = useState(0);
+  const [assetsAllTotal, setAssetsAllTotal] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [assetsNotice, setAssetsNotice] = useState("");
   const [assetsCollectionFilter, setAssetsCollectionFilter] = useState<number | "uncategorized" | "">("");
@@ -402,11 +403,13 @@ export function StudioShell({
   // 쓰여 별도 "선택된 컬렉션 상세" 상태가 필요 없다 - 목록만 불러온다.
   async function loadCollections() {
     try {
-      const [collectionsResponse, uncategorizedResponse] = await Promise.all([
+      const [collectionsResponse, allAssetsResponse, uncategorizedResponse] = await Promise.all([
         apiClient.collections(),
+        apiClient.assets({ page: 1, pageSize: 1 }),
         apiClient.assets({ page: 1, pageSize: 1, uncategorized: true })
       ]);
       setCollections(collectionsResponse.items || []);
+      setAssetsAllTotal(allAssetsResponse.total || 0);
       setAssetsUncategorizedTotal(uncategorizedResponse.total || 0);
     } catch (error) {
       setAssetsNotice(error instanceof Error ? error.message : "컬렉션을 불러오지 못했습니다.");
@@ -2097,6 +2100,7 @@ export function StudioShell({
         pageCount={assetsPageCount}
         pageSize={assetsPageSize}
         total={assetsTotal}
+        allTotal={assetsAllTotal}
         loading={assetsLoading}
         notice={assetsNotice}
         collections={collections}

@@ -1151,6 +1151,7 @@ export function Create5aScreen({
   pageCount,
   pageSize,
   total,
+  allTotal,
   loading,
   notice,
   collections,
@@ -1175,6 +1176,7 @@ export function Create5aScreen({
   pageCount: number;
   pageSize: 20 | 50;
   total: number;
+  allTotal: number;
   loading: boolean;
   notice: string;
   collections: CollectionSummary[];
@@ -1220,7 +1222,7 @@ export function Create5aScreen({
             className={`v3-segment-nav-item ${collectionFilter === "" ? "is-active" : ""}`}
             onClick={() => onCollectionFilterChange("")}
           >
-            <div className="v3-segment-nav-head"><span>전체</span></div>
+            <div className="v3-segment-nav-head"><span>전체 목록</span><span>{allTotal}</span></div>
           </button>
           <button
             type="button"
@@ -1268,20 +1270,48 @@ export function Create5aScreen({
           />
           <button className="v3-primary-button" type="button" disabled={!createName.trim()} onClick={onCreateCollection}>컬렉션 만들기</button>
         </div>
-        <div className="v3-collection-management-list" aria-label="등록된 컬렉션">
-          {collections.length ? collections.map((collection) => (
-            <div className="v3-collection-management-item" key={collection.id}>
+        <div className="v3-collection-management-list" aria-label="컬렉션 목록 필터">
+          <button
+            type="button"
+            className={`v3-collection-management-item v3-collection-filter-row ${collectionFilter === "" ? "is-active" : ""}`}
+            onClick={() => onCollectionFilterChange("")}
+          >
+            <span>전체 목록</span>
+            <small>{allTotal}개 자산</small>
+          </button>
+          <button
+            type="button"
+            className={`v3-collection-management-item v3-collection-filter-row ${collectionFilter === "uncategorized" ? "is-active" : ""}`}
+            onClick={() => onCollectionFilterChange("uncategorized")}
+          >
+            <span>미분류</span>
+            <small>{uncategorizedTotal}개 자산</small>
+          </button>
+          {collections.map((collection) => (
+            <div
+              role="button"
+              tabIndex={0}
+              className={`v3-collection-management-item v3-collection-filter-row ${collectionFilter === collection.id ? "is-active" : ""}`}
+              key={collection.id}
+              onClick={() => onCollectionFilterChange(collection.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onCollectionFilterChange(collection.id);
+                }
+              }}
+            >
               <span>{collection.name}</span>
               <small>{collection.itemCount}개 자산</small>
               <button
                 type="button"
                 className="v3-collection-delete-button"
-                onClick={() => onDeleteCollection(collection)}
+                onClick={(event) => { event.stopPropagation(); onDeleteCollection(collection); }}
               >
                 삭제
               </button>
             </div>
-          )) : <p className="v3-muted-text">등록된 컬렉션이 없습니다.</p>}
+          ))}
         </div>
       </section>
       <div className="v3-card" style={{ overflowX: "auto" }}>

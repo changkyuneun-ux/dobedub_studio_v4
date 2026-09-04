@@ -230,6 +230,9 @@ def test_assets_sidebar_uses_collection_filters_with_uncategorized_count() -> No
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
     assert "assetsUncategorizedTotal" in shell
+    assert "assetsAllTotal" in shell
+    assert "allTotal={assetsAllTotal}" in shell
+    assert "apiClient.assets({ page: 1, pageSize: 1 })" in shell
     assert "apiClient.assets({ page: 1, pageSize: 1, uncategorized: true })" in shell
     assert "uncategorizedTotal={assetsUncategorizedTotal}" in shell
     assert 'headerTitle={`컬렉션 관리 · 전체 ${total}개`}' in screen
@@ -237,3 +240,8 @@ def test_assets_sidebar_uses_collection_filters_with_uncategorized_count() -> No
     assert '<div className="v3-segment-nav-head"><span>미분류</span><span>{uncategorizedTotal}</span></div>' in screen
     assert "collections.map((c) => (" in screen
     assert "onCollectionFilterChange(c.id)" in screen
+    assert "전체 목록" in screen
+    assert "allTotal: number" in screen
+    assert "v3-collection-filter-row" in screen
+    assert "onCollectionFilterChange(collection.id)" in screen
+    assert "event.stopPropagation(); onDeleteCollection(collection)" in screen

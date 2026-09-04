@@ -5844,15 +5844,29 @@ button {
   background: var(--v3-bg-panel);
   border: 1px solid var(--v3-accent-border);
   border-radius: 7px;
+  color: inherit;
+  cursor: pointer;
   display: inline-flex;
+  font: inherit;
   gap: 7px;
   padding: 5px 6px 5px 9px;
+}
+
+.v3-collection-management-item:hover,
+.v3-collection-management-item.is-active {
+  background: var(--v3-accent);
+  border-color: var(--v3-accent);
 }
 
 .v3-collection-management-item span {
   color: var(--v3-text-body);
   font-size: 11.5px;
   font-weight: 700;
+}
+
+.v3-collection-management-item.is-active span,
+.v3-collection-management-item.is-active small {
+  color: #fff;
 }
 
 .v3-collection-management-item small {
