@@ -194,7 +194,7 @@ def request_batch_dashboard(
     """Summarize the same non-terminal queue rows shown to the operator."""
     totals = {
         "incomplete": 0,
-        "requestWaiting": 0,
+        "pendingSubmit": 0,
         "runpodQueued": 0,
         "inProgress": 0,
         "failed": 0,
@@ -206,12 +206,14 @@ def request_batch_dashboard(
         workflow_id=workflow_id,
         status_filter=status_filter,
     ):
+        if item.get("kind") != "REQUEST_ITEM":
+            continue
         worker_id = str(item.get("workerId") or "")
         entry = workers.setdefault(worker_id, {
             "workerId": item.get("workerId"),
             "workerName": item.get("workerName") or _user_name(db, worker_id),
             "incomplete": 0,
-            "requestWaiting": 0,
+            "pendingSubmit": 0,
             "runpodQueued": 0,
             "inProgress": 0,
             "failed": 0,
@@ -219,9 +221,9 @@ def request_batch_dashboard(
         entry["incomplete"] += 1
         totals["incomplete"] += 1
         state = str(item.get("status") or "").upper()
-        if item.get("canSubmit") or state in {"PENDING_SUBMIT", "DISPATCHING"}:
-            entry["requestWaiting"] += 1
-            totals["requestWaiting"] += 1
+        if state in {"PENDING_SUBMIT", "DISPATCHING"}:
+            entry["pendingSubmit"] += 1
+            totals["pendingSubmit"] += 1
         elif state in {"QUEUED", "IN_QUEUE"}:
             entry["runpodQueued"] += 1
             totals["runpodQueued"] += 1
@@ -394,9 +396,7 @@ def _matches_queue_status_filter(item: dict, status_filter: str) -> bool:
     if normalized in {"requestable", "ready"}:
         return bool(item.get("canSubmit"))
     state = str(item.get("status") or "").upper()
-    if normalized in {"requestwaiting"}:
-        return bool(item.get("canSubmit")) or state in {"PENDING_SUBMIT", "DISPATCHING"}
-    if normalized in {"submitwaiting", "pending", "pendingsubmit", "dispatching"}:
+    if normalized in {"pendingsubmit", "submitwaiting", "pending", "dispatching"}:
         return not item.get("canSubmit") and state in {"PENDING_SUBMIT", "DISPATCHING"}
     if normalized in {"runpodqueued", "queued", "inqueue"}:
         return state in {"QUEUED", "IN_QUEUE"}

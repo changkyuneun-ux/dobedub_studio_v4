@@ -68,22 +68,64 @@ def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
     return task_history_items(1, limit)
 
 
-def paginated_history(page: int = 1, page_size: int = 20, *, workflow_id: str = "", result_status: str = "") -> dict:
+def paginated_history(
+    page: int = 1,
+    page_size: int = 20,
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
     workflow_id = str(workflow_id or "").strip()
     result_status = str(result_status or "").strip()
+    worker_id = str(worker_id or "").strip()
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
     return {
-        "items": task_history_items(page, page_size, workflow_id=workflow_id, result_status=result_status),
+        "items": task_history_items(
+            page,
+            page_size,
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+        ),
         "page": page,
         "pageSize": page_size,
-        "total": task_history_total(workflow_id=workflow_id, result_status=result_status),
+        "total": task_history_total(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+        ),
     }
 
 
-def paginated_runpod_history(page: int = 1, *, workflow_id: str = "", result_status: str = "") -> dict:
+def paginated_runpod_history(
+    page: int = 1,
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict:
     """Return the dedicated RunPod-history contract with its fixed 20-row page."""
-    return paginated_history(page, 20, workflow_id=workflow_id, result_status=result_status)
+    return paginated_history(
+        page,
+        20,
+        workflow_id=workflow_id,
+        result_status=result_status,
+        worker_id=worker_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 def append_history(item: dict) -> list[dict]:

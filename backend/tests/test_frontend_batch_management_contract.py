@@ -98,7 +98,7 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in source
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter })" in source
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in source
     assert "runpodResponse?.filename" in source
     assert "promptHistory" in source
     assert "runpodHistory" in source
@@ -178,9 +178,12 @@ def test_runpod_request_queue_uses_fixed_ten_row_pages_and_shared_dashboard_scop
     assert "statusFilter?: string" in client
     assert "runpodRequestDashboard: ()" in client
     assert "const ALL_REQUEST_STATUS_FILTER = \"all\";" in screen
+    assert "pendingSubmit" in client
+    assert "pendingSubmit" in screen
+    assert "REQUEST WAITING" not in screen
+    assert "requestWaiting" not in screen
     assert "statusFilter" in screen
     assert "전체 상태" in screen
-    assert "제출 대기" not in screen
     assert "latestLoadRequestRef" in screen
     assert "apiClient.runpodRequestDashboard()" in screen
     assert "apiClient.runpodRequestDashboard({" not in screen

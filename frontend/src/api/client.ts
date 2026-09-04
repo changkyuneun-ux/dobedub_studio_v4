@@ -411,7 +411,7 @@ export type RunpodRequestBatchResponse = {
 export type RunpodRequestDashboardResponse = {
   totals: {
     incomplete: number;
-    requestWaiting: number;
+    pendingSubmit: number;
     runpodQueued: number;
     inProgress: number;
     failed: number;
@@ -420,7 +420,7 @@ export type RunpodRequestDashboardResponse = {
     workerId?: string | null;
     workerName?: string | null;
     incomplete: number;
-    requestWaiting: number;
+    pendingSubmit: number;
     runpodQueued: number;
     inProgress: number;
     failed: number;
@@ -1043,11 +1043,14 @@ export const apiClient = {
     if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
     return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
   },
-  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string } = {}) => {
+  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; dateFrom?: string; dateTo?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     if (params.workflowId) query.set("workflowId", params.workflowId);
     if (params.resultStatus) query.set("resultStatus", params.resultStatus);
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.dateFrom) query.set("dateFrom", params.dateFrom);
+    if (params.dateTo) query.set("dateTo", params.dateTo);
     return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
   },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.

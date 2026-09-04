@@ -6760,20 +6760,27 @@ button {
 /* History separates the immutable Grok prompt audit from execution history.
    The RunPod table remains unchanged behind the second tab. */
 .v3-prompt-history-card { overflow-x: auto; }
-.v3-prompt-history-head, .v3-prompt-history-row { align-items: center; display: grid; gap: 10px; grid-template-columns: 42px 76px 98px 112px minmax(210px, 1fr) 82px 96px 185px 48px; min-width: 1080px; padding: 10px 16px; }
+.v3-prompt-history-head, .v3-prompt-history-row { align-items: center; display: grid; gap: 10px; grid-template-columns: 42px 76px 98px 130px 112px minmax(190px, 1fr) minmax(170px, .75fr) 82px 96px 58px 48px; min-width: 1280px; padding: 10px 16px; }
 .v3-prompt-history-head { background: var(--v3-bg-table); color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
-.v3-prompt-history-row { border-top: 1px solid var(--v3-border-inner); min-height: 70px; }
-.v3-prompt-history-row:hover { background: var(--v3-bg-table); }
-.v3-prompt-history-worker, .v3-prompt-history-date { color: var(--v3-text-secondary); font-size: 11px; }
+.v3-prompt-history-row { border-top: 1px solid var(--v3-border-inner); cursor: pointer; min-height: 70px; }
+.v3-prompt-history-row:hover, .v3-prompt-history-row.is-selected { background: var(--v3-bg-table); }
+.v3-prompt-history-worker, .v3-prompt-history-date, .v3-prompt-history-workflow { color: var(--v3-text-secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-prompt-history-image { align-items: center; display: flex; gap: 6px; min-width: 0; }
 .v3-prompt-history-image img { border-radius: 5px; height: 40px; object-fit: cover; width: 56px; }
 .v3-prompt-history-image small { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 8.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v3-prompt-history-layout { align-items: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 250px; }.v3-prompt-history-layout.is-single { grid-template-columns: minmax(0, 1fr); }.v3-prompt-worker-dashboard { overflow: hidden; }.v3-prompt-worker-dashboard > .v3-muted-text { margin: 0; padding: 14px 16px; }.v3-prompt-worker-stat-list { display: grid; }.v3-prompt-worker-stat-list > div { border-top: 1px solid var(--v3-border-inner); display: grid; gap: 5px; padding: 12px 16px; }.v3-prompt-worker-stat-list b { color: var(--v3-text-heading); font-size: 12px; }.v3-prompt-worker-stat-list span { color: var(--v3-text-secondary); font-size: 10px; line-height: 1.45; }.v3-prompt-history-card { min-width: 0; }
+.v3-prompt-history-layout { align-items: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 270px; }.v3-prompt-history-layout.is-single { grid-template-columns: minmax(0, 1fr); }.v3-prompt-worker-dashboard { overflow: hidden; }.v3-prompt-worker-dashboard > .v3-muted-text { margin: 0; padding: 14px 16px; }.v3-prompt-worker-stat-list { display: grid; }.v3-prompt-worker-stat-list > div { border-top: 1px solid var(--v3-border-inner); display: grid; gap: 5px; padding: 12px 16px; }.v3-prompt-worker-stat-list b { color: var(--v3-text-heading); font-size: 12px; }.v3-prompt-worker-stat-list span { color: var(--v3-text-secondary); font-size: 10px; line-height: 1.45; }.v3-prompt-history-card { min-width: 0; }
 @media (max-width: 1120px) { .v3-prompt-history-layout { grid-template-columns: 1fr; }.v3-prompt-worker-dashboard { max-width: none; }.v3-runpod-filter-bar { flex-wrap: wrap; } }
 .v3-prompt-api-meta { display: grid; gap: 2px; min-width: 0; }
 .v3-prompt-api-meta strong { color: var(--v3-text-body); font-family: var(--v3-font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-prompt-api-meta span, .v3-prompt-api-meta small { color: var(--v3-text-secondary); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-prompt-history-detail { overflow: hidden; position: sticky; top: 12px; }
+.v3-prompt-history-detail > .v3-muted-text { margin: 0; padding: 16px; }
+.v3-prompt-api-detail { display: grid; gap: 10px; padding: 14px 16px; }
+.v3-prompt-api-detail > div { border-bottom: 1px solid var(--v3-border-inner); display: grid; gap: 4px; padding-bottom: 8px; }
+.v3-prompt-api-detail span { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 9px; font-weight: 700; }
+.v3-prompt-api-detail strong { color: var(--v3-text-body); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .v3-runpod-response-cell { color: var(--v3-text-body); display: grid; font-family: var(--v3-font-mono); font-size: 10px; gap: 3px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-runpod-response-cell small { color: var(--v3-text-secondary); font-size: 8.5px; overflow: hidden; text-overflow: ellipsis; }
+.v3-runpod-filter-bar input { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 5px; color: var(--v3-text-body); font: inherit; font-size: 11px; min-height: 32px; min-width: 170px; padding: 6px 8px; }
 .v3-asset-preview-modal { max-height: min(80vh, 760px); max-width: min(900px, 90vw); overflow: auto; width: 760px; }
 .v3-asset-preview-modal > img, .v3-asset-preview-modal > video { background: #0b0d0f; border-radius: 8px; display: block; max-height: 66vh; max-width: 100%; width: 100%; }

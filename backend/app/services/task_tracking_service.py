@@ -76,17 +76,21 @@ def task_history_items(
     *,
     workflow_id: str = "",
     result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
 ) -> list[dict]:
     session = SessionLocal()
     try:
         safe_page = max(1, int(page or 1))
         safe_page_size = max(1, min(MAX_HISTORY_PAGE_SIZE, int(page_size or MAX_HISTORY_PAGE_SIZE)))
-        conditions = [WorkflowTask.deleted_at.is_(None)]
-        if workflow_id:
-            conditions.append(WorkflowTask.workflow_id == workflow_id)
-        result_condition = _history_result_status_condition(result_status)
-        if result_condition is not None:
-            conditions.append(result_condition)
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         id_statement = (
             select(WorkflowTask.id)
             # 작업 생성 직후부터 같은 Task History에서 상태를 추적한다. 완료/실패만
@@ -121,15 +125,23 @@ def task_history_items(
         session.close()
 
 
-def task_history_total(*, workflow_id: str = "", result_status: str = "") -> int:
+def task_history_total(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> int:
     session = SessionLocal()
     try:
-        conditions = [WorkflowTask.deleted_at.is_(None)]
-        if workflow_id:
-            conditions.append(WorkflowTask.workflow_id == workflow_id)
-        result_condition = _history_result_status_condition(result_status)
-        if result_condition is not None:
-            conditions.append(result_condition)
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         statement = (
             select(func.count())
             .select_from(WorkflowTask)
@@ -139,6 +151,44 @@ def task_history_total(*, workflow_id: str = "", result_status: str = "") -> int
         return int(session.scalar(statement) or 0)
     finally:
         session.close()
+
+
+def _history_filter_conditions(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> list:
+    conditions = [WorkflowTask.deleted_at.is_(None)]
+    if workflow_id:
+        conditions.append(WorkflowTask.workflow_id == workflow_id)
+    if worker_id:
+        conditions.append(WorkflowTask.user_id == worker_id)
+    from_value = _parse_history_date_boundary(date_from, end_of_day=False)
+    if from_value is not None:
+        conditions.append(WorkflowTask.created_at >= from_value)
+    to_value = _parse_history_date_boundary(date_to, end_of_day=True)
+    if to_value is not None:
+        conditions.append(WorkflowTask.created_at <= to_value)
+    result_condition = _history_result_status_condition(result_status)
+    if result_condition is not None:
+        conditions.append(result_condition)
+    return conditions
+
+
+def _parse_history_date_boundary(value: str, *, end_of_day: bool) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if len(raw) <= 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999) if end_of_day else parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    return parsed.replace(tzinfo=None)
 
 
 def _history_result_status_condition(value: str):

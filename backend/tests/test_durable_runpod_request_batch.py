@@ -201,10 +201,10 @@ def test_request_batch_dashboard_groups_counts_by_worker_owner(db_session):
     dashboard = request_batch_dashboard(db_session)
     by_worker = {item["workerId"]: item for item in dashboard["workers"]}
 
-    assert dashboard["totals"]["requestWaiting"] == 2
+    assert dashboard["totals"]["pendingSubmit"] == 2
     assert by_worker["worker_dashboard_a"]["workerName"] == "작업자 A"
-    assert by_worker["worker_dashboard_a"]["requestWaiting"] == 1
-    assert by_worker["worker_dashboard_b"]["requestWaiting"] == 1
+    assert by_worker["worker_dashboard_a"]["pendingSubmit"] == 1
+    assert by_worker["worker_dashboard_b"]["pendingSubmit"] == 1
 
 
 def test_request_queue_and_dashboard_share_one_filtered_incomplete_scope(db_session):
@@ -248,8 +248,8 @@ def test_request_queue_and_dashboard_share_one_filtered_incomplete_scope(db_sess
         "draft_queue_3",
     }
     assert dashboard["totals"] == {
-        "incomplete": 3,
-        "requestWaiting": 2,
+        "incomplete": 2,
+        "pendingSubmit": 1,
         "runpodQueued": 0,
         "inProgress": 1,
         "failed": 0,
@@ -291,6 +291,7 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
     all_rows = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
     requestable = request_batch_queue(db_session, created_by="operator", status_filter="requestable")
     unfiltered_dashboard = request_batch_dashboard(db_session)
+    pending_submit = request_batch_queue(db_session, created_by="operator", status_filter="pendingSubmit")
     progress = request_batch_queue(db_session, created_by="operator", status_filter="inProgress")
 
     assert all_rows["total"] == 5
@@ -298,12 +299,14 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
         ("PROMPT_DRAFT", "draft_filter_ready", True),
     ]
     assert unfiltered_dashboard["totals"] == {
-        "incomplete": 5,
-        "requestWaiting": 2,
+        "incomplete": 4,
+        "pendingSubmit": 1,
         "runpodQueued": 1,
         "inProgress": 1,
         "failed": 1,
     }
+    assert pending_submit["total"] == 1
+    assert pending_submit["items"][0]["promptDraftId"] == "draft_filter_pending"
     assert progress["total"] == 1
     assert progress["items"][0]["promptDraftId"] == "draft_filter_progress"
 
@@ -324,6 +327,18 @@ def test_request_dashboard_ignores_list_filters_but_preserves_permission_scope(a
             manager_draft,
         ])
         session.commit()
+        create_request_batch(
+            session,
+            created_by="dashboard-worker",
+            submitted_by="dashboard-worker",
+            items=[{"promptDraftId": "draft_dashboard_scope_worker"}],
+        )
+        create_request_batch(
+            session,
+            created_by="dashboard-manager",
+            submitted_by="dashboard-manager",
+            items=[{"promptDraftId": "draft_dashboard_scope_manager"}],
+        )
     finally:
         session.close()
 
@@ -378,7 +393,8 @@ def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_
     assert [(item["kind"], item["promptDraftId"], item["canSubmit"]) for item in queue["items"]] == [
         ("PROMPT_DRAFT", "draft_failed_before_task", True),
     ]
-    assert dashboard["totals"]["requestWaiting"] == 1
+    assert dashboard["totals"]["incomplete"] == 0
+    assert dashboard["totals"]["pendingSubmit"] == 0
 
 
 def test_success_request_item_is_not_counted_as_incomplete_queue_data(db_session):
@@ -421,7 +437,7 @@ def test_success_request_item_is_not_counted_as_incomplete_queue_data(db_session
     assert queue["items"] == []
     assert dashboard["totals"] == {
         "incomplete": 0,
-        "requestWaiting": 0,
+        "pendingSubmit": 0,
         "runpodQueued": 0,
         "inProgress": 0,
         "failed": 0,

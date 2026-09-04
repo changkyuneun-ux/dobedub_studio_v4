@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from urllib.parse import quote
+
 from sqlalchemy.exc import OperationalError
 
 from backend.app.core.security import create_access_token
@@ -312,6 +315,56 @@ def test_runpod_history_filters_by_result_status_and_workflow(api_client):
     assert [item["taskId"] for item in active_body["items"]] == ["task_history_active_a"]
 
 
+def test_runpod_history_filters_by_worker_and_execution_date(api_client):
+    session = SessionLocal()
+    try:
+        session.add_all([
+            User(id="history-user", name="History User", email=None, role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True),
+            User(id="worker-date-a", name="작업자 날짜 A", email=None, role="OPERATOR", permissions_json=[], is_active=True),
+            User(id="worker-date-b", name="작업자 날짜 B", email=None, role="OPERATOR", permissions_json=[], is_active=True),
+            WorkflowTask(
+                id="task_history_worker_date_a",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="작업자 날짜 A",
+                user_id="worker-date-a",
+                created_at=datetime(2026, 9, 3, 4, 0, 0),
+                payload_json={},
+            ),
+            WorkflowTask(
+                id="task_history_worker_date_b",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="작업자 날짜 B",
+                user_id="worker-date-b",
+                created_at=datetime(2026, 9, 3, 5, 0, 0),
+                payload_json={},
+            ),
+            WorkflowTask(
+                id="task_history_worker_other_date",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="작업자 날짜 A",
+                user_id="worker-date-a",
+                created_at=datetime(2026, 9, 4, 4, 0, 0),
+                payload_json={},
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get(
+        f"/api/history/runpod?page=1&workerId={quote('worker-date-a')}&dateFrom=2026-09-03&dateTo=2026-09-03",
+        headers=_authorized_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["taskId"] for item in body["items"]] == ["task_history_worker_date_a"]
+
+
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
@@ -322,5 +375,15 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "runpodHistory: (params:" in client
     assert 'query.set("workflowId", params.workflowId)' in client
     assert 'query.set("resultStatus", params.resultStatus)' in client
+    assert 'query.set("workerId", params.workerId)' in client
+    assert 'query.set("dateFrom", params.dateFrom)' in client
+    assert 'query.set("dateTo", params.dateTo)' in client
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in screen
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in screen
+    assert "runpodWorkerFilter" in screen
+    assert "runpodDateFrom" in screen
+    assert "runpodDateTo" in screen
+    assert "selectedPromptHistoryDraftId" in screen
+    assert "apiClient.retryImagePromptDraft(item.draftId)" in screen
+    assert "워크플로우 내장 Negative Prompt" in screen
+    assert "Grok API 응답" in screen

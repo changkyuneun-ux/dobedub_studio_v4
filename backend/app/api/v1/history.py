@@ -58,10 +58,20 @@ def runpod_history(
     page: int = 1,
     workflowId: str = "",
     resultStatus: str = "",
+    workerId: str = "",
+    dateFrom: str = "",
+    dateTo: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     """RunPod task history, deliberately fixed to 20 rows per page."""
-    return studio_api_service.paginated_runpod_history(page, workflow_id=workflowId, result_status=resultStatus)
+    return studio_api_service.paginated_runpod_history(
+        page,
+        workflow_id=workflowId,
+        result_status=resultStatus,
+        worker_id=workerId,
+        date_from=dateFrom,
+        date_to=dateTo,
+    )
 
 
 @router.post("/{task_id}/delete")
