@@ -387,3 +387,7 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "apiClient.retryImagePromptDraft(item.draftId)" in screen
     assert "워크플로우 내장 Negative Prompt" in screen
     assert "Grok API 응답" in screen
+    assert 'historyTab === "prompt" ?' in screen
+    assert "<PromptGrokResponseDetail item={selectedPromptHistoryItem} />" in screen
+    assert "onSelectGrokItem={setSelectedPromptHistoryItem}" in screen
+    assert "v3-prompt-history-detail" not in screen

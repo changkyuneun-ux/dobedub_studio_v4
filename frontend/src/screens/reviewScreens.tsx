@@ -142,6 +142,7 @@ export function Create3aScreen({
   const [runpodWorkerFilter, setRunpodWorkerFilter] = useState("");
   const [runpodDateFrom, setRunpodDateFrom] = useState("");
   const [runpodDateTo, setRunpodDateTo] = useState("");
+  const [selectedPromptHistoryItem, setSelectedPromptHistoryItem] = useState<GrokImagePromptDraftResponse | null>(null);
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
   // 선택한 Run이 바뀌어도 사용자가 펼쳐둔 섹션은 유지한다(세션 내 UX 편의).
@@ -261,7 +262,9 @@ export function Create3aScreen({
       }
       sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 20건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
-        selectedItem ? (
+        historyTab === "prompt" ? (
+          <PromptGrokResponseDetail item={selectedPromptHistoryItem} />
+        ) : selectedItem ? (
           <>
             <div className="v3-panel-title-row">
               <div className="v3-panel-title">RUN #{selectedItem.taskId.slice(0, 8)}</div>
@@ -442,7 +445,7 @@ export function Create3aScreen({
       </div>
 
       {historyTab === "prompt" ? (
-        <PromptGenerationHistory user={user} />
+        <PromptGenerationHistory user={user} onSelectGrokItem={setSelectedPromptHistoryItem} />
       ) : (
         <>
       <div className="v3-inline-actions" style={{ margin: "12px 0" }}>
@@ -593,7 +596,13 @@ export function Create3aScreen({
   );
 }
 
-function PromptGenerationHistory({ user }: { user: User | null }) {
+function PromptGenerationHistory({
+  user,
+  onSelectGrokItem
+}: {
+  user: User | null;
+  onSelectGrokItem: (item: GrokImagePromptDraftResponse | null) => void;
+}) {
   const [items, setItems] = useState<GrokImagePromptDraftResponse[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -609,12 +618,15 @@ function PromptGenerationHistory({ user }: { user: User | null }) {
     const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter });
     setItems(response.items);
     setTotal(response.total);
+    return response;
   }
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setNotice("");
+    setSelectedPromptHistoryDraftId("");
+    onSelectGrokItem(null);
     apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })
       .then((response) => {
         if (!active) return;
@@ -633,15 +645,17 @@ function PromptGenerationHistory({ user }: { user: User | null }) {
     return () => {
       active = false;
     };
-  }, [page, generationFilter, runpodFilter]);
+  }, [page, generationFilter, runpodFilter, onSelectGrokItem]);
 
   async function retryPromptHistoryItem(item: GrokImagePromptDraftResponse) {
     setRetryingDraftId(item.draftId);
     setNotice("");
     try {
       await apiClient.retryImagePromptDraft(item.draftId);
-      await loadPromptHistory(page);
+      const response = await loadPromptHistory(page);
+      const updatedItem = response.items.find((candidate) => candidate.draftId === item.draftId) || item;
       setSelectedPromptHistoryDraftId(item.draftId);
+      onSelectGrokItem(updatedItem);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "프롬프트 재생성 요청에 실패했습니다.");
     } finally {
@@ -652,7 +666,6 @@ function PromptGenerationHistory({ user }: { user: User | null }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
-  const selectedPromptHistoryItem = items.find((item) => item.draftId === selectedPromptHistoryDraftId) || null;
 
   return (
     <div className="v3-prompt-history-layout">
@@ -676,7 +689,14 @@ function PromptGenerationHistory({ user }: { user: User | null }) {
         const generationLabel = item.status === "FAILED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
         const canRetry = Boolean(user?.id && item.createdBy === user.id);
         return (
-          <div className={`v3-prompt-history-row ${selectedPromptHistoryDraftId === item.draftId ? "is-selected" : ""}`} key={item.draftId} onClick={() => setSelectedPromptHistoryDraftId(item.draftId)}>
+          <div
+            className={`v3-prompt-history-row ${selectedPromptHistoryDraftId === item.draftId ? "is-selected" : ""}`}
+            key={item.draftId}
+            onClick={() => {
+              setSelectedPromptHistoryDraftId(item.draftId);
+              onSelectGrokItem(item);
+            }}
+          >
             <span className="v3-review-seg-name">{(page - 1) * pageSize + index + 1}</span>
             <span className="v3-prompt-history-worker">{item.createdByName || item.createdBy || "-"}</span>
             <span className="v3-prompt-history-date">{formatKstHistoryDate(item.createdAt)}</span>
@@ -710,25 +730,30 @@ function PromptGenerationHistory({ user }: { user: User | null }) {
         </div>
       </div>
       </div>
-      <aside className="v3-card v3-prompt-history-detail">
-        <div className="v3-card-header">
-          <div className="v3-card-header-title">Grok API 응답</div>
-          <span className="v3-card-header-meta">{selectedPromptHistoryItem?.draftId || ""}</span>
-        </div>
-        {selectedPromptHistoryItem ? (
-          <div className="v3-prompt-api-detail">
-            <div><span>Model</span><strong>{selectedPromptHistoryItem.grokResponse?.model || selectedPromptHistoryItem.model || "-"}</strong></div>
-            <div><span>Endpoint</span><strong>{compactEndpoint(selectedPromptHistoryItem.grokResponse?.endpoint)}</strong></div>
-            <div><span>Usage</span><strong>{formatGrokUsage(selectedPromptHistoryItem.grokResponse)}</strong></div>
-            <div><span>Image Type</span><strong>{selectedPromptHistoryItem.imageType || "-"}</strong></div>
-            <div><span>Warnings</span><strong>{selectedPromptHistoryItem.warnings?.length ? selectedPromptHistoryItem.warnings.join(" · ") : "-"}</strong></div>
-            <div><span>Error</span><strong>{selectedPromptHistoryItem.error || "-"}</strong></div>
-          </div>
-        ) : (
-          <p className="v3-muted-text">왼쪽 목록에서 작업을 선택하세요.</p>
-        )}
-      </aside>
     </div>
+  );
+}
+
+function PromptGrokResponseDetail({ item }: { item: GrokImagePromptDraftResponse | null }) {
+  if (!item) {
+    return <p className="v3-muted-text">왼쪽 목록에서 작업을 선택하세요.</p>;
+  }
+
+  return (
+    <>
+      <div className="v3-panel-title-row">
+        <div className="v3-panel-title">Grok API 응답</div>
+        <span className="v3-card-header-meta">{item.draftId}</span>
+      </div>
+      <div className="v3-prompt-api-detail">
+        <div><span>Model</span><strong>{item.grokResponse?.model || item.model || "-"}</strong></div>
+        <div><span>Endpoint</span><strong>{compactEndpoint(item.grokResponse?.endpoint)}</strong></div>
+        <div><span>Usage</span><strong>{formatGrokUsage(item.grokResponse)}</strong></div>
+        <div><span>Image Type</span><strong>{item.imageType || "-"}</strong></div>
+        <div><span>Warnings</span><strong>{item.warnings?.length ? item.warnings.join(" · ") : "-"}</strong></div>
+        <div><span>Error</span><strong>{item.error || "-"}</strong></div>
+      </div>
+    </>
   );
 }
 
