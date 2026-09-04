@@ -178,8 +178,14 @@ def test_runpod_request_queue_uses_fixed_ten_row_pages_and_shared_dashboard_scop
     assert "statusFilter?: string" in client
     assert "runpodRequestDashboard: ()" in client
     assert "const ALL_REQUEST_STATUS_FILTER = \"all\";" in screen
+    assert "requestReady" in client
+    assert "requestReady" in screen
     assert "pendingSubmit" in client
     assert "pendingSubmit" in screen
+    assert "completed" in client
+    assert "dashboard.completed" in screen
+    assert "REQUEST READY" in screen
+    assert "COMPLETED" in screen
     assert "REQUEST WAITING" not in screen
     assert "requestWaiting" not in screen
     assert "statusFilter" in screen
@@ -203,3 +209,9 @@ def test_admin_navigation_uses_the_korean_prompt_instruction_label() -> None:
     source = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
 
     assert 'key: "adminGrokInstructions", label: "프롬프트 지시 관리"' in source
+
+
+def test_prompt_library_menu_is_disabled_in_generate_sidebar() -> None:
+    source = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
+
+    assert '{ key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse", unimplemented: true }' in source

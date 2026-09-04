@@ -118,9 +118,11 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
   }), [rows, workflows]);
   const dashboard = requestDashboard?.totals || {
     incomplete: 0,
+    requestReady: 0,
     pendingSubmit: 0,
     runpodQueued: 0,
     inProgress: 0,
+    completed: 0,
     failed: 0
   };
 
@@ -186,10 +188,10 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
 
   return (
     <AppShell user={user} area="generate" activeItem="runpodRequests" onNavigate={(key) => shellNavigate(key, onGoTo)} headerEyebrow="GENERATE · RUNPOD REQUEST MANAGEMENT" headerTitle="RunPod 요청 관리" headerActions={<><span className="v3-status-chip is-ok">GROK CONFIGURED</span><button className="v3-secondary-button" type="button" onClick={() => void load()}>상태 새로고침</button></>}>
-      <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">RunPod Progress Dashboard</div><span className="v3-muted-text">미완료 작업만 표시 · 완료 결과는 Task History에서 조회</span></div>
-        <div className="v3-runpod-progress-grid"><div className="is-total"><small>INCOMPLETE REQUESTS</small><strong>{dashboard.incomplete}</strong><i><b style={{ width: `${dashboard.incomplete ? (dashboard.pendingSubmit / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.runpodQueued / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.inProgress / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.failed / dashboard.incomplete) * 100 : 0}%` }} /></i></div><div><small>PENDING SUBMIT</small><strong>{dashboard.pendingSubmit}</strong></div><div><small>RUNPOD QUEUED</small><strong>{dashboard.runpodQueued}</strong></div><div><small>IN PROGRESS</small><strong>{dashboard.inProgress}</strong></div><div><small>FAILED</small><strong>{dashboard.failed}</strong></div></div>
+      <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">RunPod Progress Dashboard</div><span className="v3-muted-text">요청 준비부터 완료/실패까지 전체 처리 현황</span></div>
+        <div className="v3-runpod-progress-grid"><div className="is-total"><small>INCOMPLETE REQUESTS</small><strong>{dashboard.incomplete}</strong><i><b style={{ width: `${dashboard.incomplete ? (dashboard.requestReady / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.pendingSubmit / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.runpodQueued / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.inProgress / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.completed / dashboard.incomplete) * 100 : 0}%` }} /><b style={{ width: `${dashboard.incomplete ? (dashboard.failed / dashboard.incomplete) * 100 : 0}%` }} /></i></div><div><small>REQUEST READY</small><strong>{dashboard.requestReady}</strong></div><div><small>PENDING SUBMIT</small><strong>{dashboard.pendingSubmit}</strong></div><div><small>RUNPOD QUEUED</small><strong>{dashboard.runpodQueued}</strong></div><div><small>IN PROGRESS</small><strong>{dashboard.inProgress}</strong></div><div><small>COMPLETED</small><strong>{dashboard.completed}</strong></div><div><small>FAILED</small><strong>{dashboard.failed}</strong></div></div>
         <p className="v3-runpod-dashboard-note">유휴 worker {connection?.workers?.idle ?? "-"} · RunPod queue {connection?.jobs?.inQueue ?? "-"} · 선택 요청은 서버 작업 모니터가 유휴 worker를 확인해 하나씩 전송합니다.</p>
-        {canManageRequests ? <div className="v3-runpod-worker-summary">{(requestDashboard?.workers || []).map((worker) => <div key={worker.workerId || "unknown"}><b>{worker.workerName || worker.workerId}</b><span>Pending Submit {worker.pendingSubmit} · 큐 {worker.runpodQueued} · 실행 {worker.inProgress} · 실패 {worker.failed}</span></div>)}{!(requestDashboard?.workers || []).length ? <span className="v3-muted-text">미완료 요청이 있는 작업자가 없습니다.</span> : null}</div> : null}
+        {canManageRequests ? <div className="v3-runpod-worker-summary">{(requestDashboard?.workers || []).map((worker) => <div key={worker.workerId || "unknown"}><b>{worker.workerName || worker.workerId}</b><span>요청 준비 {worker.requestReady} · Pending {worker.pendingSubmit} · 큐 {worker.runpodQueued} · 실행 {worker.inProgress} · 완료 {worker.completed} · 실패 {worker.failed}</span></div>)}{!(requestDashboard?.workers || []).length ? <span className="v3-muted-text">표시할 RunPod 요청 현황이 없습니다.</span> : null}</div> : null}
       </section>
 
       <section className="v3-card v3-runpod-request-card"><div className="v3-card-header"><div><div className="v3-card-header-title">Incomplete RunPod Requests</div><span className="v3-muted-text">생성 완료 이미지만 선택 · Workflow와 Length는 이미지별로 연결</span></div><button className="v3-primary-button" type="button" disabled={!selected.length || busy} onClick={() => void submit()}>{busy ? "등록 중..." : `선택 ${selected.length}건 RunPod 요청`}</button></div>

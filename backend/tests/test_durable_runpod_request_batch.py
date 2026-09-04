@@ -248,10 +248,12 @@ def test_request_queue_and_dashboard_share_one_filtered_incomplete_scope(db_sess
         "draft_queue_3",
     }
     assert dashboard["totals"] == {
-        "incomplete": 2,
+        "incomplete": 3,
+        "requestReady": 1,
         "pendingSubmit": 1,
         "runpodQueued": 0,
         "inProgress": 1,
+        "completed": 0,
         "failed": 0,
     }
 
@@ -262,11 +264,13 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
         _asset("asset_filter_pending"),
         _asset("asset_filter_queued"),
         _asset("asset_filter_progress"),
+        _asset("asset_filter_completed"),
         _asset("asset_filter_failed"),
         _draft("asset_filter_ready", draft_id="draft_filter_ready", positive="ready"),
         _draft("asset_filter_pending", draft_id="draft_filter_pending", positive="pending"),
         _draft("asset_filter_queued", draft_id="draft_filter_queued", positive="queued"),
         _draft("asset_filter_progress", draft_id="draft_filter_progress", positive="progress"),
+        _draft("asset_filter_completed", draft_id="draft_filter_completed", positive="completed"),
         _draft("asset_filter_failed", draft_id="draft_filter_failed", positive="failed"),
     ])
     db_session.commit()
@@ -278,12 +282,14 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
             {"promptDraftId": "draft_filter_pending"},
             {"promptDraftId": "draft_filter_queued"},
             {"promptDraftId": "draft_filter_progress"},
+            {"promptDraftId": "draft_filter_completed"},
             {"promptDraftId": "draft_filter_failed"},
         ],
     )
     by_draft = {item["promptDraftId"]: db_session.get(RunpodRequestItem, item["id"]) for item in batch["items"]}
     by_draft["draft_filter_queued"].status = "IN_QUEUE"
     by_draft["draft_filter_progress"].status = "IN_PROGRESS"
+    by_draft["draft_filter_completed"].status = "COMPLETED"
     by_draft["draft_filter_failed"].status = "FAILED"
     refresh_request_batch_summary(db_session, batch["id"])
     db_session.commit()
@@ -299,10 +305,12 @@ def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope
         ("PROMPT_DRAFT", "draft_filter_ready", True),
     ]
     assert unfiltered_dashboard["totals"] == {
-        "incomplete": 4,
+        "incomplete": 6,
+        "requestReady": 1,
         "pendingSubmit": 1,
         "runpodQueued": 1,
         "inProgress": 1,
+        "completed": 1,
         "failed": 1,
     }
     assert pending_submit["total"] == 1
@@ -393,12 +401,13 @@ def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_
     assert [(item["kind"], item["promptDraftId"], item["canSubmit"]) for item in queue["items"]] == [
         ("PROMPT_DRAFT", "draft_failed_before_task", True),
     ]
-    assert dashboard["totals"]["incomplete"] == 0
+    assert dashboard["totals"]["incomplete"] == 1
+    assert dashboard["totals"]["requestReady"] == 1
     assert dashboard["totals"]["pendingSubmit"] == 0
 
 
-def test_success_request_item_is_not_counted_as_incomplete_queue_data(db_session):
-    """Dirty legacy SUCCESS item rows must not make queue totals diverge from the dashboard."""
+def test_success_request_item_counts_in_dashboard_but_not_queue_data(db_session):
+    """Completed items remain out of the request queue but visible in dashboard totals."""
     db_session.add_all([
         _asset("asset_success_item"),
         RunpodRequestBatch(
@@ -436,10 +445,12 @@ def test_success_request_item_is_not_counted_as_incomplete_queue_data(db_session
     assert queue["total"] == 0
     assert queue["items"] == []
     assert dashboard["totals"] == {
-        "incomplete": 0,
+        "incomplete": 1,
+        "requestReady": 0,
         "pendingSubmit": 0,
         "runpodQueued": 0,
         "inProgress": 0,
+        "completed": 1,
         "failed": 0,
     }
 

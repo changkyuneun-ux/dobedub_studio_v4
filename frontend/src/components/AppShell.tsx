@@ -56,7 +56,7 @@ const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
   { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
-  { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse" },
+  { key: "promptLibrary", label: "Prompt Library", permission: "prompts:reuse", unimplemented: true },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "Asset 관리" 한
   // 화면으로 통합 - 사이드바 메뉴도 Assets 하나로 줄었다(컬렉션은 그 화면
   // 안의 필터로 이동).

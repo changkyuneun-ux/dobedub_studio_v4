@@ -191,12 +191,14 @@ def request_batch_dashboard(
     workflow_id: str = "",
     status_filter: str = "",
 ) -> dict:
-    """Summarize the same non-terminal queue rows shown to the operator."""
+    """Summarize request-ready drafts and active request batch item states."""
     totals = {
         "incomplete": 0,
+        "requestReady": 0,
         "pendingSubmit": 0,
         "runpodQueued": 0,
         "inProgress": 0,
+        "completed": 0,
         "failed": 0,
     }
     workers: dict[str, dict] = {}
@@ -205,21 +207,26 @@ def request_batch_dashboard(
         created_by=created_by,
         workflow_id=workflow_id,
         status_filter=status_filter,
+        include_terminal_items=True,
     ):
-        if item.get("kind") != "REQUEST_ITEM":
-            continue
         worker_id = str(item.get("workerId") or "")
         entry = workers.setdefault(worker_id, {
             "workerId": item.get("workerId"),
             "workerName": item.get("workerName") or _user_name(db, worker_id),
             "incomplete": 0,
+            "requestReady": 0,
             "pendingSubmit": 0,
             "runpodQueued": 0,
             "inProgress": 0,
+            "completed": 0,
             "failed": 0,
         })
         entry["incomplete"] += 1
         totals["incomplete"] += 1
+        if item.get("canSubmit"):
+            entry["requestReady"] += 1
+            totals["requestReady"] += 1
+            continue
         state = str(item.get("status") or "").upper()
         if state in {"PENDING_SUBMIT", "DISPATCHING"}:
             entry["pendingSubmit"] += 1
@@ -230,6 +237,9 @@ def request_batch_dashboard(
         elif state in {"IN_PROGRESS", "RUNNING"}:
             entry["inProgress"] += 1
             totals["inProgress"] += 1
+        elif state in {"COMPLETED", "SUCCESS"}:
+            entry["completed"] += 1
+            totals["completed"] += 1
         elif state in {"FAILED", "CANCELLED", "TIMED_OUT"}:
             entry["failed"] += 1
             totals["failed"] += 1
@@ -279,6 +289,7 @@ def _request_queue_entries(
     created_by: str | None = None,
     workflow_id: str = "",
     status_filter: str = "",
+    include_terminal_items: bool = False,
 ) -> list[dict]:
     """Build a canonical, de-duplicated view of work not yet completed."""
     terminal_batches = {"COMPLETED", "SUCCESS", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
@@ -298,7 +309,7 @@ def _request_queue_entries(
     queue_rows = [
         (request_item, batch)
         for request_item, batch in db.execute(batch_statement).all()
-        if str(request_item.status or "").upper() not in terminal_items
+        if include_terminal_items or str(request_item.status or "").upper() not in terminal_items
     ]
     item_assets, item_runpod_job_ids = _item_relations(db, [row[0] for row in queue_rows])
     for request_item, batch in queue_rows:
@@ -332,7 +343,6 @@ def _request_queue_entries(
             .where(
                 RunpodRequestItem.prompt_draft_id.is_not(None),
                 RunpodRequestBatch.status.not_in(terminal_batches),
-                RunpodRequestItem.status.not_in(terminal_items),
             )
         ).all()
     }
@@ -404,6 +414,8 @@ def _matches_queue_status_filter(item: dict, status_filter: str) -> bool:
         return state in {"IN_PROGRESS", "RUNNING"}
     if normalized in {"failed", "cancelled", "timedout"}:
         return state in {"FAILED", "CANCELLED", "TIMED_OUT"}
+    if normalized in {"completed", "complete", "success"}:
+        return state in {"COMPLETED", "SUCCESS"}
     return True
 
 

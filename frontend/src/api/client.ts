@@ -411,18 +411,22 @@ export type RunpodRequestBatchResponse = {
 export type RunpodRequestDashboardResponse = {
   totals: {
     incomplete: number;
+    requestReady: number;
     pendingSubmit: number;
     runpodQueued: number;
     inProgress: number;
+    completed: number;
     failed: number;
   };
   workers: Array<{
     workerId?: string | null;
     workerName?: string | null;
     incomplete: number;
+    requestReady: number;
     pendingSubmit: number;
     runpodQueued: number;
     inProgress: number;
+    completed: number;
     failed: number;
   }>;
 };

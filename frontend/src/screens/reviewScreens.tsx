@@ -614,6 +614,11 @@ function PromptGenerationHistory({
   const [retryingDraftId, setRetryingDraftId] = useState("");
   const pageSize = 20;
 
+  function selectPromptHistoryItem(item: GrokImagePromptDraftResponse | null) {
+    setSelectedPromptHistoryDraftId(item?.draftId || "");
+    onSelectGrokItem(item);
+  }
+
   async function loadPromptHistory(targetPage = page) {
     const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter });
     setItems(response.items);
@@ -625,13 +630,12 @@ function PromptGenerationHistory({
     let active = true;
     setLoading(true);
     setNotice("");
-    setSelectedPromptHistoryDraftId("");
-    onSelectGrokItem(null);
     apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })
       .then((response) => {
         if (!active) return;
         setItems(response.items);
         setTotal(response.total);
+        selectPromptHistoryItem(response.items[0] || null);
       })
       .catch((error: Error) => {
         if (!active) return;
@@ -654,8 +658,7 @@ function PromptGenerationHistory({
       await apiClient.retryImagePromptDraft(item.draftId);
       const response = await loadPromptHistory(page);
       const updatedItem = response.items.find((candidate) => candidate.draftId === item.draftId) || item;
-      setSelectedPromptHistoryDraftId(item.draftId);
-      onSelectGrokItem(updatedItem);
+      selectPromptHistoryItem(updatedItem);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "프롬프트 재생성 요청에 실패했습니다.");
     } finally {
@@ -693,8 +696,7 @@ function PromptGenerationHistory({
             className={`v3-prompt-history-row ${selectedPromptHistoryDraftId === item.draftId ? "is-selected" : ""}`}
             key={item.draftId}
             onClick={() => {
-              setSelectedPromptHistoryDraftId(item.draftId);
-              onSelectGrokItem(item);
+              selectPromptHistoryItem(item);
             }}
           >
             <span className="v3-review-seg-name">{(page - 1) * pageSize + index + 1}</span>
