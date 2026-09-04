@@ -28,15 +28,37 @@
 
 ---
 
-## 브랜치 기준 (2026-09-04 main 대조 완료)
+## 현재 상태 및 재작업 범위 (2026-09-04 3차 개정)
 
-**이 계획은 `main` 기준이다.** 작업 브랜치는 `main`에서 새로 딴다:
+**브랜치 `feat/batch-job-management`, main(`1d3eee1`)에서 분기. Task 1~3은 이미 커밋되어 있다.**
+이 계획을 처음부터 실행하지 말 것 — 아래 표의 완료분을 다시 수행하면 마이그레이션이 충돌한다.
 
-```bash
-git checkout main && git pull && git checkout -b feat/batch-job-management
-```
+| 커밋 | 내용 | 리뷰 | 상태 |
+|---|---|---|---|
+| `076f1f2` | 스펙 + 계획 문서 | — | — |
+| `7b1ec62` | **Task 1** 스키마 (`batch_jobs` + 4개 링크 컬럼) | ✅ spec / ✅ quality | 완료. **R-A로 보강 필요** |
+| `48a030b` | **Task 2** `create_batch_job` | ✅ spec / ✅ quality | 완료. **R-C로 결함 수정 필요** |
+| `c592000` | **Task 3** 승격 | 미실시 | 완료. **R-D로 결함 수정 필요** |
+| (작업 트리) | `batchJobId` 인젝션 수정 — 프로덕션 코드만, 테스트 없음 | — | **R-B로 마무리** |
 
-`perf/server-read-performance`에서 작업하지 말 것. 그 브랜치는 `main`보다 **16커밋 뒤처져 있고**, 뒤처진 커밋들이 이 계획이 건드리는 파일(`history.py`, `prompt_batch_service.py`, `studio_api_service.py`, `task_tracking_service.py`, `reviewScreens.tsx`, `client.ts`)을 크게 바꿔놓았다. 그 브랜치의 성능 작업은 이미 `84b6750 Carry forward server read performance safeguards`로 main에 반영돼 있다.
+`docs/superpowers/plans/` 의 이 문서가 유일한 기준이다. 세션 원장
+(`.superpowers/sdd/progress.md`)은 `.superpowers/sdd/.gitignore`가 `*`로 무시하는
+**세션 스크래치**이므로, 다른 사람이나 새 세션은 그것을 볼 수 없다. 진행 상태는 반드시
+이 표를 갱신해서 남긴다.
+
+**실행 순서:** R-A → R-B → R-C → R-D → Task 4 → Task 5 → … → Task 12.
+Task 1·2·3 본문은 이미 수행된 기록으로만 남겨 둔다(재수행 금지).
+
+**3차 개정에서 새로 확정된 결함 5건** — 상세와 가드레일은 아래 사이드 이펙트 절의
+SE-11 ~ SE-15 참조. 요약:
+
+| 결함 | 영향 | 해소 |
+|---|---|---|
+| 승격에 원자적 claim 없음 | **ECS Canary 배포마다** 구·신 revision이 동시에 승격 → RunPod 중복 과금 | R-D |
+| `create_batch_job`의 트랜잭션이 실제로는 쪼개짐 | 배치가 영구히 `INCOMPLETE`로 고착 | R-C |
+| 128건 승격이 monitor_loop 장기 점유 | RunPod 상태 폴링·프롬프트 처리 지연 | R-D |
+| 대시보드가 비정규화 카운터를 안 쓰고 매번 재계산 | 3초 폴링 × 활성 배치 수만큼 GROUP BY | R-A + Task 4 |
+| 배포 게이트 누락 | 이미지가 마이그레이션보다 먼저 뜨면 **Task History 전면 장애** | Task 12 |
 
 **main에서 확인된 사실 (계획의 전제):**
 
@@ -174,6 +196,92 @@ git checkout main && git pull && git checkout -b feat/batch-job-management
 
 ---
 
+### SE-11 (치명) ECS Canary 배포마다 승격이 중복 실행된다
+
+runbook은 배포 전략을 **"ECS Express Canary, 신규 task health check 후 이전 revision drain"**
+(`docs/ecs-express-deployment-runbook.md:18`)으로 못박고 있다. Canary 구간에서는 **구·신 revision이
+동시에 살아 있고 각자 `monitor_loop`을 돌린다.** 정상 운영이 단일 인스턴스여도 **배포할 때마다**
+창이 열린다.
+
+`promote_ready_batch_drafts()`는 READY draft를 조회한 뒤 요청을 만든다. 그 사이에 다른 프로세스가
+같은 draft를 읽는다. `runpod_request_items`에는 `prompt_draft_id` 중복 방지 제약이 없고,
+`JOB_LOCK`은 프로세스 내부 락이라 소용이 없다. 결과는 **RunPod 이중 제출 = 실제 이중 과금 +
+영상 두 벌**이다.
+
+> **가드레일 G-10 (R-D):** 승격 대상 draft를 조건부 UPDATE로 **선점(claim)한 뒤** 요청을 만든다.
+> `task_tracking_service.claim_next_pending_submission()`(`:510-540`)이 같은 목적으로 쓰는
+> 패턴을 그대로 따른다 — 후보를 읽고, `WHERE ... AND <아직 미선점>` 조건부 UPDATE의 `rowcount`가
+> 1일 때만 그 행을 자기 것으로 삼는다.
+> **`prompt_draft_id` 유니크 인덱스는 쓸 수 없다** — 사용자가 같은 draft를 정당하게 재제출하는
+> 기존 동작(기존 RunPod 요청 관리 화면)을 깨뜨린다.
+
+### SE-12 (치명) `create_batch_job`의 "단일 트랜잭션"이 실제로는 성립하지 않는다
+
+`prompt_batch_service.create_prompt_generation_batch()`는 **내부에서 `db.commit()`을 호출한다**
+(`prompt_batch_service.py:81`). 현재 커밋된 `create_batch_job`(`48a030b`)의 실행 순서는
+`BatchJob` add → `flush` → **내부 commit** → `batch_job_id` UPDATE 2회 → `commit` 이다.
+
+내부 commit 시점에 `BatchJob`·`PromptGenerationBatch`·draft N건이 **`batch_job_id = NULL`인 채로
+영구 저장된다.** 그 뒤 UPDATE가 실패하거나 프로세스가 죽으면 `_counts_for()`는 그 배치의 draft를
+0건으로 보고, `promptTerminal(0) >= total_images(N)`가 영원히 거짓이 되어 **배치가 대시보드에서
+사라지지 않는다.**
+
+Task 2 리뷰는 이 창을 놓쳤다 — "지시문 없는 워크플로"(쓰기 **전** raise) 경로만 검증했고
+내부 commit **이후** 창은 보지 않았다.
+
+> **가드레일 G-11 (R-C):** `create_prompt_generation_batch()`에 `commit: bool = True` 키워드를
+> 추가하고, 배치 경로는 `commit=False`로 호출해 **배치 서비스가 트랜잭션을 소유**한다.
+> 기존 호출자는 기본값으로 무변경 동작한다. 링크 컬럼은 UPDATE가 아니라 **행을 만들 때 채운다.**
+
+### SE-13 (높음) 128건 승격이 monitor_loop을 장기 점유한다
+
+`studio_api_service.create_runpod_request_batch()`는 `JOB_LOCK`을 잡은 채 항목마다
+`job_payload_from_request_item()` → `create_job()`을 **순차 호출**한다(`:487`, `:503-506`).
+`create_job`은 워크플로 JSON을 패치하고 입력 이미지를 읽는다. 한 배치의 READY draft 128건을
+한 주기에 몰아 승격하면 그 사이 `monitor_active_jobs`(RunPod 상태 폴링)와 프롬프트 처리가 밀린다.
+
+> **가드레일 G-12 (R-D):** 승격을 **주기당 상한**(`PROMOTION_LIMIT_PER_CYCLE = 20`)으로 끊는다.
+> 남은 draft는 다음 주기에 처리된다. 이는 스펙이 요구하는 "서버가 유휴 worker를 확인해 순차 전송"과
+> 오히려 더 잘 맞고, G-1(공정 스케줄링)의 의도와도 일관된다.
+
+### SE-14 (높음) 대시보드가 비정규화 카운터를 쓰지 않는다
+
+`batch_jobs`에 카운터를 둔 이유는 조회 시 조인·집계를 피하기 위해서인데, 계획의
+`list_active_batch_jobs()`는 배치마다 `_counts_for()`를 호출해 **매번 GROUP BY 2회를 다시 돈다.**
+화면 폴링 3초 × 활성 배치 수만큼 반복되고 monitor의 5초 갱신과 겹친다. 인덱스도
+`batch_job_id` 단일 컬럼뿐이라 `WHERE batch_job_id = ? GROUP BY status`에 부족하다.
+이 저장소는 과거 운영에서 MySQL 정렬 메모리 오류를 겪은 이력이 있다.
+
+> **가드레일 G-13 (R-A + Task 4):** 대시보드가 쓰는 5개 값(`prompt_waiting_count`,
+> `prompt_generating_count`, `runpod_pending_submit_count`, `runpod_queued_count`,
+> `runpod_in_progress_count`)도 `batch_jobs`에 **저장**한다. `_counts_for()`는 monitor의
+> `refresh_batch_job_counters()`만 호출하고, 조회 경로는 단순 SELECT만 한다.
+> 복합 인덱스 `(batch_job_id, status)` on `image_prompt_drafts`,
+> `(batch_job_id, deleted_at, status)` on `workflow_tasks`를 추가한다.
+
+### SE-15 (치명) 배포 게이트가 빠져 있다
+
+운영은 `RUN_SERVER_AUTO_MIGRATE=0`이다(`.env.example:86`, `backend/app/main.py:45`).
+새 ORM 컬럼 `batch_job_id`는 `WorkflowTask`·`ImagePromptDraft` 등 **기존 화면이 매번 조회하는
+테이블**에 붙는다. SQLAlchemy는 컬럼을 명시해 SELECT하므로, 마이그레이션 전에 새 이미지가 뜨면
+`Unknown column 'batch_job_id'`로 **Task History·프롬프트 생성 관리·RunPod 요청 관리가 전부
+장애**가 난다.
+
+> **가드레일 G-14 (Task 12):** 최종 배포 단계에 runbook의 순서를 명시한다 —
+> ① 새 이미지로 `--check` 실행 → ② `migrationRequired=true`면 `--if-needed` one-off task로
+> 마이그레이션 → ③ 성공 확인 후 Canary 배포. `docs/ecs-express-deployment-runbook.md:80-88` 참조.
+
+### SE-16 (중간) batch 참조 무결성
+
+`batch_job_id` 네 컬럼은 String + index만 있고 FK가 없다. 다만 이는 **저장소 관례와 일치한다** —
+마이그레이션 `20260901_0026`이 `workflow_tasks.request_batch_id`·`prompt_draft_id`도 같은 방식으로
+추가했다(`:85-88`). FK를 새로 도입하면 이 테이블군에서 이 기능만 다른 규칙을 쓰게 된다.
+
+> **판단:** FK는 추가하지 않는다. 실질적 위험(중복 승격)은 G-10의 원자적 claim이 해소한다.
+> 대신 Task 12에 orphan 검증 쿼리를 두어 배포 후 점검한다.
+
+---
+
 ## File Structure
 
 **신규 (백엔드)**
@@ -216,7 +324,11 @@ git checkout main && git pull && git checkout -b feat/batch-job-management
 
 ---
 
-## Task 1: 스키마 — 마이그레이션과 모델
+## ✅ Task 1 (완료 · 재수행 금지): 스키마 — 마이그레이션과 모델
+
+> **커밋 `7b1ec62`로 이미 완료됐다. 이 절은 기록이며 다시 수행하지 않는다.**
+> `20260904_0033_batch_jobs.py`와 `BatchJob` 모델이 이미 존재한다. 다시 만들면 마이그레이션이 충돌한다.
+> 이 태스크에 대한 보강은 **R-A**에서 같은 리비전 파일을 수정하는 방식으로 한다.
 
 **Files:**
 - Create: `backend/app/db/migrations/versions/20260904_0033_batch_jobs.py`
@@ -468,7 +580,10 @@ git commit -m "feat(batch): add batch_jobs table and batch_job_id links"
 
 ---
 
-## Task 2: 배치 생성 (`create_batch_job`)
+## ✅ Task 2 (완료 · 재수행 금지): 배치 생성 (`create_batch_job`)
+
+> **커밋 `48a030b`로 이미 완료됐다. 이 절은 기록이며 다시 수행하지 않는다.**
+> 다만 SE-12(트랜잭션이 실제로는 쪼개짐) 결함이 이 코드에 있다 — **R-C**에서 고친다.
 
 **Files:**
 - Create: `backend/app/services/batch_job_service.py`
@@ -611,8 +726,7 @@ from backend.app.services import prompt_batch_service, workflow_service
 ALLOWED_FRAMES = frozenset({49, 81, 161})
 DEFAULT_FRAMES = 81
 DEFAULT_FPS = 16
-STATUS_INCOMPLETE = "INCOMPLETE"
-STATUS_COMPLETE = "COMPLETE"
+# 이 두 상수는 backend/app/db/models.py 에 있다. 서비스 모듈에서 재정의하지 말고 import 할 것.
 
 
 def resolve_duration_seconds(workflow_id: str, requested_frames: int) -> int:
@@ -659,7 +773,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     batch = BatchJob(
         id=f"batch_{uuid.uuid4().hex[:16]}",
         workflow_id=workflow_id,
-        status=STATUS_INCOMPLETE,
+        status=BATCH_JOB_INCOMPLETE,
         source_dir_name=str(payload.get("sourceDirName") or "").strip()[:512] or None,
         requested_frames=requested_frames,
         duration_seconds=resolve_duration_seconds(workflow_id, requested_frames),
@@ -724,6 +838,12 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "videoCompletedCount": batch.video_completed_count,
         "videoFailedCount": batch.video_failed_count,
         "failedCount": batch.prompt_failed_count + batch.video_failed_count,
+        # 대시보드 단계별 값. 저장된 카운터를 그대로 내보낸다(G-13).
+        "promptWaiting": batch.prompt_waiting_count,
+        "promptGenerating": batch.prompt_generating_count,
+        "runpodPendingSubmit": batch.runpod_pending_submit_count,
+        "runpodQueued": batch.runpod_queued_count,
+        "runpodInProgress": batch.runpod_in_progress_count,
         "lastDownloadedAt": batch.last_downloaded_at.isoformat() if batch.last_downloaded_at else None,
         "createdBy": batch.created_by,
         "createdByName": _user_name(db, batch.created_by),
@@ -755,7 +875,11 @@ git commit -m "feat(batch): create batch jobs over the existing prompt pipeline"
 
 ---
 
-## Task 3: 승격 — READY 프롬프트 → RunPod 요청 (G-5)
+## ✅ Task 3 (완료 · 재수행 금지): 승격 — READY 프롬프트 → RunPod 요청 (G-5)
+
+> **커밋 `c592000`로 이미 완료됐다(리뷰 미실시). 이 절은 기록이며 다시 수행하지 않는다.**
+> SE-11(원자적 claim 없음)·SE-13(주기당 상한 없음) 결함이 이 코드에 있다 — **R-D**에서 고친다.
+> `batchJobId` 인젝션 수정은 작업 트리에 프로덕션 코드만 있고 테스트가 없다 — **R-B**에서 마무리한다.
 
 **Files:**
 - Modify: `backend/app/services/runpod_request_batch_service.py:14` (`create_request_batch` 시그니처)
@@ -965,7 +1089,7 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
     promoted = 0
     try:
         incomplete_ids = list(db.scalars(
-            select(BatchJob.id).where(BatchJob.status == STATUS_INCOMPLETE)
+            select(BatchJob.id).where(BatchJob.status == BATCH_JOB_INCOMPLETE)
         ))
         pending: list[tuple[str, str, list[str]]] = []
         for batch_id in incomplete_ids:
@@ -1019,6 +1143,631 @@ Expected: PASS. 기존 `test_durable_runpod_request_batch.py`가 함께 통과�
 ```bash
 git add backend/app/services/batch_job_service.py backend/app/services/runpod_request_batch_service.py backend/app/services/studio_api_service.py backend/app/services/task_tracking_service.py backend/tests/test_batch_job_service.py
 git commit -m "feat(batch): promote ready batch prompts into RunPod requests"
+```
+
+---
+
+## Task R-A: 마이그레이션 0033 보강 — 복합 인덱스와 대시보드 카운터 (G-13)
+
+**Files:**
+- Modify: `backend/app/db/migrations/versions/20260904_0033_batch_jobs.py`
+- Modify: `backend/app/db/models.py` (`BatchJob`)
+- Test: `backend/tests/test_batch_job_service.py`
+
+**왜 새 리비전 0034가 아니라 0033을 고치는가:** 이 브랜치는 아직 머지되지도 배포되지도 않았고,
+0033은 어떤 운영 DB에서도 실행된 적이 없다. 리비전을 쪼개면 배포 시 one-off 마이그레이션이
+두 번 필요해질 뿐이다. **머지 이후라면 절대 이렇게 하지 말 것** — 그때는 0034를 새로 만든다.
+
+**Interfaces:**
+- Consumes: Task 1의 `BatchJob`
+- Produces: `BatchJob`에 컬럼 5개 추가 — `prompt_waiting_count`, `prompt_generating_count`,
+  `runpod_pending_submit_count`, `runpod_queued_count`, `runpod_in_progress_count` (전부 `int`, default 0).
+  인덱스 2개 — `ix_image_prompt_drafts_batch_status`, `ix_workflow_tasks_batch_deleted_status`.
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+`backend/tests/test_batch_job_service.py`의 기존 스키마 테스트 옆에 추가한다:
+
+```python
+def test_batch_jobs_has_dashboard_counter_columns(db_session):
+    inspector = inspect(db_session.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("batch_jobs")}
+    assert {
+        "prompt_waiting_count",
+        "prompt_generating_count",
+        "runpod_pending_submit_count",
+        "runpod_queued_count",
+        "runpod_in_progress_count",
+    } <= columns
+
+
+def test_batch_aggregation_indexes_exist(db_session):
+    """G-13: WHERE batch_job_id = ? GROUP BY status 를 단일 컬럼 인덱스로는 감당 못 한다."""
+    inspector = inspect(db_session.get_bind())
+    draft_indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("image_prompt_drafts")}
+    task_indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("workflow_tasks")}
+    assert draft_indexes.get("ix_image_prompt_drafts_batch_status") == ["batch_job_id", "status"]
+    assert task_indexes.get("ix_workflow_tasks_batch_deleted_status") == ["batch_job_id", "deleted_at", "status"]
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `python3 -m pytest backend/tests/test_batch_job_service.py -rf -k "dashboard_counter or aggregation_indexes"`
+Expected: FAIL — 두 테스트 모두 AssertionError
+
+- [ ] **Step 3: 마이그레이션 보강**
+
+`20260904_0033_batch_jobs.py`의 `upgrade()`에서 `batch_jobs` `create_table` 블록에 컬럼 5개를 추가한다
+(`video_failed_count` 다음 줄):
+
+```python
+            sa.Column("prompt_waiting_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("prompt_generating_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("runpod_pending_submit_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("runpod_queued_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("runpod_in_progress_count", sa.Integer(), nullable=False, server_default="0"),
+```
+
+같은 `upgrade()`의 링크 컬럼 루프 **다음**에 복합 인덱스를 추가한다. 기존 관례대로 존재 확인 후 생성한다:
+
+```python
+    # G-13: 대시보드와 monitor가 함께 쓰는 집계 경로.
+    # WHERE batch_job_id = ? GROUP BY status 를 단일 컬럼 인덱스로는 감당하지 못한다.
+    aggregation_indexes = (
+        ("image_prompt_drafts", "ix_image_prompt_drafts_batch_status", ["batch_job_id", "status"]),
+        ("workflow_tasks", "ix_workflow_tasks_batch_deleted_status", ["batch_job_id", "deleted_at", "status"]),
+    )
+    for table, index_name, columns in aggregation_indexes:
+        if table not in tables:
+            continue
+        existing = {index["name"] for index in inspector.get_indexes(table)}
+        if index_name not in existing:
+            op.create_index(index_name, table, columns)
+```
+
+`downgrade()`의 링크 컬럼 제거 루프 **앞**에 대응 제거를 넣는다:
+
+```python
+    for table, index_name, _columns in (
+        ("image_prompt_drafts", "ix_image_prompt_drafts_batch_status", None),
+        ("workflow_tasks", "ix_workflow_tasks_batch_deleted_status", None),
+    ):
+        if table in tables and index_name in {index["name"] for index in inspector.get_indexes(table)}:
+            op.drop_index(index_name, table_name=table)
+```
+
+- [ ] **Step 4: 모델 보강**
+
+`backend/app/db/models.py`의 `BatchJob`에서 `video_failed_count` 선언 다음에 추가한다:
+
+```python
+    # 대시보드가 읽는 단계별 카운터. monitor가 갱신하고 조회 경로는 SELECT만 한다(G-13).
+    prompt_waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_generating_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_pending_submit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_queued_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_in_progress_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+```
+
+- [ ] **Step 5: 테스트 통과 + 마이그레이션 실물 검증**
+
+Run:
+```bash
+python3 -m compileall -q backend/app
+python3 -m pytest backend/tests/test_batch_job_service.py -rf
+rm -f /tmp/batch_mig_check.db
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic upgrade head
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic downgrade -1
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic upgrade head
+```
+Expected: 테스트 전부 PASS, alembic 세 명령 모두 exit 0.
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add backend/app/db/migrations/versions/20260904_0033_batch_jobs.py backend/app/db/models.py backend/tests/test_batch_job_service.py
+git commit -m "feat(batch): add dashboard counters and aggregation indexes"
+```
+
+---
+
+## Task R-B: `batchJobId` 인젝션 수정 마무리
+
+**Files:**
+- Modify: `backend/app/services/studio_api_service.py` (작업 트리에 이미 수정됨)
+- Modify: `backend/app/services/batch_job_service.py` (작업 트리에 이미 수정됨)
+- Test: `backend/tests/test_batch_job_service.py`
+
+**배경:** `c592000`이 `create_runpod_request_batch()`에서 `payload.get("batchJobId")`를 읽게 만들었다.
+그 `payload`는 `POST /api/v1/jobs/request-batches`(`jobs.py:71-72`)가 **브라우저 body를 그대로 넘긴
+검증되지 않은 dict**다. `jobs:run` 권한만 가진 사용자가 남의 배치 id를 실어 보내 자기 task를 그 배치에
+붙일 수 있고, 배치 카운터·ZIP 내보내기·이력 필터가 전부 오염된다.
+
+**프로덕션 코드 수정은 작업 트리에 이미 들어가 있다.** 확인 후 회귀 테스트만 붙이고 커밋한다.
+
+- [ ] **Step 1: 작업 트리의 수정 확인**
+
+Run: `git diff backend/app/services/studio_api_service.py backend/app/services/batch_job_service.py`
+
+기대하는 내용:
+- `create_runpod_request_batch(payload: dict, *, user: dict[str, object], batch_job_id: str | None = None)`
+- `create_request_batch(..., batch_job_id=str(batch_job_id or "").strip() or None)` — `payload.get`이 아님
+- `promote_ready_batch_drafts()`가 payload dict에서 `"batchJobId"`를 빼고 `batch_job_id=batch_id`를 인자로 전달
+
+diff가 이와 다르면 위 형태로 맞춘다. **`payload.pop("batchJobId", None)` 방식은 쓰지 않는다** —
+필터는 미래의 라우트가 잊을 수 있지만, 인자로 올리면 HTTP 호출자가 설정할 방법 자체가 사라진다.
+
+- [ ] **Step 2: 실패 테스트 작성**
+
+`backend/tests/test_batch_job_service.py`에 추가한다. 이 파일의 기존 헬퍼(`_asset`·`_user`·
+`_asset_items`·`_seed_assets`)를 재사용한다:
+
+```python
+def test_batch_job_id_cannot_be_injected_through_the_request_body(db_session, monkeypatch):
+    """HTTP body의 batchJobId는 무시되어야 한다 — 남의 배치에 task를 붙일 수 없다."""
+    from backend.app.services import studio_api_service
+
+    db_session.add(_user("victim"))
+    db_session.add(_user("attacker"))
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    victim_batch = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="victim",
+    )
+    draft = db_session.scalars(
+        select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == victim_batch["id"])
+    ).one()
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    draft.created_by = "attacker"
+    db_session.commit()
+
+    created = studio_api_service.create_runpod_request_batch(
+        {"workerId": "attacker", "batchJobId": victim_batch["id"], "items": [{"promptDraftId": draft.id}]},
+        user={"id": "attacker"},
+    )
+
+    row = db_session.get(RunpodRequestBatch, created["id"])
+    assert row.batch_job_id is None, "요청 본문의 batchJobId가 반영되면 안 된다"
+```
+
+`create_job` 실물 실행이 워크플로 JSON과 이미지 파일을 요구하면, Task 3 테스트가 쓴 것과 같은
+방식으로 `job_runtime`을 스텁한다. `RunpodRequestBatch` import를 파일 상단에 추가한다.
+
+- [ ] **Step 3: 테스트 실패 확인 (작업 트리 수정을 되돌린 상태에서)**
+
+Run:
+```bash
+git stash push backend/app/services/studio_api_service.py backend/app/services/batch_job_service.py
+python3 -m pytest backend/tests/test_batch_job_service.py -rf -k injected
+```
+Expected: FAIL — `assert row.batch_job_id is None`이 victim 배치 id 때문에 실패
+
+그 다음 복원한다: `git stash pop`
+
+- [ ] **Step 4: 테스트 통과 + 회귀 확인**
+
+Run:
+```bash
+python3 -m pytest backend/tests/test_batch_job_service.py -rf
+python3 -m pytest backend/tests/test_durable_runpod_request_batch.py backend/tests/test_runpod_submission_queue.py -rf
+python3 -m compileall -q backend/app
+```
+Expected: 전부 PASS
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add backend/app/services/studio_api_service.py backend/app/services/batch_job_service.py backend/tests/test_batch_job_service.py
+git commit -m "fix(batch): stop accepting batchJobId from the request body"
+```
+
+---
+
+## Task R-C: `create_batch_job` 트랜잭션 소유권 (G-11 · SE-12)
+
+**Files:**
+- Modify: `backend/app/services/prompt_batch_service.py` (`create_prompt_generation_batch`)
+- Modify: `backend/app/services/batch_job_service.py` (`create_batch_job`)
+- Test: `backend/tests/test_batch_job_service.py`
+
+**Interfaces:**
+- Produces: `prompt_batch_service.create_prompt_generation_batch(db, payload, *, created_by, commit: bool = True, batch_job_id: str | None = None)`
+  — 기존 호출자는 기본값으로 무변경 동작한다.
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+```python
+def test_create_batch_job_leaves_no_rows_when_the_link_step_fails(db_session, monkeypatch):
+    """SE-12: 내부 commit 때문에 batch_job_id가 NULL인 고아 행이 남으면 안 된다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+
+    # 프롬프트 배치 생성 직후 단계에서 강제로 실패시킨다.
+    original = batch_job_service._link_prompt_batch
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("link step failed")
+
+    monkeypatch.setattr(batch_job_service, "_link_prompt_batch", boom)
+    with pytest.raises(RuntimeError):
+        batch_job_service.create_batch_job(
+            db_session,
+            {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
+            created_by="operator_1",
+        )
+    db_session.rollback()
+    monkeypatch.setattr(batch_job_service, "_link_prompt_batch", original)
+
+    assert db_session.scalars(select(BatchJob)).all() == []
+    assert db_session.scalars(select(PromptGenerationBatch)).all() == []
+    assert db_session.scalars(select(ImagePromptDraft)).all() == []
+
+
+def test_prompt_batch_creation_still_commits_for_existing_callers(db_session, monkeypatch):
+    """commit 기본값은 True — 기존 프롬프트 생성 관리 화면 경로가 바뀌면 안 된다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    result = prompt_batch_service.create_prompt_generation_batch(
+        db_session,
+        {"workflowId": "Blowbang1.json", "items": [{"assetId": "asset_1", "slotIndex": 1, "requestedFrames": 81}]},
+        created_by="operator_1",
+    )
+    db_session.rollback()  # commit 되었다면 rollback 후에도 남아 있어야 한다
+    assert db_session.get(PromptGenerationBatch, result["id"]) is not None
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `python3 -m pytest backend/tests/test_batch_job_service.py -rf -k "link_step_fails or still_commits"`
+Expected: FAIL — 첫 테스트에서 고아 행이 남아 `assert ... == []` 실패
+
+- [ ] **Step 3: `create_prompt_generation_batch`에 트랜잭션 제어 추가**
+
+`backend/app/services/prompt_batch_service.py`의 시그니처를 바꾼다:
+
+```python
+def create_prompt_generation_batch(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    created_by: str,
+    commit: bool = True,
+    batch_job_id: str | None = None,
+) -> dict[str, Any]:
+```
+
+`PromptGenerationBatch(...)` 생성 인자에 한 줄, `ImagePromptDraft(...)` 생성 인자에 한 줄 추가한다.
+링크를 **행 생성 시점에 채우면** 사후 UPDATE 자체가 사라진다:
+
+```python
+        batch_job_id=batch_job_id,
+```
+
+함수 끝의 `db.commit()`을 바꾼다:
+
+```python
+    # 배치 파이프라인은 자기 트랜잭션 안에서 이 함수를 부른다(SE-12). 그 경우
+    # 여기서 commit하면 batch_jobs 행과 draft가 서로 다른 트랜잭션에 묶여
+    # 중간 실패 시 batch_job_id가 NULL인 고아 행이 영구히 남는다.
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return prompt_generation_batch_payload(db, batch.id)
+```
+
+- [ ] **Step 4: `create_batch_job`을 트랜잭션 소유자로 바꾼다**
+
+`backend/app/services/batch_job_service.py`의 `create_batch_job`에서 `create_prompt_generation_batch`
+호출 뒤의 **`db.execute(...)` UPDATE 2개를 삭제**하고, 호출에 두 인자를 넘긴다:
+
+```python
+    prompt_batch = _link_prompt_batch(
+        db,
+        workflow_id=workflow_id,
+        items=items,
+        requested_frames=requested_frames,
+        created_by=created_by,
+        batch_job_id=batch.id,
+    )
+    db.commit()
+    return batch_job_payload(db, batch.id)
+```
+
+그리고 테스트가 가로챌 수 있도록 얇은 위임 함수를 둔다:
+
+```python
+def _link_prompt_batch(db, *, workflow_id, items, requested_frames, created_by, batch_job_id):
+    """프롬프트 배치를 만들되 commit은 하지 않는다 — 트랜잭션은 create_batch_job이 소유한다."""
+    return prompt_batch_service.create_prompt_generation_batch(
+        db,
+        {
+            "workflowId": workflow_id,
+            "items": [
+                {"assetId": str(item.get("assetId") or "").strip(), "slotIndex": index, "requestedFrames": requested_frames}
+                for index, item in enumerate(items, start=1)
+            ],
+        },
+        created_by=created_by,
+        commit=False,
+        batch_job_id=batch_job_id,
+    )
+```
+
+- [ ] **Step 5: 테스트 통과 + 회귀 확인**
+
+Run:
+```bash
+python3 -m pytest backend/tests/test_batch_job_service.py -rf
+python3 -m pytest backend/tests/test_prompt_batch_service.py backend/tests/test_prompt_batch_api.py -rf
+python3 -m compileall -q backend/app
+```
+Expected: 전부 PASS. 두 번째 명령이 `commit=True` 기본값 호환을 지키는지 검증한다.
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add backend/app/services/prompt_batch_service.py backend/app/services/batch_job_service.py backend/tests/test_batch_job_service.py
+git commit -m "fix(batch): own the batch creation transaction end to end"
+```
+
+---
+
+## Task R-D: 원자적 승격 claim과 주기당 상한 (G-10 · G-12 · SE-11 · SE-13)
+
+**Files:**
+- Modify: `backend/app/db/migrations/versions/20260904_0033_batch_jobs.py`
+- Modify: `backend/app/db/models.py` (`ImagePromptDraft`)
+- Modify: `backend/app/services/batch_job_service.py` (`promote_ready_batch_drafts`)
+- Test: `backend/tests/test_batch_job_service.py`
+
+**왜 필요한가 (SE-11):** 배포 전략이 **ECS Express Canary**다 — 구·신 revision이 동시에 살아 있고
+각자 `monitor_loop`을 돌린다. 현재 승격은 READY draft를 **조회한 뒤** 요청을 만들므로, 그 사이에
+다른 프로세스가 같은 draft를 읽어 **RunPod에 이중 제출**한다. 실제 이중 과금이다.
+`prompt_draft_id` 유니크 인덱스는 정당한 재제출을 깨뜨리므로 쓸 수 없다.
+
+**Interfaces:**
+- Produces: `ImagePromptDraft.promotion_claimed_at: datetime | None`
+- Produces: `batch_job_service.PROMOTION_LIMIT_PER_CYCLE = 20`
+- Produces: `batch_job_service.claim_batch_drafts_for_promotion(db, *, limit) -> list[tuple[str, str, str]]`
+  — 반환은 `(batch_job_id, owner_id, draft_id)` 목록. 선점에 성공한 것만 담긴다.
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+```python
+def test_claim_is_exclusive_across_processes(db_session, monkeypatch):
+    """SE-11: 두 번째 호출자는 이미 선점된 draft를 가져가면 안 된다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 3)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(3)},
+        created_by="operator_1",
+    )
+    for draft in db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])):
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    db_session.commit()
+
+    first = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
+    second = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
+
+    assert len(first) == 3
+    assert second == [], "이미 선점된 draft를 두 번째 호출이 다시 가져갔다 — 중복 제출이 발생한다"
+
+
+def test_claim_respects_the_per_cycle_limit(db_session, monkeypatch):
+    """SE-13: 128건을 한 주기에 몰아 처리하면 monitor loop이 밀린다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 25)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(25)},
+        created_by="operator_1",
+    )
+    for draft in db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])):
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    db_session.commit()
+
+    claimed = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=batch_job_service.PROMOTION_LIMIT_PER_CYCLE)
+
+    assert len(claimed) == batch_job_service.PROMOTION_LIMIT_PER_CYCLE == 20
+
+
+def test_already_promoted_drafts_are_never_reclaimed(db_session, monkeypatch):
+    """멱등성: 이미 runpod_request_items가 있는 draft는 후보에서 빠진다."""
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
+        created_by="operator_1",
+    )
+    drafts = db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])).all()
+    for draft in drafts:
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    db_session.commit()
+
+    batch_job_service.promote_ready_batch_drafts()
+    again = batch_job_service.promote_ready_batch_drafts()
+
+    assert again["promoted"] == 0
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `python3 -m pytest backend/tests/test_batch_job_service.py -rf -k "claim or per_cycle or reclaimed"`
+Expected: FAIL — `claim_batch_drafts_for_promotion`이 없어 `AttributeError`
+
+- [ ] **Step 3: 선점 컬럼 추가 (0033 리비전에 이어서)**
+
+`20260904_0033_batch_jobs.py`의 `upgrade()`, 링크 컬럼 루프 다음에 추가한다:
+
+```python
+    # G-10: 승격 선점 표식. ECS Canary 구간에 구·신 revision이 동시에 승격해
+    # RunPod에 이중 제출하는 것을 조건부 UPDATE로 막는다.
+    if "image_prompt_drafts" in tables and "promotion_claimed_at" not in _columns(inspector, "image_prompt_drafts"):
+        op.add_column("image_prompt_drafts", sa.Column("promotion_claimed_at", sa.DateTime(), nullable=True))
+```
+
+`downgrade()`에도 대응 제거를 넣는다:
+
+```python
+    if "image_prompt_drafts" in tables and "promotion_claimed_at" in _columns(inspector, "image_prompt_drafts"):
+        op.drop_column("image_prompt_drafts", "promotion_claimed_at")
+```
+
+`backend/app/db/models.py`의 `ImagePromptDraft`에 추가한다:
+
+```python
+    # 승격 선점 시각. NULL이면 아직 아무 프로세스도 가져가지 않은 상태다(G-10).
+    promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+```
+
+- [ ] **Step 4: 원자적 claim 구현**
+
+`backend/app/services/batch_job_service.py`에 추가한다. `task_tracking_service.claim_next_pending_submission()`
+(`:510-540`)이 쓰는 것과 같은 패턴 — 후보를 읽고, 조건부 UPDATE의 `rowcount`가 1일 때만 자기 것으로 삼는다:
+
+```python
+PROMOTION_LIMIT_PER_CYCLE = 20
+
+
+def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[str, str, str]]:
+    """Take exclusive ownership of up to `limit` READY batch drafts.
+
+    A conditional UPDATE is the only thing standing between an ECS Canary
+    rollout — where the old and new revision both run the monitor loop — and a
+    duplicated, separately billed RunPod submission for every draft in flight.
+    """
+    promoted_ids = set(db.scalars(
+        select(RunpodRequestItem.prompt_draft_id).where(RunpodRequestItem.prompt_draft_id.is_not(None))
+    ))
+    candidates = db.execute(
+        select(ImagePromptDraft.id, ImagePromptDraft.batch_job_id, BatchJob.created_by)
+        .join(BatchJob, BatchJob.id == ImagePromptDraft.batch_job_id)
+        .where(
+            BatchJob.status == BATCH_JOB_INCOMPLETE,
+            ImagePromptDraft.status == "READY",
+            ImagePromptDraft.promotion_claimed_at.is_(None),
+        )
+        .order_by(ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
+        .limit(limit * 2)
+    ).all()
+
+    claimed: list[tuple[str, str, str]] = []
+    now = datetime.utcnow()
+    for draft_id, batch_job_id, owner_id in candidates:
+        if len(claimed) >= limit:
+            break
+        if draft_id in promoted_ids or not owner_id:
+            continue
+        result = db.execute(
+            ImagePromptDraft.__table__.update()
+            .where(
+                ImagePromptDraft.id == draft_id,
+                ImagePromptDraft.promotion_claimed_at.is_(None),
+            )
+            .values(promotion_claimed_at=now)
+        )
+        if result.rowcount:
+            claimed.append((str(batch_job_id), str(owner_id), str(draft_id)))
+    db.commit()
+    return claimed
+
+
+def release_promotion_claim(db: Session, draft_ids: list[str]) -> None:
+    """Hand drafts back when the submission never happened, so a later cycle retries."""
+    if not draft_ids:
+        return
+    db.execute(
+        ImagePromptDraft.__table__.update()
+        .where(ImagePromptDraft.id.in_(draft_ids))
+        .values(promotion_claimed_at=None)
+    )
+    db.commit()
+```
+
+- [ ] **Step 5: `promote_ready_batch_drafts`를 claim 기반으로 교체**
+
+기존 본문의 "미완료 배치를 훑어 READY draft를 모으는" 부분을 위 claim 호출로 바꾼다.
+배치별 `try/except`는 유지한다 — 소유자가 비활성인 배치 하나가 매 주기 전체 승격을 막으면 안 된다.
+실패한 배치의 draft는 `release_promotion_claim`으로 되돌려 다음 주기에 재시도되게 한다:
+
+```python
+def promote_ready_batch_drafts() -> dict[str, Any]:
+    """Turn newly-READY batch prompts into RunPod requests.
+
+    Called once per monitor cycle. Reuses studio_api_service wholesale so batch
+    submissions are indistinguishable from interactive ones: same request-item
+    snapshot, same durable task record, same dispatcher. The per-cycle limit
+    keeps a 128-image batch from starving RunPod status polling (SE-13).
+    """
+    from backend.app.services import studio_api_service
+
+    db = SessionLocal()
+    try:
+        claimed = claim_batch_drafts_for_promotion(db, limit=PROMOTION_LIMIT_PER_CYCLE)
+    finally:
+        db.close()
+
+    by_batch: dict[tuple[str, str], list[str]] = {}
+    for batch_job_id, owner_id, draft_id in claimed:
+        by_batch.setdefault((batch_job_id, owner_id), []).append(draft_id)
+
+    promoted = 0
+    promoted_batches: list[str] = []
+    for (batch_id, owner_id), draft_ids in by_batch.items():
+        try:
+            studio_api_service.create_runpod_request_batch(
+                {"workerId": owner_id, "items": [{"promptDraftId": draft_id} for draft_id in draft_ids]},
+                user=_submitter_user(owner_id),
+                batch_job_id=batch_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad batch must not stop the rest
+            _PROMOTION_FAILURES[batch_id] = str(exc)
+            release_db = SessionLocal()
+            try:
+                release_promotion_claim(release_db, draft_ids)
+            finally:
+                release_db.close()
+            continue
+        _PROMOTION_FAILURES.pop(batch_id, None)
+        promoted += len(draft_ids)
+        promoted_batches.append(batch_id)
+
+    return {"promoted": promoted, "batches": promoted_batches}
+```
+
+- [ ] **Step 6: 테스트 통과 + 회귀 확인**
+
+Run:
+```bash
+python3 -m pytest backend/tests/test_batch_job_service.py -rf
+python3 -m pytest backend/tests/test_durable_runpod_request_batch.py backend/tests/test_runpod_submission_queue.py backend/tests/test_prompt_batch_service.py -rf
+python3 -m compileall -q backend/app
+rm -f /tmp/batch_mig_check.db
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic upgrade head
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic downgrade -1
+DATABASE_URL=sqlite:////tmp/batch_mig_check.db python3 -m alembic upgrade head
+```
+Expected: 전부 PASS / exit 0
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add backend/app/db/migrations/versions/20260904_0033_batch_jobs.py backend/app/db/models.py backend/app/services/batch_job_service.py backend/tests/test_batch_job_service.py
+git commit -m "fix(batch): claim drafts atomically and cap promotion per cycle"
 ```
 
 ---
@@ -1213,7 +1962,7 @@ def refresh_batch_job_counters() -> dict[str, Any]:
     refreshed = 0
     completed = 0
     try:
-        batches = db.scalars(select(BatchJob).where(BatchJob.status == STATUS_INCOMPLETE)).all()
+        batches = db.scalars(select(BatchJob).where(BatchJob.status == BATCH_JOB_INCOMPLETE)).all()
         for batch in batches:
             counts = _counts_for(db, batch.id)
             batch.prompt_completed_count = counts["promptReady"]
@@ -1221,10 +1970,17 @@ def refresh_batch_job_counters() -> dict[str, Any]:
             batch.video_requested_count = counts["videoRequested"]
             batch.video_completed_count = counts["videoCompleted"]
             batch.video_failed_count = counts["videoFailed"]
+            # G-13: 대시보드가 읽을 단계별 값도 여기서 저장한다. 조회 경로는
+            # 이 컬럼들을 SELECT만 하고 GROUP BY를 다시 돌지 않는다.
+            batch.prompt_waiting_count = counts["promptWaiting"]
+            batch.prompt_generating_count = counts["promptGenerating"]
+            batch.runpod_pending_submit_count = counts["videoPendingSubmit"]
+            batch.runpod_queued_count = counts["videoQueued"]
+            batch.runpod_in_progress_count = counts["videoInProgress"]
             drafts_settled = counts["promptTerminal"] >= batch.total_images
             tasks_settled = counts["videoTerminal"] >= counts["videoRequested"]
             if drafts_settled and tasks_settled and counts["promptReady"] == counts["videoRequested"]:
-                batch.status = STATUS_COMPLETE
+                batch.status = BATCH_JOB_COMPLETE
                 completed += 1
             refreshed += 1
         db.commit()
@@ -1263,23 +2019,17 @@ def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
 
 
 def list_active_batch_jobs(db: Session, *, created_by: str | None) -> dict[str, Any]:
-    """Rows for the two incomplete-only dashboards (요구사항 9)."""
-    query = select(BatchJob).where(BatchJob.status == STATUS_INCOMPLETE)
+    """Rows for the two incomplete-only dashboards (요구사항 9).
+
+    Reads only the denormalized counters (G-13). This runs on a 3-second screen
+    poll for every open batch; recomputing the GROUP BYs here would defeat the
+    counters that refresh_batch_job_counters() exists to maintain.
+    """
+    query = select(BatchJob).where(BatchJob.status == BATCH_JOB_INCOMPLETE)
     if created_by:
         query = query.where(BatchJob.created_by == created_by)
     batches = db.scalars(query.order_by(BatchJob.created_at.desc())).all()
-    items = []
-    for batch in batches:
-        counts = _counts_for(db, batch.id)
-        items.append({
-            **_batch_payload(db, batch),
-            "promptWaiting": counts["promptWaiting"],
-            "promptGenerating": counts["promptGenerating"],
-            "runpodPendingSubmit": counts["videoPendingSubmit"],
-            "runpodQueued": counts["videoQueued"],
-            "runpodInProgress": counts["videoInProgress"],
-        })
-    return {"items": items}
+    return {"items": [_batch_payload(db, batch) for batch in batches]}
 
 
 def list_batch_jobs(
@@ -3073,11 +3823,55 @@ Run: `npm start`
 7. `/studio/review/history` → Batch 필터로 좁힌 뒤 선택 ZIP 다운로드
 8. 다른 브라우저 탭에서 단건 프롬프트 생성을 요청해, 배치가 도는 중에도 **먼저** 처리되는지 (G-1)
 
-- [ ] **Step 4: 문서 갱신**
+- [ ] **Step 4: 참조 무결성 점검 (SE-16)**
+
+`batch_job_id` 네 컬럼에는 FK가 없다 — 저장소 관례를 따른 의도된 선택이다
+(`20260901_0026`이 `request_batch_id`·`prompt_draft_id`도 같은 방식으로 추가했다).
+대신 고아 행이 없는지 쿼리로 확인한다:
+
+```sql
+-- 존재하지 않는 배치를 가리키는 행 (전부 0이어야 한다)
+SELECT 'drafts', COUNT(*) FROM image_prompt_drafts d
+  LEFT JOIN batch_jobs b ON b.id = d.batch_job_id
+  WHERE d.batch_job_id IS NOT NULL AND b.id IS NULL
+UNION ALL
+SELECT 'tasks', COUNT(*) FROM workflow_tasks t
+  LEFT JOIN batch_jobs b ON b.id = t.batch_job_id
+  WHERE t.batch_job_id IS NOT NULL AND b.id IS NULL
+UNION ALL
+-- 같은 draft가 두 번 승격된 흔적 (SE-11이 재발하면 여기서 잡힌다)
+SELECT 'double_promoted', COUNT(*) FROM (
+  SELECT prompt_draft_id FROM runpod_request_items
+  WHERE prompt_draft_id IS NOT NULL
+  GROUP BY prompt_draft_id HAVING COUNT(*) > 1
+) x;
+```
+
+- [ ] **Step 5: 배포 게이트 (G-14 · SE-15) — 운영 배포 시 반드시 이 순서로**
+
+**이 순서를 지키지 않으면 Task History·프롬프트 생성 관리·RunPod 요청 관리가 전부 장애가 난다.**
+운영은 `RUN_SERVER_AUTO_MIGRATE=0`이고(`.env.example:86`, `backend/app/main.py:45`) 배포는
+ECS Express Canary다. 새 ORM 컬럼 `batch_job_id`는 기존 화면이 매번 조회하는 테이블에 붙으므로,
+마이그레이션 전에 새 이미지가 뜨면 SQLAlchemy가 만드는 SELECT가 `Unknown column 'batch_job_id'`로
+전부 실패한다.
+
+기준 문서는 `docs/ecs-express-deployment-runbook.md`(특히 `:80-88`)이며, 순서는 다음과 같다:
+
+1. ECR immutable 이미지 push
+2. 기존 task definition 복제
+3. **새 이미지로 `--check` 실행** → `migrationRequired` 판정
+4. `migrationRequired=true`이면 **`--if-needed` one-off task로 마이그레이션 실행**하고 성공을 확인
+5. **그 다음에만** Canary 배포. ECS가 health check와 draining을 관리하므로 이전 revision을 수동 중지하지 않는다
+6. 배포 후 Step 4의 무결성 쿼리와 `python3 scripts/fastapi_smoke_check.py` 실행
+
+Canary 구간에는 구·신 revision이 동시에 monitor_loop을 돌린다는 점을 기억한다 — R-D의 원자적 claim이
+그 구간의 RunPod 이중 제출을 막는 유일한 장치다.
+
+- [ ] **Step 6: 문서 갱신**
 
 `README.md`의 화면 표에 `Batch 작업 요청 관리` / `/studio/create/batch` 행을 추가한다.
 
-- [ ] **Step 5: 최종 커밋**
+- [ ] **Step 7: 최종 커밋**
 
 ```bash
 git add README.md
@@ -3087,6 +3881,18 @@ git commit -m "docs: document the batch job management screen"
 ---
 
 ## 자체 검토 결과
+
+**3차 개정 결함 커버리지:**
+
+| 결함 | 가드레일 | 태스크 |
+|---|---|---|
+| SE-11 Canary 중복 승격 (치명) | G-10 원자적 claim | R-D |
+| SE-12 트랜잭션 분리 (치명) | G-11 `commit=False` | R-C |
+| SE-13 monitor 장기 점유 (높음) | G-12 주기당 상한 20 | R-D |
+| SE-14 카운터 미사용 (높음) | G-13 저장 카운터 + 복합 인덱스 | R-A, Task 4 |
+| SE-15 배포 게이트 (치명) | G-14 `--check` → one-off → Canary | Task 12 Step 5 |
+| SE-16 참조 무결성 (중간) | FK 미도입 + orphan 쿼리 | Task 12 Step 4 |
+| `batchJobId` 인젝션 (치명) | keyword 인자로 승격 | R-B |
 
 **스펙 커버리지** — 스펙 §별 대응 태스크:
 
