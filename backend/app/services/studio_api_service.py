@@ -11,7 +11,7 @@ from backend.app.core.config import get_settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
 from backend.app.services import job_service, output_service, workflow_patch_service
-from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User
+from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services.asset_storage import encode_file_base64, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
@@ -317,26 +317,17 @@ def job_runtime() -> job_service.JobRuntime:
 
 
 def create_job(payload: dict, *, user: dict[str, object]) -> dict:
-    """Submit one task after enforcing the persisted active-task policy.
+    """Queue one local task for the durable RunPod dispatcher.
 
     The browser payload is intentionally not trusted for task ownership.  The
-    authenticated request principal is copied into the immutable task snapshot
-    immediately before the RunPod request is made.
+    authenticated request principal is copied into the immutable task snapshot.
+    Active-task limits are checked when the dispatcher is about to submit to
+    RunPod so users can keep registering work while existing jobs finish.
     """
     user_id = str(user.get("id") or "").strip()
     if not user_id:
         raise ValueError("인증된 사용자 정보를 찾을 수 없습니다.")
     with JOB_LOCK:
-        session = SessionLocal()
-        try:
-            assert_task_submission_allowed(session, user_id)
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
         safe_payload = dict(payload)
         safe_payload["user"] = {
             "id": user_id,
@@ -558,8 +549,27 @@ def _dispatch_pending_job(task_id: str) -> dict:
         restored = restore_job_from_task(task_id)
         if not restored:
             raise KeyError(task_id)
+        _assert_dispatch_allowed(task_id)
         JOBS[task_id] = restored
         return job_service.dispatch_queued_job(job_runtime(), restored)
+
+
+def _assert_dispatch_allowed(task_id: str) -> None:
+    session = SessionLocal()
+    try:
+        task = session.get(WorkflowTask, task_id)
+        if task is None:
+            raise KeyError(task_id)
+        payload = task.payload_json if isinstance(task.payload_json, dict) else {}
+        payload_user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        user_id = str(task.user_id or payload_user.get("id") or "__unknown__").strip()
+        assert_task_submission_allowed(session, user_id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def dispatch_next_queued_job() -> dict:

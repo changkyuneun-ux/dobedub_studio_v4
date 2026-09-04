@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import timedelta
 
 from backend.app.core.timezone_utils import now_seoul_naive
-from backend.app.db.models import WorkflowTask
+from backend.app.db.models import TaskExecutionPolicy, WorkflowTask
 from backend.app.services import job_service
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
-from backend.app.services.task_policy_service import active_task_counts
+from backend.app.services import studio_api_service
+from backend.app.services.task_policy_service import TaskSubmissionLimitError, active_task_counts
 from backend.app.services.task_tracking_service import claim_next_pending_submission, release_pending_submission
 
 
@@ -74,6 +75,59 @@ def test_pending_submission_does_not_consume_runpod_execution_policy_capacity(db
     counts = active_task_counts(db_session, "missing-user")
 
     assert counts["activeTotal"] == 0
+
+
+def test_create_job_keeps_local_queue_open_when_active_policy_is_full(db_session, monkeypatch):
+    db_session.add_all([
+        TaskExecutionPolicy(id=1, max_active_tasks_per_user=1, max_active_tasks_total=1),
+        WorkflowTask(
+            id="task_active_policy",
+            workflow_id="1-images.json",
+            user_id="operator",
+            status="IN_PROGRESS",
+        ),
+    ])
+    db_session.commit()
+    calls: list[tuple[str, str, dict | None]] = []
+    monkeypatch.setattr(studio_api_service, "job_runtime", lambda: _runtime(dry_run=False, calls=calls))
+
+    job = studio_api_service.create_job(_payload(), user={"id": "operator", "name": "Operator"})
+
+    assert job["status"] == "PENDING_SUBMIT"
+    assert job["runpodJobId"] == ""
+    assert calls == []
+
+
+def test_dispatch_checks_active_policy_before_calling_runpod(db_session, monkeypatch):
+    db_session.add_all([
+        TaskExecutionPolicy(id=1, max_active_tasks_per_user=1, max_active_tasks_total=1),
+        WorkflowTask(
+            id="task_active_dispatch_policy",
+            workflow_id="1-images.json",
+            user_id="operator",
+            status="IN_PROGRESS",
+        ),
+        WorkflowTask(
+            id="task_waiting_dispatch_policy",
+            workflow_id="1-images.json",
+            user_id="operator",
+            status="DISPATCHING",
+            payload_json=_payload(),
+        ),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(
+        job_service,
+        "dispatch_queued_job",
+        lambda _runtime, _job: (_ for _ in ()).throw(AssertionError("RunPod should not receive over-limit tasks")),
+    )
+
+    try:
+        studio_api_service._dispatch_pending_job("task_waiting_dispatch_policy")
+    except TaskSubmissionLimitError:
+        pass
+    else:
+        raise AssertionError("expected dispatch to enforce active policy")
 
 
 def test_claim_and_release_keep_task_waiting_until_capacity_is_available(db_session):

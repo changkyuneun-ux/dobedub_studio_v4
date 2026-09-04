@@ -13,14 +13,13 @@ const ACTIVE_RUNPOD_STATES = new Set(["IN_PROGRESS", "RUNNING"]);
 const QUEUED_RUNPOD_STATES = new Set(["PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"]);
 const ALL_WORKERS_FILTER = "all";
 const ALL_WORKFLOWS_FILTER = "";
-const ALL_REQUEST_STATUS_FILTER = "requestable";
+const ALL_REQUEST_STATUS_FILTER = "all";
 const REQUEST_STATUS_FILTERS = [
+  { value: "all", label: "전체 상태" },
   { value: "requestable", label: "요청 준비" },
-  { value: "submitWaiting", label: "제출 대기" },
   { value: "runpodQueued", label: "RunPod 큐" },
   { value: "inProgress", label: "실행 중" },
-  { value: "failed", label: "실패" },
-  { value: "all", label: "전체 상태" }
+  { value: "failed", label: "실패" }
 ];
 
 function workflowName(workflow: WorkflowItem | undefined, fallback: string) {
