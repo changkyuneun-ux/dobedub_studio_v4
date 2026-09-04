@@ -1214,36 +1214,6 @@ export function Create5aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ASSETS"
       headerTitle={`컬렉션 관리 · 전체 ${total}개`}
-      sidebarExtra={
-        <div className="v3-step-tracker v3-sidebar-context-menu">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>COLLECTION · {collections.length}</div>
-          <button
-            type="button"
-            className={`v3-segment-nav-item ${collectionFilter === "" ? "is-active" : ""}`}
-            onClick={() => onCollectionFilterChange("")}
-          >
-            <div className="v3-segment-nav-head"><span>전체 목록</span><span>{allTotal}</span></div>
-          </button>
-          <button
-            type="button"
-            className={`v3-segment-nav-item ${collectionFilter === "uncategorized" ? "is-active" : ""}`}
-            onClick={() => onCollectionFilterChange("uncategorized")}
-          >
-            <div className="v3-segment-nav-head"><span>미분류</span><span>{uncategorizedTotal}</span></div>
-          </button>
-          {loading && !collections.length ? <p className="v3-muted-text" style={{ padding: "4px 10px" }}>불러오는 중입니다...</p> : null}
-          {collections.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`v3-segment-nav-item ${collectionFilter === c.id ? "is-active" : ""}`}
-              onClick={() => onCollectionFilterChange(c.id)}
-            >
-              <div className="v3-segment-nav-head"><span>{c.name}</span><span>{c.itemCount}</span></div>
-            </button>
-          ))}
-        </div>
-      }
     >
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       <section className="v3-collection-management" aria-label="컬렉션 관리">

@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import time
 import uuid
 from typing import Any, NamedTuple
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
+from backend.app.db.models import Asset, CollectionItem, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, RunpodRequestItem, TaskInputAsset, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services import studio_api_service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokPromptInputError, generate_image_prompt
@@ -312,6 +313,30 @@ def retry_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[s
     return _draft_payload(db, draft)
 
 
+def delete_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[str, Any]:
+    draft = _owned_draft(db, draft_id, created_by)
+    batch_id = draft.prompt_batch_id
+    asset_id = draft.asset_id
+    if _draft_has_runpod_or_task_links(db, draft.id, asset_id):
+        raise ValueError("RunPod 요청 또는 작업 이력과 연결된 프롬프트 항목은 여기서 삭제할 수 없습니다.")
+    asset = db.get(Asset, asset_id)
+    local_path = Path(asset.storage_key) if asset and asset.storage_backend == "local" and asset.storage_key else None
+    db.execute(delete(CollectionItem).where(CollectionItem.asset_id == asset_id))
+    db.execute(delete(PromptGenerationAttempt).where(PromptGenerationAttempt.draft_id == draft.id))
+    db.delete(draft)
+    db.flush()
+    _shrink_batch_after_draft_delete(db, batch_id)
+    if asset is not None and not _asset_is_referenced(db, asset_id):
+        db.delete(asset)
+    db.commit()
+    if local_path:
+        try:
+            local_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"draftId": draft_id, "assetId": asset_id, "deleted": True}
+
+
 def _owned_draft(db: Session, draft_id: str, created_by: str) -> ImagePromptDraft:
     draft = db.scalar(
         select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id, ImagePromptDraft.created_by == created_by)
@@ -388,12 +413,50 @@ def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
     if batch is None:
         return
     drafts = db.scalars(select(ImagePromptDraft.status).where(ImagePromptDraft.prompt_batch_id == batch_id)).all()
-    batch.completed_count = sum(status in {DRAFT_READY, "MANUAL_REQUIRED"} for status in drafts)
-    batch.failed_count = sum(status == DRAFT_FAILED for status in drafts)
-    if batch.completed_count + batch.failed_count >= batch.total_count:
+    _apply_batch_counts(batch, drafts)
+
+
+def _shrink_batch_after_draft_delete(db: Session, batch_id: str | None) -> None:
+    if not batch_id:
+        return
+    batch = db.get(PromptGenerationBatch, batch_id)
+    if batch is None:
+        return
+    drafts = db.scalars(select(ImagePromptDraft.status).where(ImagePromptDraft.prompt_batch_id == batch_id)).all()
+    batch.total_count = len(drafts)
+    _apply_batch_counts(batch, drafts)
+
+
+def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str]) -> None:
+    total = len(draft_statuses) if draft_statuses else int(batch.total_count or 0)
+    batch.completed_count = sum(status in {DRAFT_READY, "MANUAL_REQUIRED"} for status in draft_statuses)
+    batch.failed_count = sum(status == DRAFT_FAILED for status in draft_statuses)
+    if total <= 0:
+        batch.status = BATCH_COMPLETED
+    elif batch.completed_count + batch.failed_count >= total:
         batch.status = BATCH_COMPLETED_WITH_ERRORS if batch.failed_count else BATCH_COMPLETED
-    else:
+    elif any(status == DRAFT_GENERATING for status in draft_statuses):
         batch.status = BATCH_GENERATING
+    else:
+        batch.status = BATCH_PENDING
+
+
+def _draft_has_runpod_or_task_links(db: Session, draft_id: str, asset_id: str) -> bool:
+    task_ref = db.scalar(select(WorkflowTask.id).where(WorkflowTask.prompt_draft_id == draft_id).limit(1))
+    input_ref = db.scalar(select(TaskInputAsset.id).where(TaskInputAsset.asset_id == asset_id).limit(1))
+    request_ref = db.scalar(
+        select(RunpodRequestItem.id)
+        .where((RunpodRequestItem.prompt_draft_id == draft_id) | (RunpodRequestItem.asset_id == asset_id))
+        .limit(1)
+    )
+    return task_ref is not None or input_ref is not None or request_ref is not None
+
+
+def _asset_is_referenced(db: Session, asset_id: str) -> bool:
+    draft_ref = db.scalar(select(ImagePromptDraft.id).where(ImagePromptDraft.asset_id == asset_id).limit(1))
+    input_ref = db.scalar(select(TaskInputAsset.id).where(TaskInputAsset.asset_id == asset_id).limit(1))
+    request_ref = db.scalar(select(RunpodRequestItem.id).where(RunpodRequestItem.asset_id == asset_id).limit(1))
+    return draft_ref is not None or input_ref is not None or request_ref is not None
 
 
 def _batch_counts_from_drafts(batch: PromptGenerationBatch, drafts: list[ImagePromptDraft]) -> dict[str, Any]:

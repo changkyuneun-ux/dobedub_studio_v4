@@ -61,8 +61,11 @@ def test_prompt_management_can_delete_unsubmitted_uploads() -> None:
     screen = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
 
     assert "deleteUnsubmittedUpload" in client
+    assert "deleteImagePromptDraft" in client
     assert "deleteUpload" in screen
+    assert "deletePromptRow" in screen
     assert "업로드 이미지 삭제" in screen
+    assert "draft ? void deletePromptRow(draft) : void deleteUpload(upload)" in screen
 
 
 def test_prompt_history_uses_worker_names_without_worker_generation_stats() -> None:
@@ -158,6 +161,9 @@ def test_prompt_management_uses_one_aggregate_dashboard_and_paginates_active_bat
     assert "batchId: batch.id" in screen
     assert "promptMappingRows.length" in screen
     assert "is-error" in screen
+    assert "promptDisplayStatus" in screen
+    assert "promptDisplayStatus(draft?.status || \"WAITING\")" in screen
+    assert "void refreshActivePromptGenerationBatches()" in screen
 
 
 def test_runpod_request_queue_exposes_prompt_batch_identity_without_redundant_navigation() -> None:
@@ -225,7 +231,7 @@ def test_prompt_library_menu_is_removed_from_generate_sidebar() -> None:
     assert '{ key: "assets", label: "컬렉션 관리", permission: "history:read" }' in generate_nav
 
 
-def test_assets_sidebar_uses_collection_filters_with_uncategorized_count() -> None:
+def test_assets_collection_management_uses_body_filters_without_sidebar_buttons() -> None:
     shell = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
@@ -236,10 +242,12 @@ def test_assets_sidebar_uses_collection_filters_with_uncategorized_count() -> No
     assert "apiClient.assets({ page: 1, pageSize: 1, uncategorized: true })" in shell
     assert "uncategorizedTotal={assetsUncategorizedTotal}" in shell
     assert 'headerTitle={`컬렉션 관리 · 전체 ${total}개`}' in screen
-    assert 'COLLECTION · {collections.length}' in screen
-    assert '<div className="v3-segment-nav-head"><span>미분류</span><span>{uncategorizedTotal}</span></div>' in screen
-    assert "collections.map((c) => (" in screen
-    assert "onCollectionFilterChange(c.id)" in screen
+    create5a = screen.split("export function Create5aScreen", 1)[1]
+    assert "sidebarExtra" not in create5a.split("<section className=\"v3-collection-management\"", 1)[0]
+    assert "v3-sidebar-context-menu" not in create5a
+    assert '<div className="v3-segment-nav-head"><span>미분류</span><span>{uncategorizedTotal}</span></div>' not in create5a
+    assert "collections.map((c) => (" not in create5a
+    assert "onCollectionFilterChange(c.id)" not in create5a
     assert "전체 목록" in screen
     assert "allTotal: number" in screen
     assert "v3-collection-filter-row" in screen

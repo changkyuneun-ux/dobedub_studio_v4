@@ -14,6 +14,12 @@ type PromptMappingRow = { upload: UploadItem; draft?: GrokImagePromptDraftRespon
 
 const workflowName = (workflow: WorkflowItem) => workflow.label || workflow.name || workflow.id;
 const PROMPT_BATCH_PROGRESS_PAGE_SIZE = 10;
+const promptDisplayStatus = (status: string) => {
+  const normalized = status.toUpperCase();
+  if (normalized === "READY" || normalized === "MANUAL_REQUIRED") return "COMPLETED";
+  if (normalized === "PENDING") return "WAITING";
+  return normalized || "WAITING";
+};
 
 export function PromptManagementScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [initialWorkspace] = useState(() => loadPromptWorkspace(user.id));
@@ -97,11 +103,8 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   }, [workflowId]);
 
   useEffect(() => {
-    let alive = true;
-    void apiClient.activePromptGenerationBatches()
-      .then((response) => { if (alive) setActivePromptGenerationBatches(response.items); })
+    void refreshActivePromptGenerationBatches()
       .catch(() => { /* A stale dashboard must not block a new composition. */ });
-    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -117,9 +120,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   useEffect(() => {
     if (!activePromptGenerationBatches.length) return;
     const timer = window.setInterval(() => {
-      void apiClient.activePromptGenerationBatches().then((response) => {
-        setActivePromptGenerationBatches(response.items);
-      }).catch((error: Error) => setNotice(error.message));
+      void refreshActivePromptGenerationBatches().catch((error: Error) => setNotice(error.message));
     }, 3000);
     return () => window.clearInterval(timer);
   }, [activePromptGenerationBatches.length]);
@@ -133,6 +134,11 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     setDrafts({});
     setInstructionStatus(null);
     setNotice("");
+  }
+
+  async function refreshActivePromptGenerationBatches() {
+    const response = await apiClient.activePromptGenerationBatches();
+    setActivePromptGenerationBatches(response.items);
   }
 
   async function uploadFiles(files: FileList | File[] | null) {
@@ -209,9 +215,30 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     try {
       const next = await apiClient.retryImagePromptDraft(draft.draftId);
       updateVisibleDraft(next);
+      void refreshActivePromptGenerationBatches();
       setNotice(`${fileName} 프롬프트를 다시 생성합니다.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "재생성 요청에 실패했습니다.");
+    }
+  }
+
+  async function deletePromptRow(draft: GrokImagePromptDraftResponse) {
+    if (busy || draft.status === "GENERATING") return;
+    setBusy(true);
+    setNotice("");
+    try {
+      await apiClient.deleteImagePromptDraft(draft.draftId);
+      setUploads((current) => current.filter((item) => item.assetId !== draft.assetId));
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[draft.assetId];
+        return next;
+      });
+      await refreshActivePromptGenerationBatches();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "프롬프트 항목을 삭제하지 못했습니다.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -261,8 +288,8 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
       <section className="v3-card v3-prompt-mapping-card">
         <div className="v3-card-header"><div className="v3-card-header-title">Image Prompt Mapping</div><span className="v3-muted-text">이미지별 Positive Prompt</span></div>
         {!promptMappingRows.length ? <div className="v3-empty-panel">상단에서 이미지 파일을 한 장 이상 추가하세요.</div> : <div className="v3-prompt-mapping-table"><div className="v3-prompt-mapping-head"><span>이미지</span><span>입력 파일</span><span>프롬프트 배치</span><span>Positive Prompt</span><span>생성 상태</span><span>후속 처리</span><span>작업</span></div>{promptMappingRows.map(({ upload, draft, batchId }, index) => {
-          const status = draft?.status || "WAITING";
-          return <article className="v3-prompt-mapping-row" key={draft?.draftId || upload.assetId}><ProtectedImage src={upload.downloadUrl} alt={upload.fileName} /><div className="v3-prompt-file-meta"><b>IMG {String(index + 1).padStart(2, "0")}</b><strong>{upload.fileName}</strong><small>{formatImageDimensions(upload.imageHeight, upload.imageWidth)} · {formatUploadSize(upload.sizeBytes)}</small></div><span className="v3-prompt-batch-id">{batchId || "작성 중"}</span><div className="v3-prompt-positive"><textarea value={draft?.positivePrompt || ""} disabled={!draft || draft.status === "GENERATING"} onChange={(event) => draft && updateVisibleDraft({ ...draft, positivePrompt: event.target.value })} onBlur={(event) => draft && void saveDraft(draft, { positivePrompt: event.target.value })} placeholder="일괄 생성 후 결과가 표시됩니다." />{draft?.error ? <small className="v3-error-text">{draft.error}</small> : null}</div><span className={`v3-draft-status is-${status.toLowerCase()}`}>{status}</span><span className="v3-prompt-followup">{draft?.status === "READY" ? "RunPod 요청 가능" : draft?.status === "FAILED" ? "재생성 후 요청 가능" : "완료 후 요청 가능"}</span><div className="v3-prompt-row-actions"><button className="v3-text-button" type="button" disabled={!draft || draft.status === "GENERATING"} onClick={() => draft && void retry(draft, upload.fileName)}>재생성</button><button className="v3-text-button is-delete" type="button" disabled={busy || Boolean(draft) || Boolean(batchId)} aria-label="업로드 이미지 삭제" onClick={() => void deleteUpload(upload)}>삭제</button></div></article>;
+          const status = promptDisplayStatus(draft?.status || "WAITING");
+          return <article className="v3-prompt-mapping-row" key={draft?.draftId || upload.assetId}><ProtectedImage src={upload.downloadUrl} alt={upload.fileName} /><div className="v3-prompt-file-meta"><b>IMG {String(index + 1).padStart(2, "0")}</b><strong>{upload.fileName}</strong><small>{formatImageDimensions(upload.imageHeight, upload.imageWidth)} · {formatUploadSize(upload.sizeBytes)}</small></div><span className="v3-prompt-batch-id">{batchId || "작성 중"}</span><div className="v3-prompt-positive"><textarea value={draft?.positivePrompt || ""} disabled={!draft || draft.status === "GENERATING"} onChange={(event) => draft && updateVisibleDraft({ ...draft, positivePrompt: event.target.value })} onBlur={(event) => draft && void saveDraft(draft, { positivePrompt: event.target.value })} placeholder="일괄 생성 후 결과가 표시됩니다." />{draft?.error ? <small className="v3-error-text">{draft.error}</small> : null}</div><span className={`v3-draft-status is-${status.toLowerCase()}`}>{status}</span><span className="v3-prompt-followup">{draft?.status === "READY" || draft?.status === "MANUAL_REQUIRED" ? "RunPod 요청 가능" : draft?.status === "FAILED" ? "재생성 후 요청 가능" : "완료 후 요청 가능"}</span><div className="v3-prompt-row-actions"><button className="v3-text-button" type="button" disabled={!draft || draft.status === "GENERATING"} onClick={() => draft && void retry(draft, upload.fileName)}>재생성</button><button className="v3-text-button is-delete" type="button" disabled={busy || draft?.status === "GENERATING"} aria-label={draft ? "프롬프트 항목 삭제" : "업로드 이미지 삭제"} onClick={() => draft ? void deletePromptRow(draft) : void deleteUpload(upload)}>삭제</button></div></article>;
         })}</div>}
       </section>
 

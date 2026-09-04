@@ -1185,6 +1185,10 @@ export const apiClient = {
     }),
   retryImagePromptDraft: (draftId: string) =>
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),
+  deleteImagePromptDraft: (draftId: string) =>
+    requestJson<{ draftId: string; assetId: string; deleted: boolean }>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
+      method: "DELETE"
+    }),
   grokInstructions: (workflowId: string) =>
     requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions?workflowId=${encodeURIComponent(workflowId)}`),
   grokInstructionSourceWorkflows: () =>

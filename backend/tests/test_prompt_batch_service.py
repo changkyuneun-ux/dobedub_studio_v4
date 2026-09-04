@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import event, inspect
 
 from backend.app.core.timezone_utils import now_seoul_naive
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services import prompt_batch_service as service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokImagePromptResult
 
@@ -432,6 +432,175 @@ def test_ready_drafts_can_be_listed_edited_and_retried(db_session, monkeypatch):
     retried = service.retry_prompt_draft(db_session, "grok_draft_edit", created_by="dobedub")
     assert retried["status"] == service.DRAFT_PENDING
     assert retried["positivePrompt"] is None
+
+
+def test_retry_existing_draft_reopens_the_same_pending_batch(db_session):
+    db_session.add(_asset("asset_retry_same_batch"))
+    db_session.add(PromptGenerationBatch(
+        id="pgb_retry_same_batch",
+        workflow_id="1-images.json",
+        status=service.BATCH_COMPLETED,
+        total_count=1,
+        completed_count=1,
+        failed_count=0,
+        created_by="worker_a",
+    ))
+    db_session.add(ImagePromptDraft(
+        id="draft_retry_same_batch",
+        asset_id="asset_retry_same_batch",
+        workflow_id="1-images.json",
+        slot_index=1,
+        status=service.DRAFT_READY,
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="ready prompt",
+        requested_frames=81,
+        warnings_json=[],
+        raw_json={"response": {"id": "old"}},
+        prompt_batch_id="pgb_retry_same_batch",
+        created_by="worker_a",
+    ))
+    db_session.commit()
+
+    retried = service.retry_prompt_draft(db_session, "draft_retry_same_batch", created_by="worker_a")
+
+    assert retried["draftId"] == "draft_retry_same_batch"
+    assert retried["promptBatchId"] == "pgb_retry_same_batch"
+    assert retried["status"] == service.DRAFT_PENDING
+    batch = db_session.get(PromptGenerationBatch, "pgb_retry_same_batch")
+    assert batch is not None
+    assert batch.status == service.BATCH_PENDING
+    assert batch.completed_count == 0
+    assert batch.failed_count == 0
+
+
+def test_delete_prompt_draft_removes_prompt_asset_and_batch_links(db_session, tmp_path):
+    image_path = tmp_path / "draft-delete.png"
+    image_path.write_bytes(b"image")
+    db_session.add(Asset(
+        id="asset_delete_prompt_draft",
+        asset_type="input_image",
+        file_name=image_path.name,
+        mime_type="image/png",
+        size_bytes=image_path.stat().st_size,
+        storage_backend="local",
+        storage_key=str(image_path),
+        metadata_json={"createdBy": "worker_a"},
+    ))
+    db_session.add(_asset("asset_keep_prompt_draft"))
+    db_session.add(PromptGenerationBatch(
+        id="pgb_delete_prompt_draft",
+        workflow_id="1-images.json",
+        status=service.BATCH_GENERATING,
+        total_count=2,
+        completed_count=1,
+        failed_count=0,
+        created_by="worker_a",
+    ))
+    db_session.add_all([
+        ImagePromptDraft(
+            id="draft_delete_prompt_draft",
+            asset_id="asset_delete_prompt_draft",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_READY,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            positive_prompt="delete me",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={"response": {"id": "old"}},
+            prompt_batch_id="pgb_delete_prompt_draft",
+            created_by="worker_a",
+        ),
+        ImagePromptDraft(
+            id="draft_keep_prompt_draft",
+            asset_id="asset_keep_prompt_draft",
+            workflow_id="1-images.json",
+            slot_index=2,
+            status=service.DRAFT_PENDING,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            positive_prompt=None,
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_delete_prompt_draft",
+            created_by="worker_a",
+        ),
+    ])
+    db_session.add(PromptGenerationAttempt(
+        id="attempt_delete_prompt_draft",
+        draft_id="draft_delete_prompt_draft",
+        attempt_no=1,
+        status=service.DRAFT_READY,
+        response_json={"id": "old"},
+    ))
+    db_session.commit()
+
+    result = service.delete_prompt_draft(db_session, "draft_delete_prompt_draft", created_by="worker_a")
+
+    assert result == {"draftId": "draft_delete_prompt_draft", "assetId": "asset_delete_prompt_draft", "deleted": True}
+    assert db_session.get(ImagePromptDraft, "draft_delete_prompt_draft") is None
+    assert db_session.get(PromptGenerationAttempt, "attempt_delete_prompt_draft") is None
+    assert db_session.get(Asset, "asset_delete_prompt_draft") is None
+    assert not image_path.exists()
+    batch = db_session.get(PromptGenerationBatch, "pgb_delete_prompt_draft")
+    assert batch is not None
+    assert batch.total_count == 1
+    assert batch.completed_count == 0
+    assert batch.failed_count == 0
+    assert batch.status == service.BATCH_PENDING
+
+
+def test_delete_prompt_draft_rejects_runpod_linked_items(db_session):
+    db_session.add(_asset("asset_runpod_linked_prompt"))
+    db_session.add(ImagePromptDraft(
+        id="draft_runpod_linked_prompt",
+        asset_id="asset_runpod_linked_prompt",
+        workflow_id="1-images.json",
+        slot_index=1,
+        status=service.DRAFT_READY,
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="ready prompt",
+        requested_frames=81,
+        warnings_json=[],
+        raw_json={},
+        created_by="worker_a",
+    ))
+    db_session.add(RunpodRequestBatch(
+        id="rpb_runpod_linked_prompt",
+        workflow_id="1-images.json",
+        requested_count=1,
+        created_by="worker_a",
+    ))
+    db_session.add(RunpodRequestItem(
+        id="rpi_runpod_linked_prompt",
+        request_batch_id="rpb_runpod_linked_prompt",
+        sequence_no=1,
+        prompt_draft_id="draft_runpod_linked_prompt",
+        asset_id="asset_runpod_linked_prompt",
+        workflow_id="1-images.json",
+        positive_prompt="ready prompt",
+        requested_frames=81,
+    ))
+    db_session.commit()
+
+    try:
+        service.delete_prompt_draft(db_session, "draft_runpod_linked_prompt", created_by="worker_a")
+    except ValueError as exc:
+        assert "RunPod 요청" in str(exc)
+    else:
+        raise AssertionError("RunPod-linked prompt drafts must be protected from prompt management deletion")
+
+    assert db_session.get(ImagePromptDraft, "draft_runpod_linked_prompt") is not None
+    assert db_session.get(Asset, "asset_runpod_linked_prompt") is not None
+    assert db_session.get(RunpodRequestItem, "rpi_runpod_linked_prompt") is not None
 
 
 def test_prompt_history_payload_includes_asset_and_linked_runpod_task(db_session):
