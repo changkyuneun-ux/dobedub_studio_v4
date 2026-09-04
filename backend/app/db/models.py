@@ -225,6 +225,7 @@ class WorkflowTask(Base):
     # External-provider raw timestamps and their normalized UTC/KST pairs.
     # Existing rows keep an empty object and are reported as legacy/unknown.
     time_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -648,6 +649,7 @@ class ImagePromptDraft(Base):
     raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -664,6 +666,7 @@ class PromptGenerationBatch(Base):
     completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -711,6 +714,7 @@ class RunpodRequestBatch(Base):
     # The worker owns all drafts/tasks. A manager may submit the worker's batch
     # without changing the owner shown in task and prompt history.
     submitted_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -736,6 +740,38 @@ class RunpodRequestItem(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_SUBMIT")
     task_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_tasks.id"), nullable=True, index=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+BATCH_JOB_INCOMPLETE = "INCOMPLETE"
+BATCH_JOB_COMPLETE = "COMPLETE"
+
+
+class BatchJob(Base):
+    """One folder-scoped bulk run: prompt generation through RunPod video output."""
+
+    __tablename__ = "batch_jobs"
+    __table_args__ = (
+        Index("ix_batch_jobs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    # INCOMPLETE / COMPLETE. Dashboards read only INCOMPLETE rows.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="INCOMPLETE")
+    # Browsers never expose an absolute path, so only the picked folder name is stored.
+    source_dir_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    requested_frames: Mapped[int] = mapped_column(Integer, nullable=False, default=81)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_requested_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
