@@ -287,12 +287,28 @@ Task 2 리뷰는 이 창을 놓쳤다 — "지시문 없는 워크플로"(쓰기
 
 ### SE-16 (중간) batch 참조 무결성
 
-`batch_job_id` 네 컬럼은 String + index만 있고 FK가 없다. 다만 이는 **저장소 관례와 일치한다** —
-마이그레이션 `20260901_0026`이 `workflow_tasks.request_batch_id`·`prompt_draft_id`도 같은 방식으로
-추가했다(`:85-88`). FK를 새로 도입하면 이 테이블군에서 이 기능만 다른 규칙을 쓰게 된다.
+`batch_job_id` 네 컬럼은 String + index만 있고 FK가 없다.
 
-> **판단:** FK는 추가하지 않는다. 실질적 위험(중복 승격)은 G-10의 원자적 claim이 해소한다.
-> 대신 Task 12에 orphan 검증 쿼리를 두어 배포 후 점검한다.
+**"이 저장소는 FK를 안 쓴다"는 틀린 설명이다.** 실측하면 41개 테이블 중 26개, 425개 컬럼 중
+44개에 FK가 걸려 있다. 실제 관례는 그보다 정확하다 — **컬럼의 역할에 따라 갈린다**:
+
+| 역할 | FK | 실측 예 |
+|---|---|---|
+| 소유자·자산 등 전방 관계 | **있음** | `workflow_tasks.user_id`, `image_prompt_drafts.asset_id`·`created_by`, `runpod_request_batches.created_by`·`submitted_by` |
+| 전용 스냅샷 테이블의 관계 | **있음** | `runpod_request_items`의 `request_batch_id`·`prompt_draft_id`·`asset_id`·`task_id` (4/14) |
+| **나중에 덧붙인 파이프라인 단계 역참조** | **없음** | `workflow_tasks.prompt_draft_id`·`request_batch_id`·`request_item_id`, `image_prompt_drafts.prompt_batch_id` |
+
+`batch_job_id`는 세 번째 부류다. 특히 `image_prompt_drafts.prompt_batch_id`는
+**구조적으로 완전히 같은 관계**(draft → 자신이 속한 배치)인데 인덱스만 있다.
+여기에만 FK를 걸면 동일한 두 관계가 서로 다른 규칙으로 동작하게 된다.
+
+> **판단:** FK는 추가하지 않는다. 근거는 "관례"라는 막연한 말이 아니라 위 실측이다 —
+> 같은 모양의 기존 컬럼 네 개가 모두 인덱스만 갖는다.
+> 실질적 위험(중복 승격)은 G-10의 원자적 claim이 해소하고,
+> Task 12의 orphan 검증 쿼리가 배포 후 점검을 담당한다.
+> **이 판단을 뒤집으려면** `prompt_batch_id`를 포함한 기존 네 컬럼까지 함께 FK로 바꾸는
+> 별도 작업이어야 하며, `workflow_tasks`는 가장 큰 테이블이라 운영 RDS에서 FK 추가 시
+> 메타데이터 락과 전체 스캔 비용을 따로 평가해야 한다.
 
 ### SE-17 (치명) request item은 있는데 WorkflowTask가 없으면 배치가 영구 대기한다
 
@@ -1630,8 +1646,9 @@ git commit -m "fix(batch): own the batch creation transaction end to end"
 **Interfaces:**
 - Produces: `ImagePromptDraft.promotion_claimed_at: datetime | None`
 - Produces: `batch_job_service.PROMOTION_LIMIT_PER_CYCLE = 20`
-- Produces: `batch_job_service.claim_batch_drafts_for_promotion(db, *, limit) -> list[tuple[str, str, str]]`
-  — 반환은 `(batch_job_id, owner_id, draft_id)` 목록. 선점에 성공한 것만 담긴다.
+- Produces: `batch_job_service.claim_batch_drafts_for_promotion(db, *, limit) -> tuple[list[tuple[str, str, str]], datetime]`
+  — `([(batch_job_id, owner_id, draft_id), ...], claim_stamp)`. 선점에 성공한 것만 담긴다.
+- Produces: `batch_job_service.still_owns_claim(db, draft_ids, claimed_at) -> list[str]` — 제출 직전 재확인용
 
 - [ ] **Step 1: 실패 테스트 작성**
 
@@ -1669,6 +1686,59 @@ def test_claim_is_exclusive_across_independent_sessions(db_session, monkeypatch)
     ids_b = {draft_id for _batch, _owner, draft_id in claimed_b}
     assert len(ids_a) == 3
     assert ids_a & ids_b == set(), "두 프로세스가 같은 draft를 선점했다 — RunPod 이중 제출이 발생한다"
+
+
+def test_two_threads_racing_the_same_candidates_never_double_claim(db_session, monkeypatch):
+    """SE-11: 두 스레드가 후보를 **모두 읽은 뒤에** 동시에 쓰기를 시작한다.
+
+    배리어가 핵심이다. 배리어 없이 순차로 부르면 두 번째 워커의 SELECT가 이미
+    커밋된 상태를 보므로, 조건부 UPDATE의 `AND promotion_claimed_at IS NULL`을
+    통째로 지워도 테스트가 통과한다 — 아무것도 검증하지 못하는 테스트가 된다.
+
+    측정 결과(2026-09-04, SQLite): 배리어를 넣으면 가드가 있을 때 overlap 0,
+    가드를 제거하면 overlap이 후보 전량으로 터진다. 3/3 결정적이며 오류도 없다.
+    """
+    import threading
+    from backend.app.db.session import SessionLocal
+
+    db_session.add(_user("operator_1"))
+    _seed_assets(db_session, 10)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(10)},
+        created_by="operator_1",
+    )
+    for draft in db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])):
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    db_session.commit()
+
+    barrier = threading.Barrier(2)
+    results: dict[str, list[str]] = {}
+    errors: list[str] = []
+
+    def worker(name: str) -> None:
+        session = SessionLocal()
+        try:
+            barrier.wait(timeout=10)
+            results[name] = [draft_id for _b, _o, draft_id in
+                             batch_job_service.claim_batch_drafts_for_promotion(session, limit=10)]
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: {type(exc).__name__}")
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=worker, args=(f"w{index}",)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    claimed = list(results.values())
+    assert set(claimed[0]) & set(claimed[1]) == set(), "두 스레드가 같은 draft를 선점했다 — RunPod 이중 제출"
+    assert len(claimed[0]) + len(claimed[1]) == 10, "선점 총합이 후보 수와 달라 draft가 유실됐다"
 
 
 def test_expired_claim_is_reclaimed_after_a_process_dies(db_session, monkeypatch):
@@ -1846,6 +1916,9 @@ def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[s
     candidates = db.execute(_unpromoted_ready_drafts(limit, cutoff)).all()
 
     claimed: list[tuple[str, str, str]] = []
+    # 호출자가 제출 직전에 still_owns_claim(db, ids, now)로 재확인할 수 있도록
+    # 이 사이클의 claim 시각을 함께 돌려준다.
+    claim_stamp = now
     for draft_id, batch_job_id, owner_id in candidates:
         if not owner_id:
             continue
@@ -1864,7 +1937,29 @@ def claim_batch_drafts_for_promotion(db: Session, *, limit: int) -> list[tuple[s
         if result.rowcount:
             claimed.append((str(batch_job_id), str(owner_id), str(draft_id)))
     db.commit()
-    return claimed
+    return claimed, claim_stamp
+
+
+def still_owns_claim(db: Session, draft_ids: list[str], claimed_at: datetime) -> list[str]:
+    """Drop drafts whose lease was taken over by another process while we worked.
+
+    The lease alone does not cover a process that is slow rather than dead: if
+    our promotion outlives STALE_PROMOTION_CLAIM_SECONDS, another monitor may
+    reclaim the same drafts and submit them, and we would then submit again.
+    Re-reading the claim timestamp right before submitting closes that window —
+    promotion_claimed_at doubles as the claim token, so no extra column is
+    needed. A residual race remains between this check and the submit itself;
+    STALE_PROMOTION_CLAIM_SECONDS must therefore stay comfortably above the
+    worst plausible promotion time for PROMOTION_LIMIT_PER_CYCLE items.
+    """
+    if not draft_ids:
+        return []
+    return [str(row) for row in db.scalars(
+        select(ImagePromptDraft.id).where(
+            ImagePromptDraft.id.in_(draft_ids),
+            ImagePromptDraft.promotion_claimed_at == claimed_at,
+        )
+    )]
 
 
 def release_promotion_claim(db: Session, draft_ids: list[str]) -> None:
@@ -1904,7 +1999,7 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
 
     db = SessionLocal()
     try:
-        claimed = claim_batch_drafts_for_promotion(db, limit=PROMOTION_LIMIT_PER_CYCLE)
+        claimed, claim_stamp = claim_batch_drafts_for_promotion(db, limit=PROMOTION_LIMIT_PER_CYCLE)
     finally:
         db.close()
 
@@ -1915,6 +2010,15 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
     promoted = 0
     promoted_batches: list[str] = []
     for (batch_id, owner_id), draft_ids in by_batch.items():
+        # 제출 직전 재확인: 우리가 느린 사이 다른 monitor가 lease를 가져갔다면
+        # 그쪽이 이미 제출했을 수 있으므로 여기서 빠진다(SE-11 잔여 창).
+        recheck_db = SessionLocal()
+        try:
+            draft_ids = still_owns_claim(recheck_db, draft_ids, claim_stamp)
+        finally:
+            recheck_db.close()
+        if not draft_ids:
+            continue
         try:
             studio_api_service.create_runpod_request_batch(
                 {"workerId": owner_id, "items": [{"promptDraftId": draft_id} for draft_id in draft_ids]},
@@ -4343,9 +4447,9 @@ git commit -m "docs: document the batch job management screen"
 | SE-16 참조 무결성 (중간) | FK 미도입 + orphan 쿼리 | Task 12 Step 4 |
 | SE-17 고아 request item (치명) | G-15 복구기 + 잔여 기반 완료 판정 | R-E |
 | `batchJobId` 인젝션 (치명) | keyword 인자로 승격 | R-B |
-| 만료 없는 선점 (치명) | lease + 만료 회수, 기존 `_recover_stale_dispatching_submissions` 패턴 | R-D |
+| 만료 없는 선점 (치명) | lease + 만료 회수(기존 `_recover_stale_dispatching_submissions` 패턴) **+ 제출 직전 claim 재확인** | R-D |
 | 승격 후보 전량 메모리 로드 (높음) | `NOT EXISTS` 상관 서브쿼리 + 전용 복합 인덱스 | R-A, R-D |
-| 동시성 테스트 부재 (높음) | 독립 Session 2개 + stale 회수 + item 존재 시 재승격 금지 | R-D |
+| 동시성 테스트 부재 (높음) | **배리어 스레드 경합** + 독립 Session + stale 회수 + item 존재 시 재승격 금지 | R-D |
 | 0033 수정 전제 미확인 (중간) | R-A Step 0 사전 확인, 적용 이력 있으면 0034 분리 | R-A |
 
 **스펙 커버리지** — 스펙 §별 대응 태스크:
