@@ -53,6 +53,46 @@ git checkout main && git pull && git checkout -b feat/batch-job-management
 | `storage_backends` 읽기 API | 여전히 없음 | G-4 필요 |
 | dispatch가 task policy로 막히는가 | 아니오 (`6d85a9f`가 오히려 큐 적재를 허용) | SE-8 판단 유효 |
 
+## 코드베이스 검증 완료 사실 (2026-09-04 2차 재검토, 전부 실행해서 확인함)
+
+계획의 코드 스니펫 **내부**까지 대조한 결과다. 1차 main 대조는 파일·라인·시그니처만 봤고
+스니펫 안의 심볼·상수·CSS 변수는 검증하지 않아, Task 1~3 실행 중 매번 정정이 필요했다.
+아래는 그 재발을 막기 위한 확정 사실이며, 각 태스크 본문에도 반영돼 있다.
+
+| 항목 | 확정된 사실 |
+|---|---|
+| workflow id | **`.json` 확장자를 포함**한다 — `"Blowbang1.json"`, `"1-images.json"`. 빼면 `FileNotFoundError` |
+| 워크플로 스키마 조회 | `workflow_service.**get_workflow_schema**(workflow_id)` |
+| `output_fps` 컨트롤 | **10개 워크플로 어디에도 없다.** fps는 항상 폴백 16 → 49=3초, 81=5초, 161=10초 (스펙 표와 일치) |
+| task 종료 상태 | `{"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}` (`task_tracking_service.py:29`). **`SUCCESS` 필수**, `PARTIAL_FAILED`는 task가 아닌 batch 상태 |
+| 라우터 등록 | `main.py:155-169`의 `api_routers` 리스트에 넣어 `/api/v1`·`/api` **양쪽**에 등록된다 |
+| `studio_api_service.get_asset` | `(asset_id) -> tuple[dict, Path]` — 맞음 |
+| 테스트 픽스처 | `conftest.py`에는 **`db_session`·`api_client`·`fake_runpod` 3개뿐.** `operator_user`/`seeded_assets`/`other_user`/`ready_draft`는 **없다** — 테스트 파일 안에서 직접 만들 것 |
+| 테스트 DB | 테이블은 `db_session`/`api_client` 픽스처 안에서만 생성된다. 픽스처 없이 `SessionLocal()`만 쓰면 테이블이 없다 |
+| 지시문 스텁 | `create_prompt_generation_batch`는 `active_instruction_text`를 호출한다. 해피패스 테스트는 per-test monkeypatch 필요 |
+| CSS 변수 | `--v3-surface-muted`는 **없다.** 실제는 `--v3-bg-muted`. `--v3-accent`·`--v3-border`·`--v3-text-secondary`·`--v3-danger`는 존재 |
+| `_StreamBuffer` | 계획대로 동작한다. `seekable()`/`tell()` 추가 **불필요** (직접 실행 확인) |
+| 백엔드 헬퍼 | `require_permission`·`has_permission`·`CurrentUser` 존재 |
+| 프론트 헬퍼 | `requestJson`·`fileToDataUrl`·`deleteUnsubmittedUpload`·`grokInstructionStatus`·`canUse` 모두 존재 |
+| pytest | `pytest-randomly` 설치됨 → 순서가 매번 다름. `-q`만으로는 요약 줄이 안 나온다(`-rf` 사용) |
+
+> **테스트 시그니처에 관한 전역 주의.** 아래 태스크들의 테스트 코드는
+> `def test_x(db_session, operator_user, seeded_assets, ...)` 형태로 쓰여 있지만
+> **`operator_user`·`seeded_assets`·`other_user`·`ready_draft`는 픽스처가 아니다 — 존재하지 않는다.**
+> Task 2가 `backend/tests/test_batch_job_service.py`에 모듈 레벨 헬퍼 함수를 이미 만들어 뒀다:
+> `_asset(asset_id)` · `_user(user_id="operator_1")` · `_asset_items(count)` · `_seed_assets(db_session, count)`.
+> 같은 파일에 이어 쓰는 태스크(3·4)는 이 헬퍼를 재사용하고 시그니처를 그에 맞게 고쳐 쓸 것.
+> 새 테스트 파일을 만드는 태스크(5·6·7·8)는 같은 패턴을 그 파일 안에 정의할 것.
+
+**알면서 수용한 리스크 (사용자 결정, 2026-09-04):**
+
+`promote_ready_batch_drafts()`의 멱등성은 **순차 호출에만** 보장된다. 앱 인스턴스가 둘 이상이면
+각 프로세스의 monitor_loop이 같은 draft를 동시에 승격해 RunPod 작업이 중복 생성될 수 있다(실제 과금).
+**단일 인스턴스 운영을 전제로 이 리스크를 수용한다.** 다중 인스턴스로 전환한다면 승격 시 draft를
+조건부 UPDATE로 선점하는 방식이 필요하다 — `task_tracking_service.claim_next_pending_submission()`이
+같은 목적으로 쓰는 패턴이 그대로 참고가 된다. `prompt_draft_id` 유니크 인덱스는 **쓸 수 없다**:
+사용자가 같은 draft를 정당하게 재제출하는 기존 동작을 깨뜨린다.
+
 **main과 달라 계획을 고친 부분 (아래 태스크에 반영됨):**
 
 - **C-1** `history.py`가 main에는 이미 필터를 갖고 있다 — `prompt_history(page, generationStatus, runpodStatus)`, `runpod_history(page, workflowId, resultStatus, workerId, dateFrom, dateTo)`. `batchId`는 **추가만** 해야 하며 시그니처를 대체하면 기존 필터가 사라진다 → Task 8 재작성
@@ -448,11 +488,7 @@ git commit -m "feat(batch): add batch_jobs table and batch_job_id links"
 
 - [ ] **Step 1: 실패 테스트 작성**
 
-`backend/tests/test_batch_job_service.py` 끝에 추가한다. `conftest.py`의 기존 픽스처 이름을 먼저 확인한다:
-
-Run: `sed -n '1,60p' backend/tests/conftest.py`
-
-그 결과의 세션/사용자 픽스처 이름을 아래 `db_session`, `operator_user` 자리에 맞춰 쓴다.
+`backend/tests/test_batch_job_service.py` 끝에 추가한다. **주의:** `conftest.py`에는 `db_session`·`api_client`·`fake_runpod` 세 픽스처뿐이다. 아래 테스트가 쓰는 `operator_user`/`seeded_assets`/`other_user`는 **존재하지 않으므로 이 테스트 파일 안에서 직접 만들어야 한다.** `backend/tests/test_prompt_batch_service.py:14`의 `_asset()` 헬퍼 패턴을 따를 것.
 
 ```python
 from backend.app.services import batch_job_service
@@ -466,7 +502,7 @@ def test_create_batch_job_persists_batch_prompt_batch_and_drafts(db_session, ope
     result = batch_job_service.create_batch_job(
         db_session,
         {
-            "workflowId": "Blowbang1",
+            "workflowId": "Blowbang1.json",
             "sourceDirName": "shoot-0904",
             "requestedFrames": 81,
             "items": _asset_items(3),
@@ -503,7 +539,7 @@ def test_create_batch_job_persists_batch_prompt_batch_and_drafts(db_session, ope
 def test_duration_seconds_matches_frame_choice(db_session, operator_user, seeded_assets, frames, expected_seconds):
     result = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": frames, "items": _asset_items(1)},
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": frames, "items": _asset_items(1)},
         created_by=operator_user.id,
     )
     assert result["requestedFrames"] == frames
@@ -515,7 +551,7 @@ def test_create_batch_job_rejects_unsupported_frames(db_session, operator_user, 
     with pytest.raises(ValueError, match="영상 길이"):
         batch_job_service.create_batch_job(
             db_session,
-            {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": frames, "items": _asset_items(1)},
+            {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": frames, "items": _asset_items(1)},
             created_by=operator_user.id,
         )
 
@@ -524,7 +560,7 @@ def test_create_batch_job_rejects_empty_items(db_session, operator_user):
     with pytest.raises(ValueError, match="이미지"):
         batch_job_service.create_batch_job(
             db_session,
-            {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 81, "items": []},
+            {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": []},
             created_by=operator_user.id,
         )
 
@@ -583,7 +619,7 @@ def resolve_duration_seconds(workflow_id: str, requested_frames: int) -> int:
     """Seconds of video for a frame count, using the workflow's own output fps."""
     fps = DEFAULT_FPS
     try:
-        schema = workflow_service.workflow_schema(workflow_id)
+        schema = workflow_service.get_workflow_schema(workflow_id)
     except Exception:
         # A missing schema must not block batch creation; the frame count is
         # what RunPod actually consumes and 16 is what the payload builder uses.
@@ -703,11 +739,7 @@ def _user_name(db: Session, user_id: str | None) -> str | None:
     return user.name if user else None
 ```
 
-`workflow_service.workflow_schema`의 실제 이름을 먼저 확인한다:
-
-Run: `grep -n "^def " backend/app/services/workflow_service.py | head -20`
-
-이름이 다르면 위 호출을 그 이름으로 바꾼다.
+`get_workflow_schema`가 실제 이름임은 재검토에서 확인했다(위 '코드베이스 검증 완료 사실' 표). 추가 확인 불필요.
 
 - [ ] **Step 4: 테스트 통과 확인**
 
@@ -745,7 +777,7 @@ git commit -m "feat(batch): create batch jobs over the existing prompt pipeline"
 def test_promote_ready_drafts_creates_runpod_request_items(db_session, operator_user, seeded_assets):
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
         created_by=operator_user.id,
     )
     drafts = db_session.scalars(
@@ -773,7 +805,7 @@ def test_promote_ready_drafts_creates_runpod_request_items(db_session, operator_
 def test_promote_is_idempotent(db_session, operator_user, seeded_assets):
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
         created_by=operator_user.id,
     )
     for draft in db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])).all():
@@ -797,7 +829,7 @@ def test_promote_is_idempotent(db_session, operator_user, seeded_assets):
 def test_failed_drafts_are_never_promoted(db_session, operator_user, seeded_assets):
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(3)},
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(3)},
         created_by=operator_user.id,
     )
     drafts = db_session.scalars(select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == created["id"])).all()
@@ -857,7 +889,28 @@ def create_request_batch(
 
 - [ ] **Step 4: `studio_api_service`에 batchJobId 전달**
 
-`backend/app/services/studio_api_service.py:500`(main) `create_runpod_request_batch()` 안, `create_request_batch(...)` 호출을 바꾼다:
+`backend/app/services/studio_api_service.py:500`(main) `create_runpod_request_batch()`를 바꾼다.
+
+> **보안 (실행 중 발견해 수정된 항목):** 이 함수의 `payload`는 `POST /api/v1/jobs/request-batches`
+> (`jobs.py:71-72`)가 브라우저 body를 그대로 넘긴 **검증되지 않은 dict**다. `payload.get("batchJobId")`로
+> 읽으면 `jobs:run` 권한만 가진 사용자가 남의 배치 id를 실어 보내 자기 task를 그 배치에 붙일 수 있고,
+> 배치 카운터·ZIP 내보내기·이력 필터가 모두 오염된다.
+> **payload에서 읽지 말고 keyword 전용 인자로 받는다.** `payload.pop()` 같은 필터는 미래의 라우트가
+> 잊을 수 있지만, 인자로 올리면 HTTP 호출자가 설정할 방법 자체가 사라진다.
+
+시그니처를 바꾼다:
+
+```python
+def create_runpod_request_batch(
+    payload: dict, *, user: dict[str, object], batch_job_id: str | None = None
+) -> dict:
+```
+
+HTTP 라우트(`jobs.py`)는 이 인자를 **넘기지 않는다**. 내부 호출자인
+`batch_job_service.promote_ready_batch_drafts()`만 `batch_job_id=batch_id`로 넘긴다
+(payload dict 안에 `"batchJobId"`를 넣지 않는다).
+
+그리고 `create_request_batch(...)` 호출을 바꾼다:
 
 ```python
             batch = create_request_batch(
@@ -865,7 +918,7 @@ def create_request_batch(
                 items=raw_items,
                 created_by=worker_id,
                 submitted_by=user_id,
-                batch_job_id=str(payload.get("batchJobId") or "").strip() or None,
+                batch_job_id=str(batch_job_id or "").strip() or None,
             )
 ```
 
@@ -880,6 +933,9 @@ def create_request_batch(
 `backend/app/services/task_tracking_service.py`의 `task.request_item_id = ...` 줄 **바로 다음**에 추가한다:
 
 ```python
+    # 여기의 `payload`는 HTTP body가 아니라 job_payload_from_request_item()이
+    # 내부에서 만든 job payload다. 바로 윗줄들의 request_batch_id/request_item_id와
+    # 똑같은 경로이므로 여기서 읽는 것은 안전하다(§Task 3 Step 4의 보안 주의와 무관).
     task.batch_job_id = str(job.get("batchJobId") or payload.get("batchJobId") or task.batch_job_id or "") or None
 ```
 
@@ -977,13 +1033,17 @@ git commit -m "feat(batch): promote ready batch prompts into RunPod requests"
 - Consumes: Task 3의 `promote_ready_batch_drafts`
 - Produces:
   - `refresh_batch_job_counters() -> dict` — 반환 `{"refreshed": int, "completed": int}`
+
+> **주의:** `promote_ready_batch_drafts()`가 반환하는 `promoted`는 파이프라인에 **넘긴** draft 수이며,
+> 넘긴 뒤 파이프라인 내부에서 실패한 항목도 포함한다. `video_requested_count`는 이 반환값이 아니라
+> `workflow_tasks` 실제 행에서 세야 한다(`_counts_for()`가 그렇게 한다).
   - `list_active_batch_jobs(db: Session, *, created_by: str | None) -> dict` — 반환 `{"items": [batch payload + {"promptWaiting": int, "promptGenerating": int, "runpodPendingSubmit": int, "runpodQueued": int, "runpodInProgress": int}]}`
   - `list_batch_jobs(db, *, created_by: str | None, page: int, date_from: str | None, date_to: str | None, worker_id: str | None, status: str | None) -> dict` — 반환 `{"items": [...], "page": int, "pageSize": 10, "total": int, "workers": [{"workerId": str, "workerName": str}]}`
 
 - [ ] **Step 1: 실패 테스트 작성**
 
 ```python
-TERMINAL_TASK_STATES = ("COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "PARTIAL_FAILED")
+TERMINAL_TASK_STATES = ("COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT")
 
 
 def test_batch_stays_incomplete_while_a_task_runs(db_session, operator_user, seeded_assets, make_batch_with_tasks):
@@ -1066,7 +1126,7 @@ def make_batch_with_tasks(db_session, operator_user, seeded_assets):
         created = batch_job_service.create_batch_job(
             db_session,
             {
-                "workflowId": "Blowbang1",
+                "workflowId": "Blowbang1.json",
                 "sourceDirName": "d",
                 "requestedFrames": 81,
                 "items": _asset_items(len(draft_states)),
@@ -1083,7 +1143,7 @@ def make_batch_with_tasks(db_session, operator_user, seeded_assets):
         if task_states:
             request_batch = RunpodRequestBatch(
                 id=f"rpb_{uuid.uuid4().hex[:16]}",
-                workflow_id="Blowbang1",
+                workflow_id="Blowbang1.json",
                 requested_count=len(task_states),
                 status="QUEUED",
                 created_by=owner_id,
@@ -1093,7 +1153,7 @@ def make_batch_with_tasks(db_session, operator_user, seeded_assets):
             for index, state in enumerate(task_states, start=1):
                 task = WorkflowTask(
                     id=f"task_{uuid.uuid4().hex[:16]}",
-                    workflow_id="Blowbang1",
+                    workflow_id="Blowbang1.json",
                     status=state,
                     user_id=owner_id,
                     batch_job_id=created["id"],
@@ -1106,7 +1166,7 @@ def make_batch_with_tasks(db_session, operator_user, seeded_assets):
                     sequence_no=index,
                     prompt_draft_id=drafts[index - 1].id,
                     asset_id=drafts[index - 1].asset_id,
-                    workflow_id="Blowbang1",
+                    workflow_id="Blowbang1.json",
                     positive_prompt="ok",
                     requested_frames=81,
                     status=state,
@@ -1132,8 +1192,16 @@ Expected: FAIL — `AttributeError: ... 'refresh_batch_job_counters'`
 `backend/app/services/batch_job_service.py`에 추가한다. import에 `from datetime import datetime`, `from sqlalchemy import func`, `from backend.app.db.models import WorkflowTask`를 더한다.
 
 ```python
-TERMINAL_TASK_STATES = frozenset({"COMPLETED", "PARTIAL_FAILED", "FAILED", "CANCELLED", "TIMED_OUT"})
-SUCCESS_TASK_STATES = frozenset({"COMPLETED"})
+# 이 두 집합은 backend/app/services/task_tracking_service.py:29 의
+# TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"} 와
+# 일치해야 한다. 이 저장소는 "SUCCESS"를 완료로 취급하는 곳이 여러 군데다
+# (task_tracking_service.py:198·1383, job_service.py:278, db_adapter.py:43).
+# SUCCESS를 빠뜨리면 그 상태로 끝난 task가 종료로 집계되지 않아 배치가
+# 영원히 INCOMPLETE에 머물고 대시보드에서 사라지지 않는다(요구사항 8·9 위반).
+# "PARTIAL_FAILED"는 task가 아니라 RunpodRequestBatch의 상태이므로
+# (runpod_request_batch_service.py:492) task 상태 집합에 넣지 않는다.
+TERMINAL_TASK_STATES = frozenset({"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"})
+SUCCESS_TASK_STATES = frozenset({"COMPLETED", "SUCCESS"})
 TERMINAL_DRAFT_STATES = frozenset({"READY", "FAILED", "MANUAL_REQUIRED"})
 FAILED_DRAFT_STATES = frozenset({"FAILED", "MANUAL_REQUIRED"})
 PAGE_SIZE = 10
@@ -1327,7 +1395,7 @@ def _draft(session, *, created_at, batch_job_id, asset_id, owner):
     draft = ImagePromptDraft(
         id=f"grok_draft_{uuid.uuid4().hex[:16]}",
         asset_id=asset_id,
-        workflow_id="Blowbang1",
+        workflow_id="Blowbang1.json",
         slot_index=1,
         status="PENDING",
         provider="grok",
@@ -1425,7 +1493,7 @@ def test_interactive_task_is_dispatched_before_older_batch_tasks(operator_user, 
         for offset in range(3):
             session.add(WorkflowTask(
                 id=f"task_{uuid.uuid4().hex[:16]}",
-                workflow_id="Blowbang1",
+                workflow_id="Blowbang1.json",
                 status="PENDING_SUBMIT",
                 user_id=operator_user.id,
                 batch_job_id="batch_older",
@@ -1434,7 +1502,7 @@ def test_interactive_task_is_dispatched_before_older_batch_tasks(operator_user, 
         interactive_id = f"task_{uuid.uuid4().hex[:16]}"
         session.add(WorkflowTask(
             id=interactive_id,
-            workflow_id="Blowbang1",
+            workflow_id="Blowbang1.json",
             status="PENDING_SUBMIT",
             user_id=operator_user.id,
             batch_job_id=None,
@@ -1665,7 +1733,9 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
         .where(
             WorkflowTask.batch_job_id == batch_job_id,
             WorkflowTask.deleted_at.is_(None),
-            WorkflowTask.status == "COMPLETED",
+            # batch_job_service.SUCCESS_TASK_STATES 와 같은 집합이어야 한다.
+            # "COMPLETED"만 보면 "SUCCESS"로 끝난 영상이 ZIP에서 통째로 빠진다.
+            WorkflowTask.status.in_(batch_job_service.SUCCESS_TASK_STATES),
         )
         .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
     )
@@ -1813,7 +1883,7 @@ from __future__ import annotations
 def test_create_batch_job_requires_both_permissions(client, viewer_token, seeded_assets):
     response = client.post(
         "/api/v1/batch-jobs",
-        json={"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 81, "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
+        json={"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
         headers={"Authorization": f"Bearer {viewer_token}"},
     )
     assert response.status_code == 403
@@ -1822,7 +1892,7 @@ def test_create_batch_job_requires_both_permissions(client, viewer_token, seeded
 def test_create_batch_job_rejects_bad_frames(client, operator_token, seeded_assets):
     response = client.post(
         "/api/v1/batch-jobs",
-        json={"workflowId": "Blowbang1", "sourceDirName": "d", "requestedFrames": 100, "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
+        json={"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 100, "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
         headers={"Authorization": f"Bearer {operator_token}"},
     )
     assert response.status_code == 400
@@ -1831,7 +1901,7 @@ def test_create_batch_job_rejects_bad_frames(client, operator_token, seeded_asse
 def test_create_batch_job_defaults_to_81_frames(client, operator_token, seeded_assets):
     response = client.post(
         "/api/v1/batch-jobs",
-        json={"workflowId": "Blowbang1", "sourceDirName": "d", "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
+        json={"workflowId": "Blowbang1.json", "sourceDirName": "d", "items": [{"assetId": seeded_assets[0], "fileName": "image1.jpg"}]},
         headers={"Authorization": f"Bearer {operator_token}"},
     )
     assert response.status_code == 200
@@ -1998,7 +2068,13 @@ from backend.app.services.batch_job_service import promote_ready_batch_drafts, r
 라우터 등록부에 다른 `include_router` 옆으로 추가한다 (기존 호출의 prefix 인자를 그대로 흉내낸다):
 
 ```python
-    app.include_router(batch_jobs_router.router, prefix="/api/v1")
+    # main.py:155-169는 라우터를 api_routers 리스트에 모아 두 prefix
+    # (settings.api_prefix="/api/v1" 와 "/api") 양쪽에 등록한다. 단독
+    # include_router로 /api/v1만 붙이면 프론트가 쓰는 /api 경로가 생기지 않는다.
+    # 따라서 새 라우터는 그 리스트에 한 줄 추가하는 것으로 끝낸다:
+    #     sandbox_pod_router,
+    #     batch_jobs_router,        # ← 추가
+    # ]
 ```
 
 `monitor_loop`의 `await asyncio.to_thread(process_next_prompt_generation_draft)` **다음**에 추가한다:
@@ -2811,11 +2887,11 @@ Run: `grep -n "create.runpodRequests\|RunpodRequestScreen" frontend/src/StudioSh
 .v3-batch-folder-button:disabled { opacity: .5; cursor: default; }
 .v3-batch-folder-summary { display: flex; flex-direction: column; gap: 3px; }
 .v3-batch-folder-summary small { color: var(--v3-text-secondary); }
-.v3-batch-launch-right { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 8px; background: var(--v3-surface-muted); }
+.v3-batch-launch-right { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 8px; background: var(--v3-bg-muted); }
 .v3-batch-length { display: flex; flex-direction: column; gap: 6px; }
 .v3-batch-table { display: flex; flex-direction: column; overflow-x: auto; }
 .v3-batch-table-head, .v3-batch-table-row { display: grid; gap: 8px; padding: 9px 10px; align-items: center; font-size: 12px; }
-.v3-batch-table-head { font-weight: 600; background: var(--v3-surface-muted); border-radius: 6px; }
+.v3-batch-table-head { font-weight: 600; background: var(--v3-bg-muted); border-radius: 6px; }
 .v3-batch-table-row { border-bottom: 1px solid var(--v3-border); }
 .v3-batch-prompt-grid { grid-template-columns: minmax(150px, 1.4fr) 90px 100px 110px 100px 120px 110px; min-width: 900px; }
 .v3-batch-runpod-grid { grid-template-columns: minmax(150px, 1.4fr) 90px 110px 110px 110px 70px 70px 70px; min-width: 940px; }
@@ -2824,9 +2900,7 @@ Run: `grep -n "create.runpodRequests\|RunpodRequestScreen" frontend/src/StudioSh
 .v3-batch-download-cell small { color: var(--v3-text-secondary); font-size: 10px; }
 ```
 
-CSS 변수명이 실제와 다르면 기존 파일에서 확인해 맞춘다:
-
-Run: `grep -n "\-\-v3-surface-muted\|--v3-accent\|--v3-border" frontend/src/styles.css | head -5`
+위 변수들(`--v3-bg-muted`·`--v3-accent`·`--v3-border`·`--v3-text-secondary`)은 재검토에서 존재를 확인했다. `--v3-surface-muted`는 존재하지 않으므로 절대 쓰지 말 것.
 
 - [ ] **Step 4: 빌드 확인**
 
