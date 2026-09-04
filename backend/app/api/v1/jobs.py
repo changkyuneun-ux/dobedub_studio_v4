@@ -107,6 +107,7 @@ def active_runpod_request_batch(
 def runpod_request_dashboard(
     workerId: str = "",
     workflowId: str = "",
+    statusFilter: str = "",
     current_user: CurrentUser = Depends(require_permission("jobs:run")),
 ):
     selected_worker = workerId.strip()
@@ -120,6 +121,7 @@ def runpod_request_dashboard(
     return studio_api_service.runpod_request_dashboard(
         worker_id=selected_worker or (None if can_manage and workerId.strip() in {"*", "all"} else current_user.id),
         workflow_id=workflowId.strip(),
+        status_filter=statusFilter.strip(),
     )
 
 
@@ -127,6 +129,7 @@ def runpod_request_dashboard(
 def runpod_request_queue(
     workerId: str = "",
     workflowId: str = "",
+    statusFilter: str = "",
     page: int = 1,
     pageSize: int = 10,
     current_user: CurrentUser = Depends(require_permission("jobs:run")),
@@ -142,6 +145,7 @@ def runpod_request_queue(
     return studio_api_service.runpod_request_queue(
         worker_id=selected_worker or (None if can_manage and workerId.strip() in {"*", "all"} else current_user.id),
         workflow_id=workflowId.strip(),
+        status_filter=statusFilter.strip(),
         page=page,
         page_size=pageSize,
     )

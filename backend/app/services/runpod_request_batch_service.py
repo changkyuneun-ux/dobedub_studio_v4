@@ -189,6 +189,7 @@ def request_batch_dashboard(
     *,
     created_by: str | None = None,
     workflow_id: str = "",
+    status_filter: str = "",
 ) -> dict:
     """Summarize the same non-terminal queue rows shown to the operator."""
     totals = {
@@ -199,7 +200,12 @@ def request_batch_dashboard(
         "failed": 0,
     }
     workers: dict[str, dict] = {}
-    for item in _request_queue_entries(db, created_by=created_by, workflow_id=workflow_id):
+    for item in _request_queue_entries(
+        db,
+        created_by=created_by,
+        workflow_id=workflow_id,
+        status_filter=status_filter,
+    ):
         worker_id = str(item.get("workerId") or "")
         entry = workers.setdefault(worker_id, {
             "workerId": item.get("workerId"),
@@ -237,6 +243,7 @@ def request_batch_queue(
     *,
     created_by: str | None = None,
     workflow_id: str = "",
+    status_filter: str = "",
     page: int = 1,
     page_size: int = 10,
 ) -> dict:
@@ -249,7 +256,12 @@ def request_batch_queue(
     """
     safe_page = max(1, int(page or 1))
     safe_page_size = max(1, min(200, int(page_size or 10)))
-    rows = _request_queue_entries(db, created_by=created_by, workflow_id=workflow_id)
+    rows = _request_queue_entries(
+        db,
+        created_by=created_by,
+        workflow_id=workflow_id,
+        status_filter=status_filter,
+    )
     start = (safe_page - 1) * safe_page_size
     return {
         "items": rows[start:start + safe_page_size],
@@ -264,6 +276,7 @@ def _request_queue_entries(
     *,
     created_by: str | None = None,
     workflow_id: str = "",
+    status_filter: str = "",
 ) -> list[dict]:
     """Build a canonical, de-duplicated view of work not yet completed."""
     terminal_batches = {"COMPLETED", "SUCCESS", "PARTIAL_FAILED", "FAILED", "CANCELLED"}
@@ -370,7 +383,28 @@ def _request_queue_entries(
             "updatedAt": draft.updated_at.isoformat() if draft.updated_at else None,
         })
 
-    return sorted(entries, key=lambda item: (str(item.get("updatedAt") or ""), str(item["id"])), reverse=True)
+    filtered = [item for item in entries if _matches_queue_status_filter(item, status_filter)]
+    return sorted(filtered, key=lambda item: (str(item.get("updatedAt") or ""), str(item["id"])), reverse=True)
+
+
+def _matches_queue_status_filter(item: dict, status_filter: str) -> bool:
+    normalized = str(status_filter or "").strip().lower().replace("_", "").replace("-", "")
+    if not normalized or normalized == "all":
+        return True
+    if normalized in {"requestable", "ready"}:
+        return bool(item.get("canSubmit"))
+    state = str(item.get("status") or "").upper()
+    if normalized in {"requestwaiting"}:
+        return bool(item.get("canSubmit")) or state in {"PENDING_SUBMIT", "DISPATCHING"}
+    if normalized in {"submitwaiting", "pending", "pendingsubmit", "dispatching"}:
+        return not item.get("canSubmit") and state in {"PENDING_SUBMIT", "DISPATCHING"}
+    if normalized in {"runpodqueued", "queued", "inqueue"}:
+        return state in {"QUEUED", "IN_QUEUE"}
+    if normalized in {"inprogress", "running"}:
+        return state in {"IN_PROGRESS", "RUNNING"}
+    if normalized in {"failed", "cancelled", "timedout"}:
+        return state in {"FAILED", "CANCELLED", "TIMED_OUT"}
+    return True
 
 
 def _prompt_batch_id(db: Session, draft_id: str | None) -> str | None:

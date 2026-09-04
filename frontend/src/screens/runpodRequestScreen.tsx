@@ -13,6 +13,15 @@ const ACTIVE_RUNPOD_STATES = new Set(["IN_PROGRESS", "RUNNING"]);
 const QUEUED_RUNPOD_STATES = new Set(["PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"]);
 const ALL_WORKERS_FILTER = "all";
 const ALL_WORKFLOWS_FILTER = "";
+const ALL_REQUEST_STATUS_FILTER = "requestable";
+const REQUEST_STATUS_FILTERS = [
+  { value: "requestable", label: "요청 준비" },
+  { value: "submitWaiting", label: "제출 대기" },
+  { value: "runpodQueued", label: "RunPod 큐" },
+  { value: "inProgress", label: "실행 중" },
+  { value: "failed", label: "실패" },
+  { value: "all", label: "전체 미완료" }
+];
 
 function workflowName(workflow: WorkflowItem | undefined, fallback: string) {
   return workflow?.label || workflow?.name || fallback;
@@ -38,13 +47,16 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
   const [workerStats, setWorkerStats] = useState<Array<{ workerId?: string | null; workerName?: string | null }>>([]);
   const [workerFilter, setWorkerFilter] = useState(() => canManageRequests ? ALL_WORKERS_FILTER : user.id);
   const [workflowFilter, setWorkflowFilter] = useState(ALL_WORKFLOWS_FILTER);
+  const [statusFilter, setStatusFilter] = useState(ALL_REQUEST_STATUS_FILTER);
   const [requestPage, setRequestPage] = useState(1);
   const filterInitialized = useRef(false);
+  const latestLoadRequestRef = useRef(0);
   const [connection, setConnection] = useState<RunpodConnectionResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
 
   async function load(restoreWorkspace = true, page = requestPage) {
+    const loadRequestId = ++latestLoadRequestRef.current;
     try {
       const selectedWorkerId = canManageRequests ? workerFilter : user.id;
       const requestedBatch = restoreWorkspace && initialWorkspace.requestBatchId
@@ -53,18 +65,20 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
           ? Promise.resolve(null)
           : apiClient.activeRunpodRequestBatch(selectedWorkerId).then((response) => response.item);
       const [requestQueue, list, status, restoredBatch, dashboard] = await Promise.all([
-        apiClient.runpodRequestQueue({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, page, pageSize: 10 }),
+        apiClient.runpodRequestQueue({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, statusFilter, page, pageSize: 10 }),
         apiClient.imagePromptDrafts({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, pageSize: 1 }),
         apiClient.runpodConnection(),
         requestedBatch,
-        apiClient.runpodRequestDashboard({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter })
+        apiClient.runpodRequestDashboard({ workerId: selectedWorkerId === ALL_WORKERS_FILTER ? ALL_WORKERS_FILTER : selectedWorkerId, workflowId: workflowFilter, statusFilter })
       ]);
+      if (loadRequestId !== latestLoadRequestRef.current) return;
       setQueue(requestQueue);
       setConnection(status);
       setRequestBatch(restoredBatch);
       setRequestDashboard(dashboard);
       setWorkerStats(list.workerStats);
     } catch (error) {
+      if (loadRequestId !== latestLoadRequestRef.current) return;
       setNotice(error instanceof Error ? error.message : "RunPod 요청 정보를 불러오지 못했습니다.");
     }
   }
@@ -79,7 +93,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
     setRequestBatch(null);
     setRequestPage(1);
     void load(false, 1);
-  }, [workerFilter, workflowFilter]);
+  }, [workerFilter, workflowFilter, statusFilter]);
 
   useEffect(() => {
     if (!requestDashboard || !requestDashboard.totals.incomplete) return;
@@ -87,7 +101,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
       void load(false);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [requestDashboard?.totals.incomplete]);
+  }, [requestDashboard?.totals.incomplete, requestPage, workerFilter, workflowFilter, statusFilter]);
 
   useEffect(() => {
     saveRunpodWorkspace(user.id, {
@@ -179,7 +193,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
       </section>
 
       <section className="v3-card v3-runpod-request-card"><div className="v3-card-header"><div><div className="v3-card-header-title">Incomplete RunPod Requests</div><span className="v3-muted-text">생성 완료 이미지만 선택 · Workflow와 Length는 이미지별로 연결</span></div><button className="v3-primary-button" type="button" disabled={!selected.length || busy} onClick={() => void submit()}>{busy ? "등록 중..." : `선택 ${selected.length}건 RunPod 요청`}</button></div>
-        <div className="v3-runpod-filter-bar">{canManageRequests ? <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value={ALL_WORKERS_FILTER}>전체 작업자</option>{visibleWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}</select></label> : null}<label>워크플로우<select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)}><option value={ALL_WORKFLOWS_FILTER}>전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowName(workflow, workflow.id)}</option>)}</select></label></div>
+        <div className="v3-runpod-filter-bar">{canManageRequests ? <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value={ALL_WORKERS_FILTER}>전체 작업자</option>{visibleWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}</select></label> : null}<label>워크플로우<select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)}><option value={ALL_WORKFLOWS_FILTER}>전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowName(workflow, workflow.id)}</option>)}</select></label><label>상태<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>{REQUEST_STATUS_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}</select></label></div>
         {!rows.length ? <div className="v3-empty-panel">표시할 미완료 RunPod 요청이 없습니다.</div> : <div className="v3-runpod-request-table"><div className="v3-runpod-request-head"><input type="checkbox" checked={selectable.length > 0 && selected.length === selectable.length} onChange={(event) => setSelected(event.target.checked ? selectable.flatMap((item) => item.promptDraftId ? [item.promptDraftId] : []) : [])} /><span>이미지</span><span>입력 파일</span><span>작업자</span><span>Prompt Batch ID</span><span>Item No.</span><span>Positive Prompt</span><span>Workflow</span><span>Length</span><span>상태</span></div>{rows.map((draft) => {
           const workflow = workflows.find((item) => item.id === draft.workflowId);
           const supported = (workflow?.keyframeCount || 1) === 1;

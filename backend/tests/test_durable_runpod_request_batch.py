@@ -249,6 +249,58 @@ def test_request_queue_and_dashboard_share_one_filtered_incomplete_scope(db_sess
     }
 
 
+def test_request_queue_status_filter_limits_requestable_rows_and_dashboard_scope(db_session):
+    db_session.add_all([
+        _asset("asset_filter_ready"),
+        _asset("asset_filter_pending"),
+        _asset("asset_filter_queued"),
+        _asset("asset_filter_progress"),
+        _asset("asset_filter_failed"),
+        _draft("asset_filter_ready", draft_id="draft_filter_ready", positive="ready"),
+        _draft("asset_filter_pending", draft_id="draft_filter_pending", positive="pending"),
+        _draft("asset_filter_queued", draft_id="draft_filter_queued", positive="queued"),
+        _draft("asset_filter_progress", draft_id="draft_filter_progress", positive="progress"),
+        _draft("asset_filter_failed", draft_id="draft_filter_failed", positive="failed"),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[
+            {"promptDraftId": "draft_filter_pending"},
+            {"promptDraftId": "draft_filter_queued"},
+            {"promptDraftId": "draft_filter_progress"},
+            {"promptDraftId": "draft_filter_failed"},
+        ],
+    )
+    by_draft = {item["promptDraftId"]: db_session.get(RunpodRequestItem, item["id"]) for item in batch["items"]}
+    by_draft["draft_filter_queued"].status = "IN_QUEUE"
+    by_draft["draft_filter_progress"].status = "IN_PROGRESS"
+    by_draft["draft_filter_failed"].status = "FAILED"
+    refresh_request_batch_summary(db_session, batch["id"])
+    db_session.commit()
+
+    all_rows = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+    requestable = request_batch_queue(db_session, created_by="operator", status_filter="requestable")
+    requestable_dashboard = request_batch_dashboard(db_session, created_by="operator", status_filter="requestable")
+    progress = request_batch_queue(db_session, created_by="operator", status_filter="inProgress")
+
+    assert all_rows["total"] == 5
+    assert [(item["kind"], item["promptDraftId"], item["canSubmit"]) for item in requestable["items"]] == [
+        ("PROMPT_DRAFT", "draft_filter_ready", True),
+    ]
+    assert requestable_dashboard["totals"] == {
+        "incomplete": 1,
+        "requestWaiting": 1,
+        "runpodQueued": 0,
+        "inProgress": 0,
+        "failed": 0,
+    }
+    assert progress["total"] == 1
+    assert progress["items"][0]["promptDraftId"] == "draft_filter_progress"
+
+
 def test_failed_pre_submission_request_does_not_hide_unrequested_ready_draft(db_session):
     """A draft with no WorkflowTask is still unrequested even after a failed batch attempt."""
     db_session.add_all([

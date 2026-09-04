@@ -175,9 +175,14 @@ def test_runpod_request_queue_uses_fixed_ten_row_pages_and_shared_dashboard_scop
     service = Path("backend/app/services/runpod_request_batch_service.py").read_text(encoding="utf-8")
 
     assert "runpodRequestQueue" in client
+    assert "statusFilter?: string" in client
+    assert "const ALL_REQUEST_STATUS_FILTER = \"requestable\";" in screen
+    assert "statusFilter" in screen
+    assert "latestLoadRequestRef" in screen
+    assert "requestDashboard?.totals.incomplete, requestPage, workerFilter, workflowFilter, statusFilter" in screen
     assert "pageSize: 10" in screen
     assert "페이지당 10건" in screen
-    assert "_request_queue_entries(db, created_by=created_by, workflow_id=workflow_id)" in service
+    assert "status_filter=status_filter" in service
 
 
 def test_instruction_copy_source_uses_the_shared_workflow_select_style() -> None:

@@ -500,10 +500,20 @@ def active_runpod_request_batch(*, user: dict[str, object], worker_id: str | Non
         session.close()
 
 
-def runpod_request_dashboard(*, worker_id: str | None = None, workflow_id: str = "") -> dict:
+def runpod_request_dashboard(
+    *,
+    worker_id: str | None = None,
+    workflow_id: str = "",
+    status_filter: str = "",
+) -> dict:
     session = SessionLocal()
     try:
-        return request_batch_dashboard(session, created_by=worker_id, workflow_id=workflow_id)
+        return request_batch_dashboard(
+            session,
+            created_by=worker_id,
+            workflow_id=workflow_id,
+            status_filter=status_filter,
+        )
     finally:
         session.close()
 
@@ -512,6 +522,7 @@ def runpod_request_queue(
     *,
     worker_id: str | None = None,
     workflow_id: str = "",
+    status_filter: str = "",
     page: int = 1,
     page_size: int = 10,
 ) -> dict:
@@ -521,6 +532,7 @@ def runpod_request_queue(
             session,
             created_by=worker_id,
             workflow_id=workflow_id,
+            status_filter=status_filter,
             page=page,
             page_size=page_size,
         )
