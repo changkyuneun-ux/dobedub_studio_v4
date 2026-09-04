@@ -460,6 +460,7 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
             "promptDraftId": item.prompt_draft_id,
             "requestBatchId": item.request_batch_id,
             "requestItemId": item.id,
+            "batchJobId": batch_owner.batch_job_id,
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
                 "index": 1,
@@ -497,7 +498,15 @@ def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> di
                 "role": worker.role,
                 "permissions": worker.permissions_json or [],
             }
-            batch = create_request_batch(session, items=raw_items, created_by=worker_id, submitted_by=user_id)
+            batch = create_request_batch(
+                session,
+                items=raw_items,
+                created_by=worker_id,
+                submitted_by=user_id,
+                # Only the batch pipeline sends this; the interactive path
+                # leaves it NULL so non-batch requests stay unlabelled.
+                batch_job_id=str(payload.get("batchJobId") or "").strip() or None,
+            )
         finally:
             session.close()
 

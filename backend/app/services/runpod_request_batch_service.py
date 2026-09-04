@@ -11,7 +11,14 @@ from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 
 
-def create_request_batch(db: Session, *, items: list[dict], created_by: str, submitted_by: str | None = None) -> dict:
+def create_request_batch(
+    db: Session,
+    *,
+    items: list[dict],
+    created_by: str,
+    submitted_by: str | None = None,
+    batch_job_id: str | None = None,
+) -> dict:
     """Persist immutable RunPod request items from prompt-draft selections.
 
     A request item deliberately owns its workflow, prompt text and frame length.
@@ -49,6 +56,9 @@ def create_request_batch(db: Session, *, items: list[dict], created_by: str, sub
         queued_count=len(normalized_items),
         created_by=created_by,
         submitted_by=submitted_by or created_by,
+        # Set at row creation so the tasks built from these items can read it
+        # back through job_payload_from_request_item.
+        batch_job_id=batch_job_id,
     )
     db.add(batch)
     for sequence_no, requested in enumerate(normalized_items, start=1):

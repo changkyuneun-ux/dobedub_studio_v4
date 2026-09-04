@@ -907,6 +907,7 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
     task.prompt_draft_id = str(job.get("promptDraftId") or payload.get("promptDraftId") or task.prompt_draft_id or "") or None
     task.request_batch_id = str(job.get("requestBatchId") or payload.get("requestBatchId") or task.request_batch_id or "") or None
     task.request_item_id = str(job.get("requestItemId") or payload.get("requestItemId") or task.request_item_id or "") or None
+    task.batch_job_id = str(job.get("batchJobId") or payload.get("batchJobId") or task.batch_job_id or "") or None
     if status.upper() in ACTIVE_STATES or status.upper() in TERMINAL_STATES:
         task.dispatch_claimed_at = None
         task.next_dispatch_at = None

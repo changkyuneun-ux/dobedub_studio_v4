@@ -4,8 +4,18 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import inspect, select
 
-from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationBatch, RunpodRequestBatch, User, WorkflowTask
-from backend.app.services import batch_job_service, prompt_batch_service
+from backend.app.db.models import (
+    Asset,
+    BatchJob,
+    ImagePromptDraft,
+    PromptGenerationBatch,
+    RunpodRequestBatch,
+    RunpodRequestItem,
+    User,
+    WorkflowTask,
+)
+from backend.app.services import batch_job_service, job_service, prompt_batch_service, studio_api_service
+from backend.app.services.task_tracking_service import record_job_status
 
 # NOTE: this module deliberately relies on the shared `db_session` fixture
 # (backend/tests/conftest.py) rather than instantiating SessionLocal()
@@ -209,3 +219,219 @@ def test_resolve_duration_seconds_survives_missing_workflow():
 def test_batch_job_payload_missing_batch_raises(db_session):
     with pytest.raises(ValueError):
         batch_job_service.batch_job_payload(db_session, "batch_missing")
+
+
+# --- promote_ready_batch_drafts -------------------------------------------
+#
+# 승격은 studio_api_service.create_runpod_request_batch()를 그대로 재사용한다.
+# 그 경로는 워크플로 JSON 패치와 RunPod 호출까지 이어지므로, 테스트에서는
+# test_runpod_submission_queue.py와 같은 방식으로 job_runtime만 가짜로 바꾼다.
+# record_job은 실제 record_job_status를 쓰기 때문에 WorkflowTask 행은 실제로
+# 생성되고, G-5(배치 ID가 task까지 전달되는지)를 그대로 검증할 수 있다.
+
+
+def _stub_job_runtime() -> job_service.JobRuntime:
+    return job_service.JobRuntime(
+        jobs={},
+        dry_run=False,
+        prepare_workflow_for_job=lambda payload: (
+            {"1": {"class_type": "KSampler", "inputs": {}}},
+            [{"name": "input.png", "path": "/tmp/input.png"}],
+            {"seed": {"mode": "automatic", "value": 1234}},
+        ),
+        build_runpod_payload=lambda workflow, images: {"input": {"workflow": workflow, "images": images}},
+        runpod_request=lambda method, path, payload=None: {"id": "runpod_job_stub"},
+        save_runpod_outputs=lambda _result, _job: {"assets": [], "remoteUrls": []},
+        append_history=lambda _item: [],
+        build_wan_node_config_snapshot=lambda _workflow_id, _segments: {},
+        hydrate_input_images=lambda _item: [],
+        record_job=lambda job: record_job_status(job, resolve_asset=None),
+    )
+
+
+def _batch_with_ready_drafts(db_session, monkeypatch, *, count: int, user_id: str = "operator_1") -> dict:
+    db_session.add(_user(user_id))
+    _seed_assets(db_session, count)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(studio_api_service, "job_runtime", _stub_job_runtime)
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "d",
+            "requestedFrames": 81,
+            "items": _asset_items(count),
+        },
+        created_by=user_id,
+    )
+    return created
+
+
+def _drafts_of(db_session, batch_job_id: str) -> list[ImagePromptDraft]:
+    return list(db_session.scalars(
+        select(ImagePromptDraft)
+        .where(ImagePromptDraft.batch_job_id == batch_job_id)
+        .order_by(ImagePromptDraft.slot_index.asc())
+    ).all())
+
+
+def test_promote_ready_drafts_creates_runpod_request_items(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "READY"
+        draft.positive_prompt = "a cinematic shot"
+    db_session.commit()
+
+    result = batch_job_service.promote_ready_batch_drafts()
+
+    assert result["promoted"] == 2
+    assert result["batches"] == [created["id"]]
+    request_batches = db_session.scalars(
+        select(RunpodRequestBatch).where(RunpodRequestBatch.batch_job_id == created["id"])
+    ).all()
+    assert len(request_batches) == 1
+    items = db_session.scalars(
+        select(RunpodRequestItem).where(RunpodRequestItem.request_batch_id == request_batches[0].id)
+    ).all()
+    assert len(items) == 2
+    assert {item.requested_frames for item in items} == {81}
+    # G-5: batch_job_id는 행 생성 시점에 박혀 있어야 한다. 나중에 patch하면
+    # 바로 뒤에 만들어지는 WorkflowTask가 NULL을 물려받는다.
+    assert {item.status for item in items} == {"PENDING_SUBMIT"}
+
+
+def test_promote_stamps_batch_job_id_on_created_tasks(db_session, monkeypatch):
+    """G-5: 승격으로 만들어진 WorkflowTask도 batch_job_id를 갖는다."""
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "READY"
+        draft.positive_prompt = "a cinematic shot"
+    db_session.commit()
+
+    batch_job_service.promote_ready_batch_drafts()
+
+    tasks = db_session.scalars(select(WorkflowTask)).all()
+    assert len(tasks) == 1
+    assert tasks[0].batch_job_id == created["id"]
+    assert tasks[0].request_item_id
+
+
+def test_promote_is_idempotent(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "READY"
+        draft.positive_prompt = "a cinematic shot"
+    db_session.commit()
+
+    first = batch_job_service.promote_ready_batch_drafts()
+    second = batch_job_service.promote_ready_batch_drafts()
+
+    assert first["promoted"] == 2
+    assert second["promoted"] == 0
+    assert second["batches"] == []
+    total_items = db_session.scalars(
+        select(RunpodRequestItem)
+        .join(RunpodRequestBatch, RunpodRequestItem.request_batch_id == RunpodRequestBatch.id)
+        .where(RunpodRequestBatch.batch_job_id == created["id"])
+    ).all()
+    assert len(total_items) == 2
+
+
+def test_failed_drafts_are_never_promoted(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=3)
+    drafts = _drafts_of(db_session, created["id"])
+    drafts[0].status = "READY"
+    drafts[0].positive_prompt = "ok"
+    drafts[1].status = "FAILED"
+    drafts[2].status = "MANUAL_REQUIRED"
+    db_session.commit()
+
+    result = batch_job_service.promote_ready_batch_drafts()
+
+    assert result["promoted"] == 1
+    items = db_session.scalars(
+        select(RunpodRequestItem)
+        .join(RunpodRequestBatch, RunpodRequestItem.request_batch_id == RunpodRequestBatch.id)
+        .where(RunpodRequestBatch.batch_job_id == created["id"])
+    ).all()
+    assert [item.prompt_draft_id for item in items] == [drafts[0].id]
+
+
+def test_promote_ignores_completed_batch_jobs(db_session, monkeypatch):
+    """COMPLETE로 닫힌 배치의 뒤늦은 READY 초안은 다시 요청되지 않는다."""
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "READY"
+        draft.positive_prompt = "a cinematic shot"
+    db_session.get(BatchJob, created["id"]).status = "COMPLETE"
+    db_session.commit()
+
+    assert batch_job_service.promote_ready_batch_drafts() == {"promoted": 0, "batches": []}
+
+
+def test_existing_request_batch_path_records_no_batch_job_id(db_session):
+    """G-5: 기존 RunPod 요청 관리 경로는 batch_job_id를 남기지 않는다."""
+    from backend.app.services.runpod_request_batch_service import create_request_batch
+
+    db_session.add_all([
+        _user(),
+        _asset("asset_1"),
+        ImagePromptDraft(
+            id="draft_plain_1",
+            asset_id="asset_1",
+            workflow_id="Blowbang1.json",
+            slot_index=1,
+            status="READY",
+            provider="grok",
+            model="grok-test",
+            instruction_version="Blowbang1.json@1",
+            positive_prompt="plain prompt",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            created_by="operator_1",
+        ),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        items=[{"promptDraftId": "draft_plain_1"}],
+        created_by="operator_1",
+    )
+    row = db_session.get(RunpodRequestBatch, batch["id"])
+    assert row.batch_job_id is None
+
+
+def test_one_failing_batch_does_not_block_the_others(db_session, monkeypatch):
+    """비활성 작업자의 배치 하나가 나머지 배치의 승격을 영구히 막으면 안 된다."""
+    batch_job_service._PROMOTION_FAILURES.clear()
+    _seed_assets(db_session, 2)
+    db_session.add_all([
+        User(id="inactive_op", name="Inactive", role="OPERATOR", is_active=False),
+        _user("healthy_op"),
+    ])
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(studio_api_service, "job_runtime", _stub_job_runtime)
+    broken = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81,
+         "items": [{"assetId": "asset_1"}]},
+        created_by="inactive_op",
+    )
+    healthy = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81,
+         "items": [{"assetId": "asset_2"}]},
+        created_by="healthy_op",
+    )
+    for batch_job_id in (broken["id"], healthy["id"]):
+        for draft in _drafts_of(db_session, batch_job_id):
+            draft.status = "READY"
+            draft.positive_prompt = "a cinematic shot"
+    db_session.commit()
+
+    result = batch_job_service.promote_ready_batch_drafts()
+
+    assert result == {"promoted": 1, "batches": [healthy["id"]]}
+    assert broken["id"] in batch_job_service._PROMOTION_FAILURES
