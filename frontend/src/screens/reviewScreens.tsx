@@ -1154,6 +1154,7 @@ export function Create5aScreen({
   loading,
   notice,
   collections,
+  uncategorizedTotal,
   collectionFilter,
   createName,
   onCollectionFilterChange,
@@ -1177,6 +1178,7 @@ export function Create5aScreen({
   loading: boolean;
   notice: string;
   collections: CollectionSummary[];
+  uncategorizedTotal: number;
   collectionFilter: number | "uncategorized" | "";
   createName: string;
   onCollectionFilterChange: (value: number | "uncategorized" | "") => void;
@@ -1209,7 +1211,7 @@ export function Create5aScreen({
       activeItem="assets"
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="ASSETS"
-      headerTitle={`Asset 관리 · 전체 ${total}개`}
+      headerTitle={`컬렉션 관리 · 전체 ${total}개`}
       sidebarExtra={
         <div className="v3-step-tracker v3-sidebar-context-menu">
           <div className="v3-label" style={{ padding: "0 10px 4px" }}>COLLECTION · {collections.length}</div>
@@ -1225,7 +1227,7 @@ export function Create5aScreen({
             className={`v3-segment-nav-item ${collectionFilter === "uncategorized" ? "is-active" : ""}`}
             onClick={() => onCollectionFilterChange("uncategorized")}
           >
-            <div className="v3-segment-nav-head"><span>미분류</span></div>
+            <div className="v3-segment-nav-head"><span>미분류</span><span>{uncategorizedTotal}</span></div>
           </button>
           {loading && !collections.length ? <p className="v3-muted-text" style={{ padding: "4px 10px" }}>불러오는 중입니다...</p> : null}
           {collections.map((c) => (

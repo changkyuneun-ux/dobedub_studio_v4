@@ -159,7 +159,7 @@ export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "create.promptManagement": "프롬프트 생성 관리",
   "create.runpodRequests": "RunPod 요청 관리",
   "review.history": "Task History",
-  "review.assets": "Assets",
+  "review.assets": "컬렉션 관리",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
   "admin.taskPolicy": "Task Policy",
@@ -214,6 +214,7 @@ export function StudioShell({
   const [assetsNotice, setAssetsNotice] = useState("");
   const [assetsCollectionFilter, setAssetsCollectionFilter] = useState<number | "uncategorized" | "">("");
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [assetsUncategorizedTotal, setAssetsUncategorizedTotal] = useState(0);
   const [collectionCreateName, setCollectionCreateName] = useState("");
   // E-04(4a/4d): 구버전 AdminConsoleModal Workflows 탭의 상태를 그대로 옮겨왔다.
   // Create flow가 쓰는 `workflows`(WorkflowItem[], apiClient.workflows())와는 다른
@@ -401,8 +402,12 @@ export function StudioShell({
   // 쓰여 별도 "선택된 컬렉션 상세" 상태가 필요 없다 - 목록만 불러온다.
   async function loadCollections() {
     try {
-      const response = await apiClient.collections();
-      setCollections(response.items || []);
+      const [collectionsResponse, uncategorizedResponse] = await Promise.all([
+        apiClient.collections(),
+        apiClient.assets({ page: 1, pageSize: 1, uncategorized: true })
+      ]);
+      setCollections(collectionsResponse.items || []);
+      setAssetsUncategorizedTotal(uncategorizedResponse.total || 0);
     } catch (error) {
       setAssetsNotice(error instanceof Error ? error.message : "컬렉션을 불러오지 못했습니다.");
     }
@@ -2095,6 +2100,7 @@ export function StudioShell({
         loading={assetsLoading}
         notice={assetsNotice}
         collections={collections}
+        uncategorizedTotal={assetsUncategorizedTotal}
         collectionFilter={assetsCollectionFilter}
         createName={collectionCreateName}
         onCollectionFilterChange={changeAssetsCollectionFilter}
