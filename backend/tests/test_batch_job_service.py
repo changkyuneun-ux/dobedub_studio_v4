@@ -525,6 +525,34 @@ def test_batch_job_payload_missing_batch_raises(db_session):
         batch_job_service.batch_job_payload(db_session, "batch_missing")
 
 
+def test_batch_job_history_uses_five_row_pages(db_session):
+    user = _user()
+    db_session.add(user)
+    for index in range(7):
+        db_session.add(BatchJob(
+            id=f"batch_page_{index}",
+            workflow_id="Blowbang1.json",
+            status="COMPLETE",
+            source_dir_name="d",
+            source_zip_file_name=f"source_{index}.zip",
+            requested_frames=161,
+            duration_seconds=10,
+            total_images=1,
+            created_by=user.id,
+            created_at=datetime(2026, 9, 6, 1, index, 0),
+            updated_at=datetime(2026, 9, 6, 1, index, 0),
+        ))
+    db_session.commit()
+
+    first = batch_job_service.list_batch_jobs(db_session, created_by=user.id, page=1)
+    second = batch_job_service.list_batch_jobs(db_session, created_by=user.id, page=2)
+
+    assert first["pageSize"] == 5
+    assert len(first["items"]) == 5
+    assert first["total"] == 7
+    assert len(second["items"]) == 2
+
+
 # --- promote_ready_batch_drafts -------------------------------------------
 #
 # 폴더 기반 Batch 작업은 Prompt 생성관리/RunPod 요청관리 큐를 거치지 않는다.
@@ -877,3 +905,161 @@ def test_refresh_batch_job_counters_does_not_close_unpromoted_ready_drafts(db_se
 
     db_session.expire_all()
     assert db_session.get(BatchJob, created["id"]).status == "INCOMPLETE"
+
+
+def test_batch_job_detail_separates_prompt_and_runpod_failures(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "detail_asset", 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    drafts = _drafts_of(db_session, created["id"])
+    drafts[0].status = "FAILED"
+    drafts[0].failure_message = "Grok 503"
+    drafts[1].status = "READY"
+    drafts[1].positive_prompt = "ok"
+    db_session.add(WorkflowTask(
+        id="task_failed_detail",
+        workflow_id="Blowbang1.json",
+        status="FAILED",
+        user_id="operator_1",
+        batch_job_id=created["id"],
+        prompt_draft_id=drafts[1].id,
+        last_dispatch_error="RunPod 404",
+    ))
+    db_session.commit()
+
+    detail = batch_job_service.batch_job_detail(db_session, created["id"])
+
+    assert detail["batch"]["id"] == created["id"]
+    assert detail["warnings"] == []
+    assert [
+        (item["promptStatus"], item["runpodStatus"], item["retryKind"], item["retryable"])
+        for item in detail["items"]
+    ] == [
+        ("FAILED", "미요청", "prompt", True),
+        ("READY", "FAILED", "runpod", True),
+    ]
+    assert detail["items"][0]["error"] == "Grok 503"
+    assert detail["items"][1]["error"] == "RunPod 404"
+
+
+def test_batch_job_detail_normalizes_legacy_mojibake_source_paths(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "mojibake_asset", 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    broken_root = unicodedata.normalize("NFD", "2권 08-10화-테스트").encode("utf-8").decode("cp437")
+    broken_child = unicodedata.normalize("NFD", "2권 08화").encode("utf-8").decode("cp437")
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceZipFileName": "2권 08-10화-테스트.zip",
+            "requestedFrames": 161,
+            "items": [{
+                "assetId": asset_ids[0],
+                "fileName": "0001.jpg",
+                "relativePath": f"{broken_root}/{broken_child}/0001.jpg",
+            }],
+        },
+        created_by="operator_1",
+    )
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "MANUAL_REQUIRED"
+    db_session.commit()
+
+    detail = batch_job_service.batch_job_detail(db_session, created["id"])
+
+    assert detail["items"][0]["sourceRelativePath"] == "2권 08-10화-테스트/2권 08화/0001.jpg"
+    assert "ß" not in detail["items"][0]["sourceRelativePath"]
+
+
+def test_retry_failed_batch_items_reuses_existing_prompt_and_task_rows(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "retry_asset", 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    drafts = _drafts_of(db_session, created["id"])
+    drafts[0].status = "FAILED"
+    drafts[0].positive_prompt = "bad"
+    drafts[0].failure_message = "Grok timeout"
+    drafts[1].status = "READY"
+    drafts[1].positive_prompt = "ok"
+    original_created_at = datetime(2026, 9, 6, 2, 0, 0)
+    db_session.add(WorkflowTask(
+        id="task_failed_retry",
+        workflow_id="Blowbang1.json",
+        status="FAILED",
+        progress=100,
+        user_id="operator_1",
+        batch_job_id=created["id"],
+        prompt_draft_id=drafts[1].id,
+        runpod_job_id="runpod_failed",
+        runpod_status_json={"error": "provider failed"},
+        last_dispatch_error="provider failed",
+        completed_at=datetime(2026, 9, 6, 2, 5, 0),
+        created_at=original_created_at,
+    ))
+    db_session.commit()
+
+    result = batch_job_service.retry_failed_batch_items(
+        db_session,
+        created["id"],
+        actor_id="operator_1",
+        can_manage=False,
+        stage="all",
+    )
+
+    db_session.expire_all()
+    retried_draft = db_session.get(ImagePromptDraft, drafts[0].id)
+    reworked_task = db_session.get(WorkflowTask, "task_failed_retry")
+    assert result["promptRetried"] == 1
+    assert result["runpodReworked"] == 1
+    assert result["skipped"] == []
+    assert retried_draft.status == "PENDING"
+    assert retried_draft.positive_prompt is None
+    assert retried_draft.failure_message is None
+    assert reworked_task.status == "PENDING_SUBMIT"
+    assert reworked_task.runpod_job_id is None
+    assert reworked_task.progress == 0
+    assert reworked_task.created_at == original_created_at
+    assert len(db_session.scalars(select(WorkflowTask).where(WorkflowTask.prompt_draft_id == drafts[1].id)).all()) == 1
+
+
+def test_batch_job_detail_repairs_task_missing_batch_link_when_prompt_link_is_clear(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "repair_asset", 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    db_session.add(WorkflowTask(
+        id="task_missing_batch_link",
+        workflow_id="Blowbang1.json",
+        status="FAILED",
+        user_id="operator_1",
+        prompt_draft_id=draft.id,
+        payload_json={"promptDraftId": draft.id},
+    ))
+    db_session.commit()
+
+    detail = batch_job_service.batch_job_detail(db_session, created["id"])
+
+    repaired = db_session.get(WorkflowTask, "task_missing_batch_link")
+    assert repaired.batch_job_id == created["id"]
+    assert repaired.payload_json["batchJobId"] == created["id"]
+    assert detail["warnings"][0]["type"] == "repaired_missing_batch_link"
+    assert detail["items"][0]["taskId"] == "task_missing_batch_link"
+    assert detail["items"][0]["retryKind"] == "runpod"

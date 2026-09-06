@@ -14,8 +14,9 @@ import unicodedata
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, utc_now
+from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, utc_now
 from backend.app.db.models import (
+    Asset,
     BATCH_JOB_COMPLETE,
     BATCH_JOB_INCOMPLETE,
     BatchJob,
@@ -26,17 +27,20 @@ from backend.app.db.models import (
 )
 from backend.app.db.session import SessionLocal
 from backend.app.services import prompt_batch_service, workflow_service
+from backend.app.services.zip_encoding_service import normalize_zip_path
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81, 161})
 DEFAULT_FRAMES = 81
 DEFAULT_FPS = 16
 PROMOTION_LIMIT_PER_CYCLE = 20
 STALE_PROMOTION_CLAIM_SECONDS = 300
-PAGE_SIZE = 10
+PAGE_SIZE = 5
 TERMINAL_DRAFT_STATES = frozenset({"READY", "FAILED", "MANUAL_REQUIRED"})
 FAILED_DRAFT_STATES = frozenset({"FAILED", "MANUAL_REQUIRED"})
 TERMINAL_TASK_STATES = frozenset({"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"})
 SUCCESS_TASK_STATES = frozenset({"COMPLETED", "SUCCESS"})
+REWORKABLE_TASK_STATES = TERMINAL_TASK_STATES - SUCCESS_TASK_STATES
+ACTIVE_TASK_STATES = frozenset({"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"})
 
 # Last promotion error per batch job, for operator diagnosis. Deliberately
 # in-memory: it is a transient monitor detail, not batch state.
@@ -236,6 +240,88 @@ def batch_job_payload(db: Session, batch_job_id: str) -> dict[str, Any]:
     return _batch_payload(db, batch)
 
 
+def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
+    batch = db.get(BatchJob, batch_job_id)
+    if batch is None:
+        raise ValueError("배치 작업을 찾을 수 없습니다.")
+    batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
+    drafts = db.scalars(
+        select(ImagePromptDraft)
+        .where(ImagePromptDraft.batch_job_id == batch.id)
+        .order_by(ImagePromptDraft.slot_index.asc(), ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
+    ).all()
+    draft_ids = [draft.id for draft in drafts]
+    task_filter = WorkflowTask.batch_job_id == batch.id
+    if draft_ids:
+        task_filter = or_(task_filter, WorkflowTask.prompt_draft_id.in_(draft_ids))
+    tasks = db.scalars(
+        select(WorkflowTask)
+        .where(task_filter, WorkflowTask.deleted_at.is_(None))
+        .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+    ).all()
+    tasks_by_draft: dict[str, list[WorkflowTask]] = {}
+    orphan_tasks: list[WorkflowTask] = []
+    warnings: list[dict[str, Any]] = []
+    for task in tasks:
+        key = str(task.prompt_draft_id or "").strip()
+        if key:
+            if key in draft_ids and not task.batch_job_id:
+                payload = dict(task.payload_json or {})
+                payload["batchJobId"] = batch.id
+                task.payload_json = payload
+                task.batch_job_id = batch.id
+                task.updated_at = now_seoul_naive()
+                warnings.append({
+                    "type": "repaired_missing_batch_link",
+                    "promptDraftId": key,
+                    "taskId": task.id,
+                    "batchJobId": batch.id,
+                })
+            elif key in draft_ids and task.batch_job_id != batch.id:
+                warnings.append({
+                    "type": "conflicting_batch_link",
+                    "promptDraftId": key,
+                    "taskId": task.id,
+                    "batchJobId": task.batch_job_id,
+                    "expectedBatchJobId": batch.id,
+                })
+            tasks_by_draft.setdefault(key, []).append(task)
+        else:
+            orphan_tasks.append(task)
+
+    duplicate_draft_ids = {
+        draft_id
+        for draft_id, linked_tasks in tasks_by_draft.items()
+        if len(linked_tasks) > 1
+    }
+    for draft_id in sorted(duplicate_draft_ids):
+        warnings.append({
+            "type": "duplicate_runpod_task",
+            "promptDraftId": draft_id,
+            "taskIds": [task.id for task in tasks_by_draft[draft_id]],
+        })
+    for task in orphan_tasks:
+        warnings.append({
+            "type": "missing_prompt_draft_link",
+            "taskId": task.id,
+            "batchJobId": batch.id,
+        })
+
+    asset_ids = {draft.asset_id for draft in drafts if draft.asset_id}
+    assets = {
+        asset.id: asset
+        for asset in db.scalars(select(Asset).where(Asset.id.in_(asset_ids))).all()
+    } if asset_ids else {}
+
+    items = [
+        _batch_detail_item(draft, tasks_by_draft.get(draft.id, []), assets.get(draft.asset_id), duplicate=draft.id in duplicate_draft_ids)
+        for draft in drafts
+    ]
+    items.extend(_orphan_task_detail_item(task) for task in orphan_tasks)
+    batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
+    return {"batch": _batch_payload(db, batch), "items": items, "warnings": warnings}
+
+
 def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
     return {
         "id": batch.id,
@@ -262,6 +348,109 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "createdByName": _user_name(db, batch.created_by),
         "createdAt": batch.created_at.isoformat() if batch.created_at else None,
         "updatedAt": batch.updated_at.isoformat() if batch.updated_at else None,
+    }
+
+
+def _source_metadata(draft: ImagePromptDraft) -> dict[str, str]:
+    raw = draft.raw_json if isinstance(draft.raw_json, dict) else {}
+    return {
+        "sourceRelativePath": normalize_zip_path(str(raw.get("sourceRelativePath") or "").strip()),
+        "sourceZipFileName": normalize_zip_path(str(raw.get("sourceZipFileName") or "").strip()),
+    }
+
+
+def _source_file_name(draft: ImagePromptDraft, asset: Asset | None) -> str:
+    metadata = _source_metadata(draft)
+    source_path = metadata["sourceRelativePath"]
+    if source_path:
+        return Path(source_path).name
+    return asset.file_name if asset and asset.file_name else draft.asset_id
+
+
+def _task_error(task: WorkflowTask | None) -> str:
+    if task is None:
+        return ""
+    status_json = task.runpod_status_json if isinstance(task.runpod_status_json, dict) else {}
+    submit_json = task.runpod_submit_json if isinstance(task.runpod_submit_json, dict) else {}
+    candidates = (
+        task.last_dispatch_error,
+        status_json.get("error"),
+        status_json.get("message"),
+        submit_json.get("error"),
+        submit_json.get("message"),
+    )
+    return next((str(value) for value in candidates if value), "")
+
+
+def _batch_detail_item(
+    draft: ImagePromptDraft,
+    linked_tasks: list[WorkflowTask],
+    asset: Asset | None,
+    *,
+    duplicate: bool,
+) -> dict[str, Any]:
+    latest_task = linked_tasks[-1] if linked_tasks else None
+    prompt_status = str(draft.status or "").upper()
+    runpod_status = str(latest_task.status or "").upper() if latest_task else "미요청"
+    prompt_failed = prompt_status in FAILED_DRAFT_STATES
+    runpod_failed = latest_task is not None and runpod_status in REWORKABLE_TASK_STATES
+    runpod_active = latest_task is not None and runpod_status in ACTIVE_TASK_STATES
+    retry_kind = "none"
+    retryable = False
+    action_label = "제외"
+    error = ""
+    if duplicate:
+        error = "동일 프롬프트에 연결된 RunPod 작업이 2개 이상입니다."
+    elif prompt_failed and latest_task is None:
+        retry_kind = "prompt"
+        retryable = True
+        action_label = "재처리"
+        error = str(draft.failure_message or "")
+    elif runpod_failed:
+        retry_kind = "runpod"
+        retryable = True
+        action_label = "재작업"
+        error = _task_error(latest_task)
+    elif runpod_active:
+        action_label = "잠김"
+        error = _task_error(latest_task)
+    metadata = _source_metadata(draft)
+    return {
+        "id": f"{draft.id}:{latest_task.id if latest_task else ''}",
+        "sourceFileName": _source_file_name(draft, asset),
+        "sourceRelativePath": metadata["sourceRelativePath"],
+        "sourceZipFileName": metadata["sourceZipFileName"],
+        "promptDraftId": draft.id,
+        "taskId": latest_task.id if latest_task else None,
+        "promptStatus": prompt_status,
+        "runpodStatus": runpod_status,
+        "error": error,
+        "retryKind": retry_kind,
+        "retryable": retryable,
+        "selectable": retryable,
+        "actionLabel": action_label,
+        "retryCount": int((latest_task.dispatch_attempts if latest_task else 0) or 0),
+        "nextRetryAt": latest_task.next_dispatch_at.isoformat() if latest_task and latest_task.next_dispatch_at else None,
+    }
+
+
+def _orphan_task_detail_item(task: WorkflowTask) -> dict[str, Any]:
+    return {
+        "id": f":{task.id}",
+        "sourceFileName": "-",
+        "sourceRelativePath": "",
+        "sourceZipFileName": "",
+        "promptDraftId": None,
+        "taskId": task.id,
+        "promptStatus": "연결 누락",
+        "runpodStatus": str(task.status or "").upper(),
+        "error": "RunPod 작업에 prompt_draft_id 연결이 없습니다.",
+        "retryKind": "none",
+        "retryable": False,
+        "selectable": False,
+        "actionLabel": "확인",
+        "retryCount": int(task.dispatch_attempts or 0),
+        "nextRetryAt": task.next_dispatch_at.isoformat() if task.next_dispatch_at else None,
     }
 
 
@@ -500,18 +689,7 @@ def refresh_batch_job_counters() -> dict[str, Any]:
     completed = 0
     try:
         for batch in db.scalars(select(BatchJob).where(BatchJob.status == BATCH_JOB_INCOMPLETE)).all():
-            counts = _counts_for(db, batch.id)
-            batch.prompt_completed_count = counts["promptReady"]
-            batch.prompt_failed_count = counts["promptFailed"]
-            batch.video_requested_count = counts["videoRequested"]
-            batch.video_completed_count = counts["videoCompleted"]
-            batch.video_failed_count = counts["videoFailed"]
-            batch.prompt_waiting_count = counts["promptWaiting"]
-            batch.prompt_generating_count = counts["promptGenerating"]
-            batch.runpod_pending_submit_count = counts["videoPendingSubmit"]
-            batch.runpod_queued_count = counts["videoQueued"]
-            batch.runpod_in_progress_count = counts["videoInProgress"]
-            if _batch_is_settled(db, batch):
+            if _refresh_batch_row(db, batch):
                 batch.status = BATCH_JOB_COMPLETE
                 completed += 1
             refreshed += 1
@@ -519,6 +697,21 @@ def refresh_batch_job_counters() -> dict[str, Any]:
     finally:
         db.close()
     return {"refreshed": refreshed, "completed": completed}
+
+
+def _refresh_batch_row(db: Session, batch: BatchJob) -> bool:
+    counts = _counts_for(db, batch.id)
+    batch.prompt_completed_count = counts["promptReady"]
+    batch.prompt_failed_count = counts["promptFailed"]
+    batch.video_requested_count = counts["videoRequested"]
+    batch.video_completed_count = counts["videoCompleted"]
+    batch.video_failed_count = counts["videoFailed"]
+    batch.prompt_waiting_count = counts["promptWaiting"]
+    batch.prompt_generating_count = counts["promptGenerating"]
+    batch.runpod_pending_submit_count = counts["videoPendingSubmit"]
+    batch.runpod_queued_count = counts["videoQueued"]
+    batch.runpod_in_progress_count = counts["videoInProgress"]
+    return _batch_is_settled(db, batch)
 
 
 def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
@@ -647,6 +840,161 @@ def mark_batch_downloaded(db: Session, batch_job_id: str) -> None:
         return
     batch.last_downloaded_at = datetime.utcnow()
     db.commit()
+
+
+def retry_failed_batch_items(
+    db: Session,
+    batch_job_id: str,
+    *,
+    actor_id: str,
+    can_manage: bool,
+    stage: str = "all",
+    draft_ids: list[str] | None = None,
+    task_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    batch = db.get(BatchJob, batch_job_id)
+    if batch is None:
+        raise ValueError("배치 작업을 찾을 수 없습니다.")
+    if not can_manage and str(batch.created_by or "") != str(actor_id or ""):
+        raise PermissionError("다른 작업자의 배치는 재처리할 수 없습니다.")
+    normalized_stage = str(stage or "all").strip().lower()
+    if normalized_stage not in {"all", "prompt", "runpod"}:
+        raise ValueError("재처리 stage 값이 올바르지 않습니다.")
+
+    selected_draft_ids = {str(draft_id) for draft_id in draft_ids or [] if str(draft_id or "").strip()}
+    selected_task_ids = {str(task_id) for task_id in task_ids or [] if str(task_id or "").strip()}
+    has_explicit_selection = bool(selected_draft_ids or selected_task_ids)
+    skipped: list[dict[str, str]] = []
+    prompt_retried = 0
+    runpod_reworked = 0
+    duplicate_prompt_ids = _duplicate_prompt_task_ids(db, batch.id)
+
+    if normalized_stage in {"all", "prompt"}:
+        prompt_query = select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == batch.id)
+        if selected_draft_ids:
+            prompt_query = prompt_query.where(ImagePromptDraft.id.in_(selected_draft_ids))
+        elif has_explicit_selection:
+            prompt_query = prompt_query.where(False)
+        else:
+            prompt_query = prompt_query.where(ImagePromptDraft.status.in_(FAILED_DRAFT_STATES))
+        for draft in db.scalars(prompt_query.order_by(ImagePromptDraft.slot_index.asc(), ImagePromptDraft.id.asc())).all():
+            if str(draft.status or "").upper() not in FAILED_DRAFT_STATES:
+                skipped.append({"id": draft.id, "reason": "not_failed_prompt"})
+                continue
+            if draft.id in duplicate_prompt_ids:
+                skipped.append({"id": draft.id, "reason": "duplicate_runpod_task"})
+                continue
+            linked_task_exists = db.scalar(
+                select(func.count())
+                .select_from(WorkflowTask)
+                .where(
+                    WorkflowTask.batch_job_id == batch.id,
+                    WorkflowTask.prompt_draft_id == draft.id,
+                    WorkflowTask.deleted_at.is_(None),
+                )
+            ) or 0
+            if int(linked_task_exists) > 0:
+                skipped.append({"id": draft.id, "reason": "already_has_runpod_task"})
+                continue
+            _reset_prompt_draft_for_retry(draft)
+            prompt_retried += 1
+
+    if normalized_stage in {"all", "runpod"}:
+        task_query = select(WorkflowTask).where(WorkflowTask.batch_job_id == batch.id, WorkflowTask.deleted_at.is_(None))
+        if selected_task_ids:
+            task_query = task_query.where(WorkflowTask.id.in_(selected_task_ids))
+        elif has_explicit_selection:
+            task_query = task_query.where(False)
+        else:
+            task_query = task_query.where(WorkflowTask.status.in_(REWORKABLE_TASK_STATES))
+        for task in db.scalars(task_query.order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())).all():
+            status = str(task.status or "").upper()
+            if status not in REWORKABLE_TASK_STATES:
+                skipped.append({"id": task.id, "reason": "not_reworkable_runpod"})
+                continue
+            if not task.prompt_draft_id:
+                skipped.append({"id": task.id, "reason": "missing_prompt_draft_link"})
+                continue
+            if str(task.prompt_draft_id) in duplicate_prompt_ids:
+                skipped.append({"id": task.id, "reason": "duplicate_runpod_task"})
+                continue
+            _reset_runpod_task_for_rework(db, task, actor_id=actor_id)
+            runpod_reworked += 1
+
+    batch.status = BATCH_JOB_INCOMPLETE
+    _refresh_batch_row(db, batch)
+    db.commit()
+    return {
+        "batchJobId": batch.id,
+        "promptRetried": prompt_retried,
+        "runpodReworked": runpod_reworked,
+        "skipped": skipped,
+        "batch": _batch_payload(db, batch),
+    }
+
+
+def _duplicate_prompt_task_ids(db: Session, batch_job_id: str) -> set[str]:
+    rows = db.execute(
+        select(WorkflowTask.prompt_draft_id, func.count())
+        .where(
+            WorkflowTask.batch_job_id == batch_job_id,
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.prompt_draft_id.is_not(None),
+        )
+        .group_by(WorkflowTask.prompt_draft_id)
+        .having(func.count() > 1)
+    ).all()
+    return {str(prompt_draft_id) for prompt_draft_id, _count in rows if prompt_draft_id}
+
+
+def _reset_prompt_draft_for_retry(draft: ImagePromptDraft) -> None:
+    source_metadata = {key: value for key, value in _source_metadata(draft).items() if value}
+    draft.status = "PENDING"
+    draft.positive_prompt = None
+    draft.failure_message = None
+    draft.warnings_json = []
+    draft.raw_json = source_metadata
+    draft.promotion_claimed_at = None
+    draft.updated_at = now_seoul_naive()
+
+
+def _reset_runpod_task_for_rework(db: Session, task: WorkflowTask, *, actor_id: str) -> None:
+    now = now_seoul_naive()
+    payload = dict(task.payload_json or {})
+    for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
+        payload.pop(key, None)
+    if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
+        payload["user"] = {
+            "id": task.user_id or actor_id,
+            "name": task.worker_name or task.user_id or actor_id,
+            "role": "",
+            "permissions": [],
+        }
+    if task.batch_job_id:
+        payload["batchJobId"] = task.batch_job_id
+    if task.prompt_draft_id:
+        payload["promptDraftId"] = task.prompt_draft_id
+
+    task.status = "PENDING_SUBMIT"
+    task.progress = 0
+    task.runpod_job_id = None
+    task.completed_at = None
+    task.elapsed_seconds = None
+    task.runpod_submit_json = {}
+    task.runpod_status_json = {}
+    task.payload_json = payload
+    task.wan_node_config = {}
+    task.dispatch_claimed_at = None
+    task.dispatch_attempts = 0
+    task.next_dispatch_at = None
+    task.last_dispatch_error = None
+    task.started_at = now
+    task.updated_at = now
+    for link in list(task.output_assets):
+        db.delete(link)
+    for prompt in list(task.prompts):
+        prompt.output_asset_ids = []
+        prompt.updated_at = now
 
 
 def _parse_date(value: str | None, *, end_of_day: bool = False) -> datetime | None:

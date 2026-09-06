@@ -98,7 +98,7 @@ A안은 기존 파이프라인·화면·이력·저장 경로를 건드리지 �
 - `영상길이(초)`는 `batch_jobs.duration_seconds`를 그대로 표시한다 (`5초` / `10초`)
 - `이미지 디렉토리`는 선택한 폴더명(§2)
 - 필터(요구사항 12): **일자**(시작~종료), **작업자**, **상태**(전체/완료/미완료). 기본값 모두 **전체**
-- 페이지네이션: **10건 단위**
+- 페이지네이션: **5건 단위**
 - `작업자` 필터는 `jobs:manage` 권한 보유자에게만 노출한다. 미보유자는 자기 배치만 조회된다
   (기존 `runpodRequestScreen`·`/history/prompts`의 격리 규칙과 동일)
 - `실패건수`는 `prompt_failed_count + video_failed_count`
@@ -287,7 +287,7 @@ Alembic 마이그레이션 `20260904_0033_batch_jobs.py` (`down_revision = "2026
 |---|---|---|
 | `POST` | `/batch-jobs` | 배치 생성. body: `{ workflowId, sourceDirName, requestedFrames, items: [{ assetId, fileName }] }`. `requestedFrames`는 49/81/161만 허용(기본 81), 그 외는 400 |
 | `GET` | `/batch-jobs/active` | ③④ 대시보드용. 미완료 배치 + 단계별 카운터 |
-| `GET` | `/batch-jobs` | ⑤ 내역. query: `page`, `dateFrom`, `dateTo`, `workerId`, `status` (기본 전체), 10건 고정 |
+| `GET` | `/batch-jobs` | ⑤ 내역. query: `page`, `dateFrom`, `dateTo`, `workerId`, `status` (기본 전체), 5건 고정 |
 | `GET` | `/batch-jobs/{id}/download` | §8 ZIP 스트리밍. query `taskIds`(선택)로 일부만 받을 수 있다. 응답 시 `last_downloaded_at` 갱신 |
 
 `jobs:manage` 미보유자는 `GET /batch-jobs`·`/batch-jobs/active`에서 자기 배치만 받고,
@@ -325,7 +325,7 @@ Alembic 마이그레이션 `20260904_0033_batch_jobs.py` (`down_revision = "2026
 5. FAILED draft는 승격되지 않고 `prompt_failed_count`에 잡힌다
 6. 모든 draft가 종료 + 모든 task가 종료면 상태가 `COMPLETE`가 된다
 7. `GET /batch-jobs/active`는 `COMPLETE` 배치를 제외한다
-8. `GET /batch-jobs`의 일자·작업자·상태 필터와 10건 페이지네이션
+8. `GET /batch-jobs`의 일자·작업자·상태 필터와 5건 페이지네이션
 9. `jobs:manage` 미보유자는 자기 배치만 받고, 남의 배치 ZIP은 403
 10. ZIP 엔트리 경로가 `output/<원본명>.mp4`이고, 동일명 충돌 시 `-1` 인덱스가 붙는다
 11. `/history/prompts?batchId=` · `/history/runpod?batchId=` 필터

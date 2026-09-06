@@ -57,6 +57,11 @@ backend/app/db/migrations/versions/20260906_0034_batch_source_zip_name.py
   - macOS 한글 파일명의 NFC/NFD 차이를 흡수해 부분 검색어로 후보를 반환해야 한다.
   - 검색어 자체를 다운로드 API의 batch id로 사용하지 않고, 사용자가 후보에서 선택한 정확한 batch id만 다운로드에 사용한다.
 
+- `GET /api/batch-jobs`
+  - Batch 처리 화면의 Batch 작업 이력 API다.
+  - page size는 서버에서 5건으로 고정한다.
+  - 프론트의 Batch 처리 이력 범위/총 페이지 계산도 5건 기준이어야 한다.
+
 - `GET /api/history/prompts`
   - 프롬프트 이력 전용 API다.
   - page size는 서버에서 10건으로 고정한다.

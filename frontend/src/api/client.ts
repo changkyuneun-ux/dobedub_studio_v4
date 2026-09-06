@@ -391,6 +391,38 @@ export type BatchJobListResponse = {
   workers: Array<{ workerId: string; workerName: string }>;
 };
 
+export type BatchJobDetailItemResponse = {
+  id: string;
+  sourceFileName: string;
+  sourceRelativePath?: string | null;
+  sourceZipFileName?: string | null;
+  promptDraftId?: string | null;
+  taskId?: string | null;
+  promptStatus: string;
+  runpodStatus: string;
+  error?: string | null;
+  retryKind: "prompt" | "runpod" | "none" | string;
+  retryable: boolean;
+  selectable: boolean;
+  actionLabel: string;
+  retryCount: number;
+  nextRetryAt?: string | null;
+};
+
+export type BatchJobDetailResponse = {
+  batch: BatchJobResponse;
+  items: BatchJobDetailItemResponse[];
+  warnings: Array<Record<string, unknown>>;
+};
+
+export type BatchJobRetryResponse = {
+  batchJobId: string;
+  promptRetried: number;
+  runpodReworked: number;
+  skipped: Array<{ id: string; reason: string }>;
+  batch: BatchJobResponse;
+};
+
 export type BatchJobCandidateListResponse = {
   items: BatchJobResponse[];
 };
@@ -1344,6 +1376,18 @@ export const apiClient = {
     return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
   },
   activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
+  batchJobDetail: (batchJobId: string) =>
+    requestJson<BatchJobDetailResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}`),
+  retryFailedBatchItems: (batchJobId: string) =>
+    requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/retry-failed`, {
+      method: "POST",
+      body: JSON.stringify({ stage: "all" })
+    }),
+  retrySelectedBatchItems: (batchJobId: string, payload: { draftIds?: string[]; taskIds?: string[] }) =>
+    requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/items/retry`, {
+      method: "POST",
+      body: JSON.stringify({ stage: "all", draftIds: payload.draftIds || [], taskIds: payload.taskIds || [] })
+    }),
   batchJobCandidates: (params: { query: string; limit?: number }) => {
     const query = new URLSearchParams();
     query.set("query", params.query);

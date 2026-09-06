@@ -10,6 +10,7 @@ import zipfile
 
 from backend.app.repositories.factory import data_paths
 from backend.app.services import studio_api_service
+from backend.app.services.zip_encoding_service import normalize_zip_path
 
 
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -87,7 +88,7 @@ def import_zip_bytes(
 
     return BatchZipImportResult(
         source_dir_name=source_dir_name,
-        source_zip_file_name=Path(zip_file_name).name,
+        source_zip_file_name=normalize_zip_path(Path(zip_file_name).name),
         image_count=len(items),
         items=items,
     )
@@ -105,7 +106,7 @@ def _image_members(archive: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, Pure
 
 
 def _safe_member_path(member: zipfile.ZipInfo) -> PurePosixPath | None:
-    raw_name = str(member.filename or "").replace("\\", "/")
+    raw_name = normalize_zip_path(member.filename).replace("\\", "/")
     path = PurePosixPath(raw_name)
     if member.is_dir():
         return None

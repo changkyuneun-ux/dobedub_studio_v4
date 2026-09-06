@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, TaskInputAsset, TaskOutputAsset, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services import batch_job_service
+from backend.app.services.zip_encoding_service import normalize_zip_path
 
 OUTPUT_DIR = "output"
 CHUNK_SIZE = 1024 * 1024
@@ -32,7 +33,7 @@ def zip_entry_name(source_file_name: str, used: set[str]) -> str:
 
 
 def batch_output_zip_filename(batch: BatchJob) -> str:
-    source_name = str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip()
+    source_name = normalize_zip_path(str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip())
     stem = Path(Path(source_name).name).stem or "batch"
     return f"{stem}_output.zip"
 
@@ -51,7 +52,7 @@ def zip_entry_name_for_source_path(
     output_root_name: str,
     used: set[str],
 ) -> str:
-    relative_path = _safe_relative_path(source_relative_path)
+    relative_path = _safe_relative_path(normalize_zip_path(source_relative_path))
     if relative_path is None:
         return zip_entry_name(source_file_name, used)
 
@@ -74,7 +75,7 @@ def zip_entry_name_for_source_path(
 
 
 def _safe_relative_path(value: str) -> PurePosixPath | None:
-    raw = str(value or "").strip().replace("\\", "/")
+    raw = normalize_zip_path(str(value or "").strip()).replace("\\", "/")
     if not raw:
         return None
     path = PurePosixPath(raw)
@@ -84,7 +85,7 @@ def _safe_relative_path(value: str) -> PurePosixPath | None:
 
 
 def _output_root_name(batch: BatchJob) -> str:
-    source_name = str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip()
+    source_name = normalize_zip_path(str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip())
     stem = Path(Path(source_name).name).stem or "batch"
     return f"{stem}_output"
 
@@ -142,8 +143,8 @@ def _source_file_names(db: Session, batch_job_id: str) -> dict[str, dict[str, st
     for task_id, file_name, raw_json in rows:
         raw = raw_json if isinstance(raw_json, dict) else {}
         names.setdefault(str(task_id), {
-            "fileName": str(file_name),
-            "relativePath": str(raw.get("sourceRelativePath") or ""),
+            "fileName": normalize_zip_path(str(file_name)),
+            "relativePath": normalize_zip_path(str(raw.get("sourceRelativePath") or "")),
         })
     return names
 

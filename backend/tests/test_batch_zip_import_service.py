@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import unicodedata
 import zipfile
 
 import pytest
@@ -22,6 +23,10 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
         for name, data in entries.items():
             archive.writestr(name, data)
     return buffer.getvalue()
+
+
+def _utf8_name_read_as_cp437(value: str) -> str:
+    return unicodedata.normalize("NFD", value).encode("utf-8").decode("cp437")
 
 
 def test_zip_import_recursively_registers_nested_images(monkeypatch, tmp_path):
@@ -75,6 +80,33 @@ def test_zip_import_uses_zip_stem_when_images_have_multiple_top_level_dirs(monke
 
     assert result.source_dir_name == "픽미툰_씬"
     assert [item["relativePath"] for item in result.items] == ["a/0001.jpg", "b/0002.jpg"]
+
+
+def test_zip_import_recovers_macos_korean_paths_without_utf8_flag(monkeypatch, tmp_path):
+    from backend.app.services import batch_zip_import_service
+
+    monkeypatch.setattr(
+        batch_zip_import_service.studio_api_service,
+        "register_asset",
+        lambda path, asset_type, mime_type=None, file_name=None: {"assetId": f"asset_{file_name}", "fileName": file_name},
+    )
+    broken_root = _utf8_name_read_as_cp437("2권 08-10화-테스트")
+    broken_child = _utf8_name_read_as_cp437("2권 08화")
+
+    result = batch_zip_import_service.import_zip_bytes(
+        _zip_bytes({f"{broken_root}/{broken_child}/0001.jpg": PNG_1X1}),
+        zip_file_name="2권 08-10화-테스트.zip",
+        work_dir=tmp_path,
+    )
+
+    assert result.source_dir_name == "2권 08-10화-테스트"
+    assert result.items == [
+        {
+            "assetId": "asset_0001.jpg",
+            "fileName": "0001.jpg",
+            "relativePath": "2권 08-10화-테스트/2권 08화/0001.jpg",
+        }
+    ]
 
 
 @pytest.mark.parametrize("entry_name", ["../evil.jpg", "/absolute/evil.jpg", "safe/../../evil.jpg"])

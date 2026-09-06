@@ -400,6 +400,17 @@ def test_assets_collection_management_uses_body_filters_without_sidebar_buttons(
 def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
 
+    assert "const PAGE_SIZE = 5;" in screen
+    assert "const PAGE_SIZE = 10;" not in screen
+    assert "openRecoveryModal(job)" in screen
+    assert "재처리 관리" in screen
+    assert "상태 새로고침" in screen
+    assert "선택 항목 재처리" in screen
+    assert "전체 실패 재처리" in screen
+    assert "job.failedCount > 0" in screen
+    assert "retryFailedBatchItems" in Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    assert "retrySelectedBatchItems" in Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    assert "batchJobDetail" in Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     assert 'headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"' in screen
     assert 'headerTitle="Batch 처리"' in screen
     assert "Batch 생성" in screen
@@ -430,3 +441,37 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "제거" not in screen
     assert "Batch Generations" not in screen
     assert "Incomplete Dashboard" not in screen
+
+
+def test_batch_recovery_modal_lists_only_error_items_with_ten_row_pages() -> None:
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    assert "const RECOVERY_PAGE_SIZE = 10;" in screen
+    assert "isRecoveryErrorItem" in screen
+    assert "recoveryErrorItems" in screen
+    assert "paginatedRecoveryItems" in screen
+    assert "recoveryItems.map((item)" not in screen
+    assert "paginatedRecoveryItems.map((item)" in screen
+    assert "오류건 내역" in screen
+    assert "recoveryFirstItemIndex" in screen
+    assert "recoveryLastItemIndex" in screen
+    assert "recoveryTotalPages" in screen
+
+
+def test_batch_recovery_modal_uses_defined_light_theme_tokens() -> None:
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    token_block = css.split("/* 경계선 */", 1)[0]
+    modal_panel = css.split(".v3-modal-panel {", 1)[1].split("}", 1)[0]
+    recovery_title = css.split(".v3-batch-recovery-title h2 {", 1)[1].split("}", 1)[0]
+    recovery_metric_label = css.split(".v3-batch-recovery-metrics small {", 1)[1].split("}", 1)[0]
+    recovery_metric_value = css.split(".v3-batch-recovery-metrics strong {", 1)[1].split("}", 1)[0]
+
+    assert "--v3-bg-canvas:" in token_block
+    assert "--v3-bg-muted:" in token_block
+    assert "--v3-text-heading:" in token_block
+    assert "--v3-text-muted:" in token_block
+    assert "color: var(--v3-text-body);" in modal_panel
+    assert "color: var(--v3-text-body);" in recovery_title
+    assert "color: var(--v3-text-label);" in recovery_metric_label
+    assert "color: var(--v3-text-body);" in recovery_metric_value

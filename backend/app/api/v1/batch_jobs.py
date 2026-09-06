@@ -111,6 +111,75 @@ def batch_job_history(
     )
 
 
+@router.get("/{batch_job_id}")
+def batch_job_detail(
+    batch_job_id: str,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    _require_batch_access(current_user)
+    batch_row = db.get(BatchJob, batch_job_id)
+    if batch_row is None:
+        raise HTTPException(status_code=404, detail="배치 작업을 찾을 수 없습니다.")
+    scoped_user = _scope(current_user)
+    if scoped_user and batch_row.created_by != scoped_user:
+        raise HTTPException(status_code=403, detail="다른 작업자의 배치는 조회할 수 없습니다.")
+    try:
+        detail = batch_job_service.batch_job_detail(db, batch_job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.commit()
+    return detail
+
+
+@router.post("/{batch_job_id}/retry-failed")
+def retry_failed_batch_items(
+    batch_job_id: str,
+    payload: dict | None = None,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return batch_job_service.retry_failed_batch_items(
+            db,
+            batch_job_id,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+            stage=str((payload or {}).get("stage") or "all"),
+        )
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{batch_job_id}/items/retry")
+def retry_selected_batch_items(
+    batch_job_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return batch_job_service.retry_failed_batch_items(
+            db,
+            batch_job_id,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+            stage=str(payload.get("stage") or "all"),
+            draft_ids=[str(item) for item in payload.get("draftIds") or []],
+            task_ids=[str(item) for item in payload.get("taskIds") or []],
+        )
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{batch_job_id}/download")
 def download_batch_zip(
     batch_job_id: str,
