@@ -100,7 +100,7 @@ def main() -> None:
     # Submitting a durable RunPod request must keep the operator on the
     # request-management screen so the batch can be monitored in place.
     assert 'onGoTo("review.history")' not in runpod_requests
-    assert "setRequestBatch(batch);" in runpod_requests
+    assert "setRequestBatch(batches.length === 1 ? batches[0] : null);" in runpod_requests
     assert "await load(false);" in runpod_requests
     assert "runpodRequestQueue({ workerId:" in runpod_requests
     assert "promptWorkspaceFromBatch" in durable_workspace
