@@ -415,6 +415,9 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "작업 요청" in screen
     assert "Pending Submit" in screen
     assert "ZIP 다운로드" in screen
+    assert "zip 파일명" in screen
+    assert "이미지 디렉토리" not in screen
+    assert "job.sourceZipFileName || job.sourceDirName || \"-\"" in screen
     assert "1 /" in screen
     assert "v3-batch-layout-grid" in screen
     assert "v3-batch-folder-card" in screen

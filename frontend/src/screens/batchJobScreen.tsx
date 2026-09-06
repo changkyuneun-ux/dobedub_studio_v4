@@ -319,7 +319,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 <th>영상길이</th>
                 <th>이미지 완료</th>
                 <th>영상 완료</th>
-                <th>이미지 디렉토리</th>
+                <th>zip 파일명</th>
                 <th>다운로드</th>
                 <th>실패</th>
               </tr>
@@ -334,7 +334,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <td>{formatFrameDuration(job.requestedFrames)}</td>
                   <td>{job.promptCompletedCount} / {job.totalImages}</td>
                   <td>{job.videoCompletedCount} / {job.totalImages}</td>
-                  <td>{job.sourceDirName || "-"}</td>
+                  <td>{job.sourceZipFileName || job.sourceDirName || "-"}</td>
                   <td><button className="v3-secondary-button" type="button" onClick={() => downloadBatch(job.id)}>ZIP 다운로드</button></td>
                   <td>{job.failedCount}</td>
                 </tr>
