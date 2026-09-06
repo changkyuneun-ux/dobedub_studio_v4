@@ -58,8 +58,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState("");
   const [workerFilter, setWorkerFilter] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [historyDate, setHistoryDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirmingBatch, setConfirmingBatch] = useState(false);
@@ -94,8 +93,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     try {
       const response = await apiClient.batchJobs({
         page: nextPage,
-        dateFrom,
-        dateTo,
+        dateFrom: historyDate,
+        dateTo: historyDate,
         workerId: workerFilter,
         status: statusFilter
       });
@@ -295,8 +294,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>3</span><strong>Batch 작업 이력</strong></div>
         <div className="v3-batch-history-toolbar">
-          <label>시작일<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
-          <label>종료일<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+          <label>실행일<input type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /></label>
           <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}>
             <option value="">전체 작업자</option>
             {workers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}

@@ -417,6 +417,11 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "ZIP 다운로드" in screen
     assert "zip 파일명" in screen
     assert "이미지 디렉토리" not in screen
+    assert "시작일" not in screen
+    assert "종료일" not in screen
+    assert "실행일" in screen
+    assert "dateFrom: historyDate" in screen
+    assert "dateTo: historyDate" in screen
     assert "job.sourceZipFileName || job.sourceDirName || \"-\"" in screen
     assert "1 /" in screen
     assert "v3-batch-layout-grid" in screen
