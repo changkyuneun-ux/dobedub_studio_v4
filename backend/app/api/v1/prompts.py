@@ -42,7 +42,6 @@ from backend.app.services.grok_image_prompt_service import (
 from backend.app.services.grok_instruction_service import active_instruction_text, list_instruction_documents
 from backend.app.services.prompt_batch_service import (
     create_prompt_generation_batch,
-    delete_prompt_draft,
     list_active_prompt_generation_batches,
     latest_active_prompt_generation_batch,
     list_prompt_drafts,
@@ -613,19 +612,6 @@ def retry_image_prompt_draft(
         return retry_prompt_draft(db, draft_id, created_by=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.delete("/image-drafts/{draft_id}")
-def delete_image_prompt_draft(
-    draft_id: str,
-    current_user: CurrentUser = Depends(require_permission("prompts:build")),
-    db: Session = Depends(get_db),
-):
-    try:
-        return delete_prompt_draft(db, draft_id, created_by=current_user.id)
-    except ValueError as exc:
-        status_code = 404 if "not found" in str(exc).lower() else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/generate/{request_id}")

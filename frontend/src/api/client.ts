@@ -1302,10 +1302,6 @@ export const apiClient = {
     }),
   retryImagePromptDraft: (draftId: string) =>
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),
-  deleteImagePromptDraft: (draftId: string) =>
-    requestJson<{ draftId: string; assetId: string; deleted: boolean }>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
-      method: "DELETE"
-    }),
   grokInstructions: (workflowId: string) =>
     requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions?workflowId=${encodeURIComponent(workflowId)}`),
   grokInstructionSourceWorkflows: () =>
@@ -1363,15 +1359,16 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
+  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; file: File }) => {
+  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; negativePrompt?: string; file: File }) => {
     const formData = new FormData();
     formData.set("workflowId", payload.workflowId);
     formData.set("requestedFrames", String(payload.requestedFrames || 81));
+    formData.set("negativePrompt", payload.negativePrompt || "");
     formData.set("file", payload.file);
     return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
   },

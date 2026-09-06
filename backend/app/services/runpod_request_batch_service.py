@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
+from backend.app.services import workflow_service
 
 
 def create_request_batch(
@@ -81,10 +82,15 @@ def create_request_batch(
         select(func.max(RunpodRequestItem.sequence_no)).where(RunpodRequestItem.request_batch_id == batch.id)
     ) or 0) + 1
     created_item_ids: list[str] = []
+    default_negatives_by_workflow: dict[str, str] = {}
     for requested in normalized_items:
         if batch_job_id and requested["promptDraftId"] in existing_draft_ids:
             continue
         draft = by_id[requested["promptDraftId"]]
+        workflow_id = requested["workflowId"] or draft.workflow_id
+        if workflow_id not in default_negatives_by_workflow:
+            default_negatives_by_workflow[workflow_id] = _workflow_default_negative_prompt(workflow_id)
+        negative_prompt = str(draft.negative_prompt or "").strip() or default_negatives_by_workflow[workflow_id] or None
         item_id = f"rpi_{uuid.uuid4().hex[:16]}"
         db.add(RunpodRequestItem(
             id=item_id,
@@ -92,9 +98,9 @@ def create_request_batch(
             sequence_no=next_sequence,
             prompt_draft_id=draft.id,
             asset_id=draft.asset_id,
-            workflow_id=requested["workflowId"] or draft.workflow_id,
+            workflow_id=workflow_id,
             positive_prompt=str(draft.positive_prompt or "").strip(),
-            negative_prompt=str(draft.negative_prompt or "").strip() or None,
+            negative_prompt=negative_prompt,
             requested_frames=requested["requestedFrames"] or max(1, int(draft.requested_frames or 81)),
             status="PENDING_SUBMIT",
         ))
@@ -106,6 +112,18 @@ def create_request_batch(
     payload = request_batch_payload(db, batch.id, created_by=created_by)
     payload["createdItemIds"] = created_item_ids
     return payload
+
+
+def _workflow_default_negative_prompt(workflow_id: str) -> str:
+    try:
+        schema = workflow_service.get_workflow_schema(workflow_id)
+    except Exception:
+        return ""
+    for segment in schema.get("segments") or []:
+        negative_prompt = str(segment.get("defaultNegativePrompt") or "").strip()
+        if negative_prompt:
+            return negative_prompt
+    return ""
 
 
 def _existing_batch_job_request_batch(db: Session, *, batch_job_id: str | None, created_by: str) -> RunpodRequestBatch | None:

@@ -24,6 +24,7 @@ from backend.app.db.models import Asset, Collection, CollectionItem, ImagePrompt
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
 from backend.app.services.metadata_service import get_workflow_widget_metadata
+from backend.app.services import workflow_service
 
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
@@ -119,9 +120,19 @@ def task_history_items(
         # 구현은 자산이 쌓일수록 모든 이력 조회를 함께 느리게 만들었다.
         assets_by_id = _assets_by_ids(session, _history_asset_ids(tasks))
         prompt_batch_ids_by_draft_id = _prompt_batch_ids_by_draft_id(session, tasks)
+        default_negative_prompts_by_workflow_id = _default_negative_prompts_by_workflow_id({
+            str(task.workflow_id or "")
+            for task in tasks
+            if task.workflow_id
+        })
         tasks_by_id = {task.id: task for task in tasks}
         return [
-            _task_to_history_item(tasks_by_id[task_id], assets_by_id, prompt_batch_ids_by_draft_id)
+            _task_to_history_item(
+                tasks_by_id[task_id],
+                assets_by_id,
+                prompt_batch_ids_by_draft_id,
+                default_negative_prompts_by_workflow_id,
+            )
             for task_id in task_ids
             if task_id in tasks_by_id
         ]
@@ -456,6 +467,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
             task,
             _assets_by_ids(session, _history_asset_ids([task])),
             _prompt_batch_ids_by_draft_id(session, [task]),
+            _default_negative_prompts_by_workflow_id({str(task.workflow_id or "")}),
         )
         payload = dict(task.payload_json or {})
         segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
@@ -1313,10 +1325,42 @@ def _prompt_batch_ids_by_draft_id(session: Session, tasks: list[WorkflowTask]) -
     }
 
 
+def _default_negative_prompts_by_workflow_id(workflow_ids: set[str]) -> dict[str, list[dict[str, str | int]]]:
+    defaults: dict[str, list[dict[str, str | int]]] = {}
+    for workflow_id in sorted(workflow_id for workflow_id in workflow_ids if workflow_id):
+        try:
+            schema = workflow_service.get_workflow_schema(workflow_id)
+        except Exception:
+            defaults[workflow_id] = []
+            continue
+        defaults[workflow_id] = [
+            {"index": int(segment.get("index") or index + 1), "text": text}
+            for index, segment in enumerate(schema.get("segments") or [])
+            for text in [str(segment.get("defaultNegativePrompt") or "").strip()]
+            if text
+        ]
+    return defaults
+
+
+def _history_item_has_negative_prompt(item: dict) -> bool:
+    if str(item.get("negativePrompt") or "").strip():
+        return True
+    for entry in item.get("negativePrompts") or []:
+        if isinstance(entry, dict) and str(entry.get("text") or entry.get("negativePrompt") or "").strip():
+            return True
+        if isinstance(entry, str) and entry.strip():
+            return True
+    for segment in item.get("segments") or []:
+        if isinstance(segment, dict) and str(segment.get("negativePromptAddition") or segment.get("negativePrompt") or "").strip():
+            return True
+    return False
+
+
 def _task_to_history_item(
     task: WorkflowTask,
     assets_by_id: dict[str, dict],
     prompt_batch_ids_by_draft_id: dict[str, str] | None = None,
+    default_negative_prompts_by_workflow_id: dict[str, list[dict[str, str | int]]] | None = None,
 ) -> dict:
     item = dict(task.payload_json or {})
     item.setdefault("taskId", task.id)
@@ -1336,6 +1380,15 @@ def _task_to_history_item(
     item.setdefault("progress", int(task.progress or 0))
     item.setdefault("positivePrompts", task.positive_prompts or [])
     item.setdefault("negativePrompts", task.negative_prompts or [])
+    default_negative_prompts = (
+        default_negative_prompts_by_workflow_id or {}
+    ).get(str(task.workflow_id or ""), [])
+    if default_negative_prompts and not _history_item_has_negative_prompt(item):
+        item["negativePrompts"] = default_negative_prompts
+        item["negativePrompt"] = " | ".join(
+            f"{entry['index']}: {entry['text']}"
+            for entry in default_negative_prompts
+        )
     item.setdefault("configJson", task.config_json or {})
     item.setdefault("wanNodeConfig", task.wan_node_config or {})
     item.setdefault("patchSummary", task.patch_summary or {})

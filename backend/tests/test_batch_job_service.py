@@ -263,6 +263,36 @@ def test_create_zip_batch_job_preserves_source_relative_paths_on_drafts(db_sessi
     assert {draft.raw_json["sourceZipFileName"] for draft in drafts} == {"홍길동.zip"}
 
 
+def test_create_zip_batch_job_records_custom_negative_prompt_on_drafts(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+
+    result = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "negative-source",
+            "sourceZipFileName": "negative-source.zip",
+            "requestedFrames": 81,
+            "negativePrompt": "custom batch negative",
+            "items": [
+                {"assetId": "asset_1", "fileName": "a.jpg", "relativePath": "a.jpg"},
+                {"assetId": "asset_2", "fileName": "b.jpg", "relativePath": "b.jpg"},
+            ],
+        },
+        created_by=user.id,
+    )
+
+    drafts = db_session.scalars(
+        select(ImagePromptDraft)
+        .where(ImagePromptDraft.batch_job_id == result["id"])
+        .order_by(ImagePromptDraft.slot_index.asc())
+    ).all()
+    assert [draft.negative_prompt for draft in drafts] == ["custom batch negative", "custom batch negative"]
+
+
 def test_create_zip_batch_job_id_adds_suffix_for_same_worker_zip_and_day(db_session, monkeypatch):
     user = User(id="operator_1", name="장균은", role="OPERATOR")
     db_session.add(user)

@@ -161,6 +161,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     if not isinstance(items, list) or not items:
         raise ValueError("배치로 처리할 이미지를 하나 이상 선택하세요.")
     requested_frames = _validated_frames(payload.get("requestedFrames", DEFAULT_FRAMES))
+    negative_prompt = str(payload.get("negativePrompt") or "").strip()
 
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
     source_dir_name = unicodedata.normalize("NFC", str(payload.get("sourceDirName") or "").strip())
@@ -194,6 +195,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         created_by=created_by,
         batch_job_id=batch.id,
         source_zip_file_name=source_zip_file_name,
+        negative_prompt=negative_prompt,
     )
     db.commit()
     return batch_job_payload(db, batch.id)
@@ -208,6 +210,7 @@ def _link_prompt_batch(
     created_by: str,
     batch_job_id: str,
     source_zip_file_name: str = "",
+    negative_prompt: str = "",
 ) -> dict[str, Any]:
     """Create linked prompt rows while create_batch_job owns the transaction."""
     return prompt_batch_service.create_prompt_generation_batch(
@@ -215,7 +218,12 @@ def _link_prompt_batch(
         {
             "workflowId": workflow_id,
             "items": [
-                {"assetId": str(item.get("assetId") or "").strip(), "slotIndex": index, "requestedFrames": requested_frames}
+                {
+                    "assetId": str(item.get("assetId") or "").strip(),
+                    "slotIndex": index,
+                    "requestedFrames": requested_frames,
+                    "negativePrompt": negative_prompt,
+                }
                 | {
                     key: value
                     for key, value in {

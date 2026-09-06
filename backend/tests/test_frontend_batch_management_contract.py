@@ -14,6 +14,14 @@ def test_prompt_management_sends_workflow_scoped_image_pairs() -> None:
     assert "retryImagePromptDraft" in source
 
 
+def test_prompt_management_uses_workflow_default_negative_for_blank_workspace() -> None:
+    source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+
+    assert "current.trim()" in source
+    assert "nextSchema.segments?.[0]?.defaultNegativePrompt" in source
+    assert "setNegativePrompt(\"\")" in source
+
+
 def test_runpod_request_management_only_enqueues_selected_ready_drafts() -> None:
     source = Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
 
@@ -61,11 +69,12 @@ def test_prompt_management_can_delete_unsubmitted_uploads() -> None:
     screen = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
 
     assert "deleteUnsubmittedUpload" in client
-    assert "deleteImagePromptDraft" in client
     assert "deleteUpload" in screen
-    assert "deletePromptRow" in screen
     assert "업로드 이미지 삭제" in screen
-    assert "draft ? void deletePromptRow(draft) : void deleteUpload(upload)" in screen
+    prompt_mapping = screen.split("Image Prompt Mapping", 1)[1]
+    assert "deleteImagePromptDraft" not in prompt_mapping
+    assert "deletePromptRow" not in prompt_mapping
+    assert "프롬프트 항목 삭제" not in prompt_mapping
 
 
 def test_prompt_history_uses_worker_names_without_worker_generation_stats() -> None:
@@ -95,6 +104,29 @@ def test_prompt_and_runpod_management_follow_the_desktop_operational_layout() ->
     assert "RunPod 요청" in runpod_screen
     assert "selected.length" in runpod_screen
     assert "updateImagePromptDraft" in runpod_screen
+
+
+def test_batch_job_creation_exposes_editable_negative_prompt_and_submits_it() -> None:
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "Built-in Negative Prompt" in screen
+    assert "batchNegativePrompt" in screen
+    assert "setBatchNegativePrompt" in screen
+    assert "negativePrompt: batchNegativePrompt" in screen
+    assert 'formData.set("negativePrompt"' in client
+    assert "negativePrompt?: string" in client
+
+
+def test_batch_job_creation_requires_workflow_grok_instruction_status() -> None:
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    assert "grokInstructionStatus(workflowId)" in screen
+    assert "instructionStatus?.configured" in screen
+    assert "지시문 없음" in screen
+    assert "활성 프롬프트 지시문이 없습니다" in screen
+    assert "관리자 > 프롬프트 생성 지시 관리" in screen
+    assert "disabled={busy || !selectedZipFile || !instructionStatus?.configured}" in screen
 
 
 def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:

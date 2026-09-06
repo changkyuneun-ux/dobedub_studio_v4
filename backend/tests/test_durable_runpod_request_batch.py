@@ -24,6 +24,7 @@ def _draft(
     positive: str,
     frames: int = 81,
     batch_job_id: str | None = None,
+    negative: str | None = "blur",
 ) -> ImagePromptDraft:
     return ImagePromptDraft(
         id=draft_id,
@@ -35,7 +36,7 @@ def _draft(
         model="grok-test",
         instruction_version="1-images.json@1",
         positive_prompt=positive,
-        negative_prompt="blur",
+        negative_prompt=negative,
         requested_frames=frames,
         warnings_json=[],
         raw_json={},
@@ -95,6 +96,24 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         ("Pickme_Workflow.json", "first prompt", 161),
         ("1-images.json", "second prompt", 49),
     ]
+
+
+def test_request_batch_uses_workflow_default_negative_when_draft_is_blank(db_session):
+    db_session.add_all([
+        _asset("asset_request_default_negative"),
+        _draft("asset_request_default_negative", draft_id="draft_request_default_negative", positive="prompt", negative=None),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_default_negative"}],
+    )
+
+    snapshot = request_batch_payload(db_session, batch["id"], created_by="operator")
+    assert snapshot["items"][0]["negativePrompt"]
+    assert "photorealistic" in snapshot["items"][0]["negativePrompt"]
 
 
 def test_request_queue_excludes_folder_batch_work(db_session):

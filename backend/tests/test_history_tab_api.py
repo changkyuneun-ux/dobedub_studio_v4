@@ -316,6 +316,8 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
         "executionSeconds": 42.25,
         "jobId": "runpod-job-1",
     }
+    assert item["negativePrompts"]
+    assert "photorealistic" in item["negativePrompts"][0]["text"]
 
 
 def test_runpod_history_exposes_legacy_prompt_batch_id(api_client):

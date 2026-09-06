@@ -74,6 +74,9 @@ function isRecoveryErrorItem(item: BatchJobDetailItemResponse) {
 export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [workflowId, setWorkflowId] = useState(workflows[0]?.id || "");
   const [requestedFrames, setRequestedFrames] = useState(DEFAULT_REQUESTED_FRAMES);
+  const [workflowDefaultNegativePrompt, setWorkflowDefaultNegativePrompt] = useState("");
+  const [batchNegativePrompt, setBatchNegativePrompt] = useState("");
+  const [instructionStatus, setInstructionStatus] = useState<{ configured: boolean; count: number } | null>(null);
   const [selectedZipFile, setSelectedZipFile] = useState<File | null>(null);
   const [activeJobs, setActiveJobs] = useState<BatchJobResponse[]>([]);
   const [history, setHistory] = useState<BatchJobResponse[]>([]);
@@ -97,6 +100,34 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       setWorkflowId(workflows[0].id);
     }
   }, [workflowId, workflows]);
+
+  useEffect(() => {
+    if (!workflowId) {
+      setWorkflowDefaultNegativePrompt("");
+      setBatchNegativePrompt("");
+      setInstructionStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([apiClient.workflowSchema(workflowId), apiClient.grokInstructionStatus(workflowId)])
+      .then(([nextSchema, nextInstructionStatus]) => {
+        if (cancelled) return;
+        const defaultNegativePrompt = nextSchema.segments?.[0]?.defaultNegativePrompt || "";
+        setWorkflowDefaultNegativePrompt(defaultNegativePrompt);
+        setBatchNegativePrompt(defaultNegativePrompt);
+        setInstructionStatus(nextInstructionStatus);
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setWorkflowDefaultNegativePrompt("");
+        setBatchNegativePrompt("");
+        setInstructionStatus(null);
+        setNotice(error.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId]);
 
   useEffect(() => {
     void refreshActive();
@@ -236,6 +267,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   function resetBatchCreation() {
     setSelectedZipFile(null);
     setRequestedFrames(DEFAULT_REQUESTED_FRAMES);
+    setBatchNegativePrompt(workflowDefaultNegativePrompt);
     setNotice("");
     if (zipInput.current) {
       zipInput.current.value = "";
@@ -247,6 +279,10 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
       return;
     }
+    if (!instructionStatus?.configured) {
+      setNotice("선택한 워크플로우에 활성 프롬프트 지시문이 없습니다. 관리자 > 프롬프트 생성 지시 관리에서 먼저 지시문을 설정하세요.");
+      return;
+    }
     setNotice("");
     setConfirmingBatch(true);
   }
@@ -256,12 +292,17 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
       return;
     }
+    if (!instructionStatus?.configured) {
+      setNotice("선택한 워크플로우에 활성 프롬프트 지시문이 없습니다. 관리자 > 프롬프트 생성 지시 관리에서 먼저 지시문을 설정하세요.");
+      return;
+    }
     setBusy(true);
     setNotice("");
     try {
       const created = await apiClient.createBatchJobFromZip({
         workflowId,
         requestedFrames,
+        negativePrompt: batchNegativePrompt,
         file: selectedZipFile
       });
       setSelectedZipFile(null);
@@ -304,6 +345,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId);
   const selectedWorkflowLabel = workflowName(selectedWorkflow, workflowId || "-");
+  const instructionConfigured = Boolean(instructionStatus?.configured);
+  const instructionMissing = Boolean(instructionStatus && !instructionStatus.configured);
   const recoveryItems = recoveryDetail?.items || [];
   const recoveryErrorItems = recoveryItems.filter(isRecoveryErrorItem);
   const recoveryRetryableCount = recoveryItems.filter((item) => item.retryable).length;
@@ -326,17 +369,17 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         onNavigate={(key) => shellNavigate(key, onGoTo)}
         headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"
         headerTitle="Batch 처리"
-        headerActions={<span className="v3-status-chip is-ok">GROK CONFIGURED</span>}
+        headerActions={<span className={`v3-status-chip ${instructionConfigured ? "is-ok" : "is-warning"}`}>{instructionConfigured ? "GROK CONFIGURED" : "GROK INSTRUCTION REQUIRED"}</span>}
       >
         <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>1</span><strong>Batch 생성</strong></div>
         <div className="v3-batch-layout-grid">
           <div className="v3-batch-field-card">
             <label>Prompt Workflow</label>
-            <select value={workflowId} onChange={(event) => setWorkflowId(event.target.value)}>
+            <select value={workflowId} onChange={(event) => { setWorkflowId(event.target.value); setInstructionStatus(null); setNotice(""); }}>
               {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowName(workflow)}</option>)}
             </select>
-            <div className="v3-batch-linked-state">지시문 연결됨</div>
+            <div className={`v3-batch-linked-state${instructionMissing ? " is-error" : ""}`}>{instructionConfigured ? `지시문 연결됨 (${instructionStatus?.count || 0})` : "지시문 없음"}</div>
           </div>
           <button className="v3-batch-folder-card" type="button" onClick={() => zipInput.current?.click()}>
             <span>작업 ZIP</span>
@@ -367,11 +410,25 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <small>{formatFrameDuration(requestedFrames)}</small>
           </div>
           <div className="v3-batch-create-action">
-            <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile} onClick={requestBatchConfirmation}>
+            <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile || !instructionStatus?.configured} onClick={requestBatchConfirmation}>
               작업 요청
             </button>
             <small>{selectedZipFile ? selectedZipFile.name : formatFrameDuration(requestedFrames)}</small>
           </div>
+          <label className="v3-batch-negative-card">
+            <span>Built-in Negative Prompt</span>
+            <textarea
+              value={batchNegativePrompt}
+              onChange={(event) => setBatchNegativePrompt(event.target.value)}
+              placeholder="워크플로우 기본 negative prompt"
+            />
+            <small>선택한 워크플로우의 내장값을 기본으로 사용합니다. 수정한 값은 이번 Batch의 모든 이미지 요청에 적용됩니다.</small>
+          </label>
+          {instructionMissing ? (
+            <p className="v3-batch-workflow-callout is-error">
+              {selectedWorkflowLabel}에 활성 프롬프트 지시문이 없습니다. 관리자 &gt; 프롬프트 생성 지시 관리에서 새 지시문을 생성하거나 다른 워크플로우의 문서를 복사하세요.
+            </p>
+          ) : null}
         </div>
         {notice ? <p className="v3-inline-notice">{notice}</p> : null}
         </section>
@@ -566,6 +623,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               <div><span>워크플로우</span><strong>{selectedWorkflowLabel}</strong></div>
               <div><span>ZIP 파일명</span><strong>{selectedZipFile?.name || "-"}</strong></div>
               <div><span>길이</span><strong>{formatFrameDuration(requestedFrames)}</strong></div>
+              <div><span>Negative Prompt</span><strong>{batchNegativePrompt.trim() || workflowDefaultNegativePrompt || "-"}</strong></div>
             </div>
             <p className="v3-modal-body-text">진행하시겠습니까?</p>
             <div className="v3-modal-actions">

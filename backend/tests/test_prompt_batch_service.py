@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import event, inspect
 
 from backend.app.core.timezone_utils import now_seoul_naive
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
 from backend.app.services import prompt_batch_service as service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokImagePromptResult
 
@@ -68,6 +68,27 @@ def test_batch_persists_items_and_grok_attempt_metadata(db_session, monkeypatch,
     assert result["items"][0]["grokResponse"]["inputTokens"] == 12
     assert result["items"][1]["positivePrompt"] is None
     assert db_session.query(PromptGenerationAttempt).count() == 2
+
+
+def test_batch_uses_workflow_default_negative_prompt_when_request_is_blank(db_session, monkeypatch):
+    db_session.add(_asset("asset_default_negative"))
+    db_session.commit()
+    monkeypatch.setattr(service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+
+    result = service.create_prompt_generation_batch(
+        db_session,
+        {
+            "workflowId": "1-images.json",
+            "items": [
+                {"assetId": "asset_default_negative", "slotIndex": 1, "negativePrompt": "   "},
+            ],
+        },
+        created_by="dobedub",
+    )
+
+    draft = db_session.get(ImagePromptDraft, result["items"][0]["draftId"])
+    assert draft.negative_prompt
+    assert "photorealistic" in draft.negative_prompt
 
 
 def test_batch_requires_configured_workflow_instruction(db_session, monkeypatch):
@@ -354,7 +375,7 @@ def test_active_prompt_generation_batches_ignores_stale_batch_status_without_ext
         event.remove(bind, "before_cursor_execute", before_cursor_execute)
 
     assert [batch["id"] for batch in batches] == ["pgb_active_after_stale"]
-    assert len(statements) <= 6
+    assert len(statements) <= 7
 
 
 def test_active_prompt_generation_batches_keep_stale_completed_batches_with_active_drafts(db_session):
@@ -391,6 +412,66 @@ def test_active_prompt_generation_batches_keep_stale_completed_batches_with_acti
 
     assert [batch["id"] for batch in batches] == ["pgb_stale_completed_with_generating_draft"]
     assert batches[0]["status"] == service.BATCH_GENERATING
+
+
+def test_active_prompt_generation_batches_fail_stale_generating_drafts(db_session):
+    stale_time = now_seoul_naive() - timedelta(minutes=30)
+    db_session.add_all([
+        _asset("asset_stale_generation_failed"),
+        PromptGenerationBatch(
+            id="pgb_stale_generation_failed",
+            workflow_id="1-images.json",
+            status=service.BATCH_GENERATING,
+            total_count=1,
+            completed_count=0,
+            failed_count=0,
+            created_by="worker_a",
+            updated_at=stale_time,
+        ),
+        ImagePromptDraft(
+            id="draft_stale_generation_failed",
+            asset_id="asset_stale_generation_failed",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_GENERATING,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_stale_generation_failed",
+            created_by="worker_a",
+            updated_at=stale_time,
+        ),
+        PromptGenerationAttempt(
+            id="attempt_stale_generation_failed",
+            draft_id="draft_stale_generation_failed",
+            attempt_no=1,
+            status=service.DRAFT_GENERATING,
+            endpoint="https://api.x.ai/v1/responses",
+            model="grok-test",
+            started_at=stale_time,
+            response_json={},
+        ),
+    ])
+    db_session.commit()
+
+    active_batches = service.list_active_prompt_generation_batches(db_session, created_by="worker_a")
+    history = service.list_prompt_drafts(db_session, created_by="worker_a", include_worker_stats=False)
+
+    assert active_batches == []
+    failed_draft = db_session.get(ImagePromptDraft, "draft_stale_generation_failed")
+    failed_attempt = db_session.get(PromptGenerationAttempt, "attempt_stale_generation_failed")
+    batch = db_session.get(PromptGenerationBatch, "pgb_stale_generation_failed")
+    assert failed_draft.status == service.DRAFT_FAILED
+    assert "중단" in failed_draft.failure_message
+    assert failed_attempt.status == service.DRAFT_FAILED
+    assert failed_attempt.completed_at is not None
+    assert batch.status == service.BATCH_COMPLETED_WITH_ERRORS
+    assert batch.failed_count == 1
+    assert history["total"] == 1
+    assert history["items"][0]["status"] == service.DRAFT_FAILED
 
 
 def test_prompt_generation_batch_payload_counts_current_draft_statuses(db_session):
@@ -531,134 +612,6 @@ def test_retry_existing_draft_reopens_the_same_pending_batch(db_session):
     assert batch.status == service.BATCH_PENDING
     assert batch.completed_count == 0
     assert batch.failed_count == 0
-
-
-def test_delete_prompt_draft_removes_prompt_asset_and_batch_links(db_session, tmp_path):
-    image_path = tmp_path / "draft-delete.png"
-    image_path.write_bytes(b"image")
-    db_session.add(Asset(
-        id="asset_delete_prompt_draft",
-        asset_type="input_image",
-        file_name=image_path.name,
-        mime_type="image/png",
-        size_bytes=image_path.stat().st_size,
-        storage_backend="local",
-        storage_key=str(image_path),
-        metadata_json={"createdBy": "worker_a"},
-    ))
-    db_session.add(_asset("asset_keep_prompt_draft"))
-    db_session.add(PromptGenerationBatch(
-        id="pgb_delete_prompt_draft",
-        workflow_id="1-images.json",
-        status=service.BATCH_GENERATING,
-        total_count=2,
-        completed_count=1,
-        failed_count=0,
-        created_by="worker_a",
-    ))
-    db_session.add_all([
-        ImagePromptDraft(
-            id="draft_delete_prompt_draft",
-            asset_id="asset_delete_prompt_draft",
-            workflow_id="1-images.json",
-            slot_index=1,
-            status=service.DRAFT_READY,
-            provider="grok",
-            model="grok-test",
-            instruction_version="wf@1",
-            positive_prompt="delete me",
-            requested_frames=81,
-            warnings_json=[],
-            raw_json={"response": {"id": "old"}},
-            prompt_batch_id="pgb_delete_prompt_draft",
-            created_by="worker_a",
-        ),
-        ImagePromptDraft(
-            id="draft_keep_prompt_draft",
-            asset_id="asset_keep_prompt_draft",
-            workflow_id="1-images.json",
-            slot_index=2,
-            status=service.DRAFT_PENDING,
-            provider="grok",
-            model="grok-test",
-            instruction_version="wf@1",
-            positive_prompt=None,
-            requested_frames=81,
-            warnings_json=[],
-            raw_json={},
-            prompt_batch_id="pgb_delete_prompt_draft",
-            created_by="worker_a",
-        ),
-    ])
-    db_session.add(PromptGenerationAttempt(
-        id="attempt_delete_prompt_draft",
-        draft_id="draft_delete_prompt_draft",
-        attempt_no=1,
-        status=service.DRAFT_READY,
-        response_json={"id": "old"},
-    ))
-    db_session.commit()
-
-    result = service.delete_prompt_draft(db_session, "draft_delete_prompt_draft", created_by="worker_a")
-
-    assert result == {"draftId": "draft_delete_prompt_draft", "assetId": "asset_delete_prompt_draft", "deleted": True}
-    assert db_session.get(ImagePromptDraft, "draft_delete_prompt_draft") is None
-    assert db_session.get(PromptGenerationAttempt, "attempt_delete_prompt_draft") is None
-    assert db_session.get(Asset, "asset_delete_prompt_draft") is None
-    assert not image_path.exists()
-    batch = db_session.get(PromptGenerationBatch, "pgb_delete_prompt_draft")
-    assert batch is not None
-    assert batch.total_count == 1
-    assert batch.completed_count == 0
-    assert batch.failed_count == 0
-    assert batch.status == service.BATCH_PENDING
-
-
-def test_delete_prompt_draft_rejects_runpod_linked_items(db_session):
-    db_session.add(_asset("asset_runpod_linked_prompt"))
-    db_session.add(ImagePromptDraft(
-        id="draft_runpod_linked_prompt",
-        asset_id="asset_runpod_linked_prompt",
-        workflow_id="1-images.json",
-        slot_index=1,
-        status=service.DRAFT_READY,
-        provider="grok",
-        model="grok-test",
-        instruction_version="wf@1",
-        positive_prompt="ready prompt",
-        requested_frames=81,
-        warnings_json=[],
-        raw_json={},
-        created_by="worker_a",
-    ))
-    db_session.add(RunpodRequestBatch(
-        id="rpb_runpod_linked_prompt",
-        workflow_id="1-images.json",
-        requested_count=1,
-        created_by="worker_a",
-    ))
-    db_session.add(RunpodRequestItem(
-        id="rpi_runpod_linked_prompt",
-        request_batch_id="rpb_runpod_linked_prompt",
-        sequence_no=1,
-        prompt_draft_id="draft_runpod_linked_prompt",
-        asset_id="asset_runpod_linked_prompt",
-        workflow_id="1-images.json",
-        positive_prompt="ready prompt",
-        requested_frames=81,
-    ))
-    db_session.commit()
-
-    try:
-        service.delete_prompt_draft(db_session, "draft_runpod_linked_prompt", created_by="worker_a")
-    except ValueError as exc:
-        assert "RunPod 요청" in str(exc)
-    else:
-        raise AssertionError("RunPod-linked prompt drafts must be protected from prompt management deletion")
-
-    assert db_session.get(ImagePromptDraft, "draft_runpod_linked_prompt") is not None
-    assert db_session.get(Asset, "asset_runpod_linked_prompt") is not None
-    assert db_session.get(RunpodRequestItem, "rpi_runpod_linked_prompt") is not None
 
 
 def test_prompt_history_payload_includes_asset_and_linked_runpod_task(db_session):

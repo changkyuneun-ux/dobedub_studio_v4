@@ -1,19 +1,18 @@
 """Durable, workflow-scoped Grok image prompt batch processing."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import time
 import uuid
 from typing import Any, NamedTuple
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
-from backend.app.db.models import Asset, CollectionItem, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, RunpodRequestItem, TaskInputAsset, User, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
 from backend.app.db.session import SessionLocal
-from backend.app.services import studio_api_service
+from backend.app.services import studio_api_service, workflow_service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokPromptInputError, generate_image_prompt
 from backend.app.services.grok_instruction_service import active_instruction_text
 
@@ -32,6 +31,7 @@ RUNPOD_WAITING_STATES = {"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"}
 RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
 RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
 RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
+STALE_GENERATING_FAILURE_MESSAGE = "Grok 프롬프트 생성이 중단되어 실패 처리되었습니다."
 
 
 def create_prompt_generation_batch(
@@ -63,6 +63,7 @@ def create_prompt_generation_batch(
         batch_job_id=batch_job_id,
     )
     db.add(batch)
+    default_negative_prompt = _workflow_default_negative_prompt(workflow_id)
     for fallback_slot, source in enumerate(items, start=1):
         if not isinstance(source, dict):
             raise ValueError("이미지 선택 형식이 올바르지 않습니다.")
@@ -71,6 +72,7 @@ def create_prompt_generation_batch(
             raise ValueError("각 이미지에 assetId가 필요합니다.")
         slot_index = _positive_int(source.get("slotIndex"), fallback_slot)
         requested_frames = _positive_int(source.get("requestedFrames"), 81)
+        negative_prompt = str(source.get("negativePrompt") or "").strip() or default_negative_prompt or None
         source_metadata = {
             key: value
             for key, value in {
@@ -89,7 +91,7 @@ def create_prompt_generation_batch(
             model=settings.grok_model,
             instruction_version=instruction_version,
             prompt_batch_id=batch.id,
-            negative_prompt=str(source.get("negativePrompt") or "").strip() or None,
+            negative_prompt=negative_prompt,
             requested_frames=requested_frames,
             warnings_json=[],
             raw_json=source_metadata,
@@ -108,6 +110,7 @@ def process_next_prompt_generation_draft() -> dict[str, Any] | None:
     """Process one pending Grok item. Called by the application monitor loop."""
     db = SessionLocal()
     try:
+        finalize_stale_prompt_generation_drafts(db, commit=True)
         draft = db.scalar(
             select(ImagePromptDraft)
             .where(ImagePromptDraft.status == DRAFT_PENDING)
@@ -140,6 +143,100 @@ def process_prompt_generation_batch(db: Session, batch_id: str) -> dict[str, Any
     return prompt_generation_batch_payload(db, batch_id)
 
 
+def finalize_stale_prompt_generation_drafts(
+    db: Session,
+    *,
+    max_age_seconds: int | None = None,
+    commit: bool = False,
+) -> dict[str, Any]:
+    """Move abandoned Grok GENERATING rows to a terminal history-visible state."""
+    now = _utc_naive_now()
+    cutoff = now - timedelta(seconds=max(1, int(max_age_seconds or _stale_generation_seconds())))
+    future_kst_floor = now + timedelta(hours=1)
+    candidates = db.scalars(
+        select(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.status == DRAFT_GENERATING,
+            or_(ImagePromptDraft.updated_at <= cutoff, ImagePromptDraft.updated_at >= future_kst_floor),
+        )
+        .order_by(ImagePromptDraft.updated_at.asc(), ImagePromptDraft.id.asc())
+    ).all()
+    stale_drafts = [
+        draft
+        for draft in candidates
+        if _naive_timestamp_for_age(draft.updated_at, now) <= cutoff
+    ]
+    if not stale_drafts:
+        return {"finalized": 0, "failed": 0, "ready": 0}
+
+    draft_ids = [draft.id for draft in stale_drafts]
+    attempts = db.scalars(
+        select(PromptGenerationAttempt)
+        .where(PromptGenerationAttempt.draft_id.in_(draft_ids), PromptGenerationAttempt.status == DRAFT_GENERATING)
+        .order_by(PromptGenerationAttempt.draft_id.asc(), PromptGenerationAttempt.attempt_no.desc(), PromptGenerationAttempt.id.desc())
+    ).all()
+    attempts_by_draft: dict[str, list[PromptGenerationAttempt]] = {}
+    for attempt in attempts:
+        attempts_by_draft.setdefault(attempt.draft_id, []).append(attempt)
+
+    failed = 0
+    ready = 0
+    batch_ids: set[str] = set()
+    for draft in stale_drafts:
+        has_prompt = bool(str(draft.positive_prompt or "").strip())
+        next_status = DRAFT_READY if has_prompt else DRAFT_FAILED
+        draft.status = next_status
+        draft.failure_message = None if has_prompt else STALE_GENERATING_FAILURE_MESSAGE
+        draft.updated_at = now
+        if draft.prompt_batch_id:
+            batch_ids.add(draft.prompt_batch_id)
+        for attempt in attempts_by_draft.get(draft.id, []):
+            attempt.status = next_status
+            attempt.completed_at = attempt.completed_at or now
+            attempt.failure_message = None if has_prompt else STALE_GENERATING_FAILURE_MESSAGE
+        if has_prompt:
+            ready += 1
+        else:
+            failed += 1
+
+    for batch_id in batch_ids:
+        _refresh_batch_counts(db, batch_id)
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return {"finalized": len(stale_drafts), "failed": failed, "ready": ready}
+
+
+def _stale_generation_seconds() -> int:
+    settings = get_settings()
+    retry_delays = sum(settings.grok_retry_backoff_seconds * (2 ** attempt) for attempt in range(settings.grok_max_retries))
+    expected_request_window = settings.grok_request_timeout_seconds * (settings.grok_max_retries + 1)
+    return max(600, int(expected_request_window + retry_delays + 60))
+
+
+def _workflow_default_negative_prompt(workflow_id: str) -> str:
+    try:
+        schema = workflow_service.get_workflow_schema(workflow_id)
+    except Exception:
+        return ""
+    for segment in schema.get("segments") or []:
+        negative_prompt = str(segment.get("defaultNegativePrompt") or "").strip()
+        if negative_prompt:
+            return negative_prompt
+    return ""
+
+
+def _utc_naive_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _naive_timestamp_for_age(value: datetime, now: datetime) -> datetime:
+    if value > now + timedelta(hours=1):
+        return value - timedelta(hours=9)
+    return value
+
+
 def prompt_generation_batch_payload(db: Session, batch_id: str) -> dict[str, Any]:
     batch = db.get(PromptGenerationBatch, batch_id)
     if batch is None:
@@ -170,6 +267,7 @@ def latest_active_prompt_generation_batch(db: Session, *, created_by: str | None
 
 def list_active_prompt_generation_batches(db: Session, *, created_by: str | None) -> list[dict[str, Any]]:
     """Return every unfinished prompt batch for the operator dashboard."""
+    finalize_stale_prompt_generation_drafts(db, commit=True)
     active_draft_exists = (
         select(ImagePromptDraft.id)
         .where(
@@ -204,6 +302,7 @@ def list_prompt_drafts(
     batch_job_id: str = "",
 ) -> dict[str, Any]:
     """Return the current user's image-scoped prompts for RunPod request selection."""
+    finalize_stale_prompt_generation_drafts(db, commit=True)
     statement = select(ImagePromptDraft)
     count_statement = select(func.count(ImagePromptDraft.id))
     if created_by is not None:
@@ -346,30 +445,6 @@ def retry_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[s
     return _draft_payload(db, draft)
 
 
-def delete_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[str, Any]:
-    draft = _owned_draft(db, draft_id, created_by)
-    batch_id = draft.prompt_batch_id
-    asset_id = draft.asset_id
-    if _draft_has_runpod_or_task_links(db, draft.id, asset_id):
-        raise ValueError("RunPod 요청 또는 작업 이력과 연결된 프롬프트 항목은 여기서 삭제할 수 없습니다.")
-    asset = db.get(Asset, asset_id)
-    local_path = Path(asset.storage_key) if asset and asset.storage_backend == "local" and asset.storage_key else None
-    db.execute(delete(CollectionItem).where(CollectionItem.asset_id == asset_id))
-    db.execute(delete(PromptGenerationAttempt).where(PromptGenerationAttempt.draft_id == draft.id))
-    db.delete(draft)
-    db.flush()
-    _shrink_batch_after_draft_delete(db, batch_id)
-    if asset is not None and not _asset_is_referenced(db, asset_id):
-        db.delete(asset)
-    db.commit()
-    if local_path:
-        try:
-            local_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return {"draftId": draft_id, "assetId": asset_id, "deleted": True}
-
-
 def _owned_draft(db: Session, draft_id: str, created_by: str) -> ImagePromptDraft:
     draft = db.scalar(
         select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id, ImagePromptDraft.created_by == created_by)
@@ -459,17 +534,6 @@ def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
     _apply_batch_counts(batch, drafts)
 
 
-def _shrink_batch_after_draft_delete(db: Session, batch_id: str | None) -> None:
-    if not batch_id:
-        return
-    batch = db.get(PromptGenerationBatch, batch_id)
-    if batch is None:
-        return
-    drafts = db.scalars(select(ImagePromptDraft.status).where(ImagePromptDraft.prompt_batch_id == batch_id)).all()
-    batch.total_count = len(drafts)
-    _apply_batch_counts(batch, drafts)
-
-
 def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str]) -> None:
     total = len(draft_statuses) if draft_statuses else int(batch.total_count or 0)
     batch.completed_count = sum(status in {DRAFT_READY, "MANUAL_REQUIRED"} for status in draft_statuses)
@@ -482,24 +546,6 @@ def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str])
         batch.status = BATCH_GENERATING
     else:
         batch.status = BATCH_PENDING
-
-
-def _draft_has_runpod_or_task_links(db: Session, draft_id: str, asset_id: str) -> bool:
-    task_ref = db.scalar(select(WorkflowTask.id).where(WorkflowTask.prompt_draft_id == draft_id).limit(1))
-    input_ref = db.scalar(select(TaskInputAsset.id).where(TaskInputAsset.asset_id == asset_id).limit(1))
-    request_ref = db.scalar(
-        select(RunpodRequestItem.id)
-        .where((RunpodRequestItem.prompt_draft_id == draft_id) | (RunpodRequestItem.asset_id == asset_id))
-        .limit(1)
-    )
-    return task_ref is not None or input_ref is not None or request_ref is not None
-
-
-def _asset_is_referenced(db: Session, asset_id: str) -> bool:
-    draft_ref = db.scalar(select(ImagePromptDraft.id).where(ImagePromptDraft.asset_id == asset_id).limit(1))
-    input_ref = db.scalar(select(TaskInputAsset.id).where(TaskInputAsset.asset_id == asset_id).limit(1))
-    request_ref = db.scalar(select(RunpodRequestItem.id).where(RunpodRequestItem.asset_id == asset_id).limit(1))
-    return draft_ref is not None or input_ref is not None or request_ref is not None
 
 
 def _batch_counts_from_drafts(batch: PromptGenerationBatch, drafts: list[ImagePromptDraft]) -> dict[str, Any]:

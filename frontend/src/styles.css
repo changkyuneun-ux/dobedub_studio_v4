@@ -6737,16 +6737,22 @@ button {
 .v3-batch-section-title { align-items: center; border-bottom: 1px solid var(--v3-border-inner); display: flex; gap: 10px; min-height: 48px; padding: 0 16px; }
 .v3-batch-section-title span { background: var(--v3-bg-muted); border-radius: 999px; color: var(--v3-text-body); display: grid; font-weight: 800; height: 26px; place-items: center; width: 26px; }
 .v3-batch-section-title strong { font-size: 15px; }
-.v3-batch-layout-grid { display: grid; gap: 14px; grid-template-columns: minmax(220px, 1.15fr) minmax(280px, 1.3fr) minmax(210px, .8fr) minmax(220px, .95fr); padding: 16px; }
-.v3-batch-field-card, .v3-batch-folder-card, .v3-batch-create-action { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; display: grid; gap: 10px; min-width: 0; padding: 14px; }
-.v3-batch-field-card label, .v3-batch-folder-card span, .v3-batch-history-toolbar label { color: var(--v3-text-secondary); font-size: 12px; font-weight: 700; }
+.v3-batch-layout-grid { display: grid; gap: 14px; grid-template-columns: minmax(190px, 1fr) minmax(250px, 1.2fr) minmax(180px, .75fr) minmax(190px, .8fr); padding: 16px; }
+.v3-batch-field-card, .v3-batch-folder-card, .v3-batch-create-action, .v3-batch-negative-card { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; display: grid; gap: 10px; min-width: 0; padding: 14px; }
+.v3-batch-field-card label, .v3-batch-folder-card span, .v3-batch-negative-card span, .v3-batch-history-toolbar label { color: var(--v3-text-secondary); font-size: 12px; font-weight: 700; }
 .v3-batch-field-card select, .v3-batch-history-toolbar input, .v3-batch-history-toolbar select { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 6px; color: var(--v3-text-body); font: inherit; min-height: 42px; padding: 8px 10px; }
 .v3-batch-folder-card { cursor: pointer; text-align: left; }
 .v3-batch-folder-card strong { color: var(--v3-text-body); font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v3-batch-folder-card small, .v3-batch-field-card small, .v3-batch-create-action small { color: var(--v3-text-secondary); font-size: 12px; }
+.v3-batch-folder-card small, .v3-batch-field-card small, .v3-batch-create-action small, .v3-batch-negative-card small { color: var(--v3-text-secondary); font-size: 12px; }
+.v3-batch-negative-card { grid-column: 1 / -1; }
+.v3-batch-negative-card textarea { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 6px; color: var(--v3-text-body); font: inherit; line-height: 1.45; min-height: 74px; padding: 10px 12px; resize: vertical; width: 100%; }
+.v3-batch-negative-card textarea:focus { border-color: var(--v3-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--v3-accent) 16%, transparent); outline: none; }
 .v3-batch-hidden-input { display: none; }
 .v3-batch-linked-state { color: var(--v3-accent-text); font-size: 12px; font-weight: 800; }
 .v3-batch-linked-state::before { content: "↗"; margin-right: 6px; }
+.v3-batch-linked-state.is-error { color: var(--v3-danger); }
+.v3-batch-workflow-callout { grid-column: 1 / -1; line-height: 1.5; margin: -4px 0 0; padding: 10px 12px; }
+.v3-batch-workflow-callout.is-error { background: var(--v3-danger-bg); border: 1px solid var(--v3-danger-border); border-radius: 7px; color: var(--v3-danger); font-size: 12px; }
 .v3-batch-length-segmented { border: 1px solid var(--v3-border); border-radius: 7px; display: grid; grid-template-columns: repeat(3, 1fr); min-height: 42px; overflow: hidden; }
 .v3-batch-length-segmented button { background: var(--v3-bg-canvas); border: 0; border-right: 1px solid var(--v3-border); color: var(--v3-text-body); font: inherit; font-weight: 700; }
 .v3-batch-length-segmented button:last-child { border-right: 0; }
