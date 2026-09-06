@@ -975,6 +975,8 @@ def test_batch_job_detail_separates_prompt_and_runpod_failures(db_session, monke
     ]
     assert detail["items"][0]["error"] == "Grok 503"
     assert detail["items"][1]["error"] == "RunPod 404"
+    assert detail["items"][0]["assetId"] == asset_ids[0]
+    assert detail["items"][1]["assetId"] == asset_ids[1]
 
 
 def test_batch_job_detail_normalizes_legacy_mojibake_source_paths(db_session, monkeypatch):

@@ -6827,12 +6827,17 @@ button {
 .v3-batch-recovery-file strong, .v3-batch-recovery-file small, .v3-batch-recovery-error, .v3-batch-recovery-next { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-batch-recovery-file strong { font-size: 12px; }
 .v3-batch-recovery-file small { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 9px; }
+.v3-batch-recovery-file-preview { background: transparent; border: 0; color: var(--v3-text-body); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; min-width: 0; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.v3-batch-recovery-file-preview:hover { color: var(--v3-accent-text); text-decoration: underline; }
 .v3-batch-recovery-error { color: var(--v3-text-secondary); font-size: 11px; }
 .v3-batch-recovery-next { color: var(--v3-text-secondary); font-size: 10px; }
 .v3-batch-recovery-pagination { align-items: center; display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px; }
 .v3-batch-recovery-pagination button { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 6px; color: var(--v3-text-body); font: inherit; font-size: 11px; min-height: 32px; padding: 0 12px; }
 .v3-batch-recovery-pagination button:disabled { color: var(--v3-text-disabled); cursor: not-allowed; }
 .v3-batch-recovery-pagination strong { color: var(--v3-text-body); font-family: var(--v3-font-mono); font-size: 11px; min-width: 88px; text-align: center; }
+.v3-batch-recovery-preview-backdrop { align-items: center; background: rgba(8, 11, 15, .48); display: flex; inset: 0; justify-content: center; padding: 20px; position: fixed; z-index: 80; }
+.v3-batch-recovery-preview-modal { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: var(--v3-radius-modal); box-shadow: var(--v3-modal-shadow); display: grid; gap: 12px; max-height: min(80vh, 760px); max-width: min(900px, 90vw); overflow: auto; padding: 14px; width: min(760px, calc(100vw - 32px)); }
+.v3-batch-recovery-preview-modal > img { background: #0b0d0f; border-radius: 8px; display: block; max-height: 66vh; max-width: 100%; object-fit: contain; width: 100%; }
 .v3-status-badge.is-failed { background: #fdeceb; color: var(--v3-danger); }
 .v3-status-badge.is-running { background: #e7f0ff; color: #2368bd; }
 .v3-status-badge.is-muted { background: var(--v3-bg-muted); color: var(--v3-text-secondary); }

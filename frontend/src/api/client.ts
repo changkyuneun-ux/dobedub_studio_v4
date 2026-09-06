@@ -393,6 +393,7 @@ export type BatchJobListResponse = {
 
 export type BatchJobDetailItemResponse = {
   id: string;
+  assetId?: string | null;
   sourceFileName: string;
   sourceRelativePath?: string | null;
   sourceZipFileName?: string | null;

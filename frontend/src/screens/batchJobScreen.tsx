@@ -2,6 +2,7 @@ import React, { ChangeEvent, useEffect, useRef, useState } from "react";
 import { apiClient, BatchJobDetailItemResponse, BatchJobDetailResponse, BatchJobResponse, HealthResponse, WorkflowItem } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
+import { ProtectedImage } from "../components/ProtectedAssets";
 import { shellNavigate } from "../helpers/navigation";
 import { StudioRoute } from "../router";
 
@@ -93,6 +94,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [selectedRecoveryKeys, setSelectedRecoveryKeys] = useState<string[]>([]);
   const [recoveryPage, setRecoveryPage] = useState(1);
+  const [recoveryPreview, setRecoveryPreview] = useState<{ src: string; alt: string } | null>(null);
   const zipInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -193,6 +195,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     setRecoveryDetail(null);
     setSelectedRecoveryKeys([]);
     setRecoveryPage(1);
+    setRecoveryPreview(null);
   }
 
   function toggleRecoveryItem(item: BatchJobDetailItemResponse) {
@@ -591,7 +594,18 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <div className="v3-batch-recovery-row" key={key}>
                     <input type="checkbox" checked={selected} disabled={!item.selectable || recoveryBusy} onChange={() => toggleRecoveryItem(item)} />
                     <div className="v3-batch-recovery-file">
-                      <strong>{item.sourceRelativePath || item.sourceFileName}</strong>
+                      {item.assetId ? (
+                        <button
+                          className="v3-batch-recovery-file-preview"
+                          type="button"
+                          title="원본 이미지 미리보기"
+                          onClick={() => setRecoveryPreview({ src: `/api/files/${item.assetId}`, alt: item.sourceRelativePath || item.sourceFileName })}
+                        >
+                          {item.sourceRelativePath || item.sourceFileName}
+                        </button>
+                      ) : (
+                        <strong>{item.sourceRelativePath || item.sourceFileName}</strong>
+                      )}
                       <small>{item.promptDraftId || item.taskId || "-"}</small>
                     </div>
                     <span className={`v3-status-badge ${retryStatusTone(item.promptStatus)}`}>{item.promptStatus || "-"}</span>
@@ -610,6 +624,17 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 <button type="button" disabled={recoveryCurrentPage <= 1 || recoveryBusy} onClick={() => setRecoveryPage((current) => Math.max(1, current - 1))}>이전</button>
                 <strong>{recoveryCurrentPage} / {recoveryTotalPages} 페이지</strong>
                 <button type="button" disabled={recoveryCurrentPage >= recoveryTotalPages || recoveryBusy} onClick={() => setRecoveryPage((current) => Math.min(recoveryTotalPages, current + 1))}>다음</button>
+              </div>
+            ) : null}
+            {recoveryPreview ? (
+              <div className="v3-batch-recovery-preview-backdrop" role="dialog" aria-modal="true" aria-label="원본 이미지 미리보기" onClick={() => setRecoveryPreview(null)}>
+                <div className="v3-batch-recovery-preview-modal" onClick={(event) => event.stopPropagation()}>
+                  <div className="v3-panel-title-row">
+                    <div className="v3-panel-title">{recoveryPreview.alt}</div>
+                    <button className="v3-secondary-button" type="button" onClick={() => setRecoveryPreview(null)}>닫기</button>
+                  </div>
+                  <ProtectedImage src={recoveryPreview.src} alt={recoveryPreview.alt} />
+                </div>
               </div>
             ) : null}
           </div>

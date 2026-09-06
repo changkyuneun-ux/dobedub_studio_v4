@@ -507,6 +507,21 @@ def test_batch_recovery_modal_lists_only_error_items_with_ten_row_pages() -> Non
     assert "recoveryTotalPages" in screen
 
 
+def test_batch_recovery_modal_previews_source_images_from_asset_ids() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "assetId?: string | null" in client
+    assert "ProtectedImage" in screen
+    assert "recoveryPreview" in screen
+    assert "setRecoveryPreview({ src: `/api/files/${item.assetId}`" in screen
+    assert "v3-batch-recovery-file-preview" in screen
+    assert "v3-batch-recovery-preview-modal" in screen
+    assert ".v3-batch-recovery-file-preview" in css
+    assert ".v3-batch-recovery-preview-modal" in css
+
+
 def test_batch_recovery_modal_uses_defined_light_theme_tokens() -> None:
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
 

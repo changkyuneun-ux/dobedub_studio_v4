@@ -425,6 +425,7 @@ def _batch_detail_item(
     metadata = _source_metadata(draft)
     return {
         "id": f"{draft.id}:{latest_task.id if latest_task else ''}",
+        "assetId": draft.asset_id,
         "sourceFileName": _source_file_name(draft, asset),
         "sourceRelativePath": metadata["sourceRelativePath"],
         "sourceZipFileName": metadata["sourceZipFileName"],
@@ -445,6 +446,7 @@ def _batch_detail_item(
 def _orphan_task_detail_item(task: WorkflowTask) -> dict[str, Any]:
     return {
         "id": f":{task.id}",
+        "assetId": None,
         "sourceFileName": "-",
         "sourceRelativePath": "",
         "sourceZipFileName": "",
