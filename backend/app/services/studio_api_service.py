@@ -735,7 +735,13 @@ def monitor_active_jobs() -> dict:
     for task_id in task_ids:
         try:
             job_status(task_id)
-        except Exception:
+        except Exception as exc:
+            if job_service.is_runpod_job_not_found_error(exc):
+                with JOB_LOCK:
+                    restored = restore_job_from_task(task_id)
+                    if restored:
+                        JOBS[task_id] = job_service.mark_runpod_job_not_found(job_runtime(), restored, str(exc))
+                        continue
             failures.append(task_id)
     return {"checked": len(task_ids), "failures": failures, "dispatch": dispatch}
 

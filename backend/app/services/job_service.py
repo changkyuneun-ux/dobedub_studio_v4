@@ -192,6 +192,24 @@ def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
     return runpod_status, elapsed, progress
 
 
+def is_runpod_job_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "runpod http 404" in message and ("job not found" in message or "not found" in message)
+
+
+def mark_runpod_job_not_found(runtime: JobRuntime, job: dict, error: str) -> dict:
+    job["status"] = "FAILED"
+    job["progress"] = 100
+    job["runpodStatus"] = {
+        "status": "FAILED",
+        "error": error,
+        "providerStatus": "NOT_FOUND",
+    }
+    job["historySaved"] = True
+    record_job(runtime, job)
+    return job
+
+
 def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
     job = runtime.jobs.get(task_id)
     if not job:
@@ -257,6 +275,7 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         "outputUrl": job.get("outputUrl", ""),
         "outputAssets": job.get("outputAssets", []),
         "cancelRequested": bool(job.get("cancelRequested")),
+        "lastDispatchError": job.get("lastDispatchError"),
     }
     for field_name in ("createdAt", "startedAt", "completedAt", "cancelledAt"):
         if field_name == "createdAt":

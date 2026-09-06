@@ -833,6 +833,8 @@ export type JobCreateResponse = {
   taskId: string;
   runpodJobId: string;
   status: string;
+  statusLabel?: string;
+  lastDispatchError?: string | null;
   generationSeed?: number | string;
 };
 
@@ -856,6 +858,7 @@ export type JobStatusResponse = {
   progress?: number;
   workerSummary?: string;
   statusLabel?: string;
+  lastDispatchError?: string | null;
   message?: string;
   outputUrl?: string;
   outputAssets?: OutputAsset[];
@@ -1274,7 +1277,7 @@ export const apiClient = {
       method: "POST"
     }),
   regenerateHistoryItem: (taskId: string) =>
-    requestJson<{ taskId: string; sourceTaskId: string; runpodJobId?: string; status: string; generationSeed?: number | string | null }>(
+    requestJson<{ taskId: string; sourceTaskId: string; runpodJobId?: string; status: string; statusLabel?: string; lastDispatchError?: string | null; generationSeed?: number | string | null }>(
       `/api/history/${encodeURIComponent(taskId)}/regenerate`,
       { method: "POST" }
     ),

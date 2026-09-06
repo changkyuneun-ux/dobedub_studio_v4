@@ -38,15 +38,17 @@ function workflowLabel(workflow: WorkflowItem) {
   return workflow.label || workflow.name || workflow.id;
 }
 
-function runpodRetryButtonLabel(item: HistoryItem, retryStatus?: JobStatusResponse) {
-  const raw = retryStatus?.statusLabel || retryStatus?.status || (item.taskId ? "요청됨" : "요청됨");
-  const normalized = raw.toUpperCase();
+function runpodResultStatusLabel(item: HistoryItem, retryStatus?: JobStatusResponse) {
+  if (!retryStatus) return item.status || "-";
+  if (retryStatus.lastDispatchError?.includes("동시 활성 Task 한도")) return "한도 대기";
+  const normalized = String(retryStatus.status || "").toUpperCase();
   if (normalized === "PENDING_SUBMIT") return "제출 대기";
   if (normalized === "DISPATCHING") return "제출 중";
   if (normalized === "QUEUED" || normalized === "IN_QUEUE") return "RunPod Queue";
   if (normalized === "IN_PROGRESS" || normalized === "RUNNING") return "진행 중";
-  if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Download";
-  return raw;
+  if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Completed";
+  if (normalized === "FAILED" || normalized === "CANCELLED" || normalized === "TIMED_OUT") return "Failed";
+  return retryStatus.statusLabel || retryStatus.status || item.status || "-";
 }
 
 const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(88px, .55fr) 52px";
@@ -572,12 +574,14 @@ export function Create3aScreen({
           const inputFileName = input?.fileName || "입력 이미지";
           const outputFileName = result?.fileName || item.outputFile || item.runpodResponse?.filename || "생성 영상";
           const canRegenerate = canRework && isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
-          const retryLocked = retryingRunpodTaskIds.includes(item.taskId);
           const retryStatus = runpodRetryStatuses[item.taskId];
           const retryTaskId = runpodRetryTaskIds[item.taskId];
           const retryTaskItem = retryTaskId ? runpodHistoryItems.find((candidate) => candidate.taskId === retryTaskId) : null;
           const retryTaskResult = retryTaskItem ? historyOutputAsset(retryTaskItem) : null;
           const retryTaskUrl = retryTaskResult?.downloadUrl || retryTaskResult?.url || retryTaskItem?.outputUrl || retryStatus?.outputUrl || "";
+          const resultStatusLabel = runpodResultStatusLabel(item, retryStatus);
+          const resultStatusTone = isSuccessStatus(retryStatus?.status || item.status) ? "is-ready" : "is-pending";
+          const retryInFlight = Boolean(retryStatus && !isTerminalHistoryStatus(retryStatus.status) && !isSuccessStatus(retryStatus.status));
           const retryDownloadItem = retryTaskItem && isSuccessStatus(retryTaskItem.status) && retryTaskUrl ? retryTaskItem : (
             retryStatus && isSuccessStatus(retryStatus.status) && retryTaskUrl
               ? { ...item, taskId: retryStatus.taskId, runpodJobId: retryStatus.runpodJobId, status: retryStatus.status, outputUrl: retryStatus.outputUrl, outputAssets: retryStatus.outputAssets || [] }
@@ -621,7 +625,7 @@ export function Create3aScreen({
                 ) : "-"}
               </span>
               <span>
-                <span className={`v3-status-badge ${isSuccessStatus(item.status) ? "is-ready" : "is-pending"}`}>{item.status || "-"}</span>
+                <span className={`v3-status-badge ${resultStatusTone}`}>{resultStatusLabel}</span>
               </span>
               <span>
                 {input?.assetId ? (
@@ -640,13 +644,13 @@ export function Create3aScreen({
                   <button
                     className="v3-text-link-button"
                     type="button"
-                    disabled={retryingRunpodTaskIds.includes(item.taskId)}
+                    disabled={retryingRunpodTaskIds.includes(item.taskId) || retryInFlight}
                     onClick={(event) => {
                       event.stopPropagation();
                       void regenerateRunpodHistoryItem(item);
                     }}
                   >
-                    {retryLocked ? runpodRetryButtonLabel(item, retryStatus) : "재생성"}
+                    재생성
                   </button>
                 ) : resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
               </span>
@@ -862,7 +866,7 @@ function PromptGenerationHistory({
         <label>Batch ID<input value={batchFilter} onChange={(event) => { setBatchFilter(event.target.value); setPage(1); }} placeholder="전체 배치" /></label>
       </div>
       <div className="v3-prompt-history-head">
-        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>워크플로우 내장 Negative Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
       </div>
       {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
@@ -888,7 +892,6 @@ function PromptGenerationHistory({
               <small>{item.assetId}</small>
             </div>
             <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : "null"}</div>
-            <div className="v3-review-prompt" title={item.negativePrompt || ""}>{item.negativePrompt || "-"}</div>
             <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>

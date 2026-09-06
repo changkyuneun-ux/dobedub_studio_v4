@@ -155,15 +155,60 @@ def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
     assert "retryingRunpodTaskIds" in source
     assert "runpodRetryTaskIds" in source
     assert "runpodRetryStatuses" in source
-    assert "runpodRetryButtonLabel(item, retryStatus)" in source
-    assert "retryStatus?.statusLabel || retryStatus?.status" in source
+    assert "runpodResultStatusLabel(item, retryStatus)" in source
+    assert "const resultStatusLabel = runpodResultStatusLabel(item, retryStatus)" in source
     assert "apiClient.jobStatus(retryTaskId)" in source
     assert "apiClient.regenerateHistoryItem(item.taskId)" in source
     assert "재생성" in source
-    assert "요청됨" in source
     assert "Batch ID / 작업자명 검색" in source
     assert "<span>ComfyUI Response</span>" not in runpod_history
     assert "v3-runpod-response-cell" not in runpod_history
+
+
+def test_batch_job_creation_uses_studio_confirm_modal_and_ten_second_default() -> None:
+    source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "window.confirm" not in source
+    assert "window.alert" not in source
+    assert "webkitdirectory" in source
+    assert 'node.setAttribute("directory"' in source
+    assert "폴더 선택" in source
+    assert "confirmingBatch" in source
+    assert "작업 요청 내역 확인" in source
+    assert "워크플로우" in source
+    assert "폴더명" in source
+    assert "이미지수" in source
+    assert "길이" in source
+    assert "진행하시겠습니까?" in source
+    assert "setRequestedFrames(DEFAULT_REQUESTED_FRAMES)" in source
+    assert "DEFAULT_REQUESTED_FRAMES = 161" in source
+    assert "161f · 10초" in source
+    assert "개 이미지를 선택했습니다." not in source
+    assert ".v3-batch-confirm-modal" in css
+
+
+def test_prompt_history_removes_negative_prompt_column() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
+
+    assert "워크플로우 내장 Negative Prompt" not in prompt_history
+    assert 'title={item.negativePrompt || ""}' not in prompt_history
+    assert "{item.negativePrompt || \"-\"}" not in prompt_history
+
+
+def test_runpod_retry_status_updates_result_column_not_download_action() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    download_cell = source.split("const retryDownloadItem", 1)[1].split("<span style={{ textAlign: \"right\" }}", 1)[0]
+
+    assert "const resultStatusLabel = runpodResultStatusLabel(item, retryStatus)" in source
+    assert '<span className={`v3-status-badge ${resultStatusTone}`}>{resultStatusLabel}</span>' in source
+    assert "runpodRetryButtonLabel(item, retryStatus)" not in download_cell
+    assert "retryInFlight" in download_cell
+    assert "재생성" in download_cell
+    assert "RunPod Queue" not in download_cell
+    assert "진행 중" not in download_cell
+    assert "제출 대기" not in download_cell
 
 
 def test_task_history_tables_and_preview_panels_are_responsive() -> None:
@@ -331,8 +376,8 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "작업 폴더" in screen
     assert "지시문 연결됨" in screen
     assert "길이 (프레임 수)" in screen
-    assert "81f · 5초" in screen
-    assert "개 이미지 배치 생성" in screen
+    assert "161f · 10초" in screen
+    assert "작업 요청" in screen
     assert "Pending Submit" in screen
     assert "ZIP 다운로드" in screen
     assert "1 /" in screen

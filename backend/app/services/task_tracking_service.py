@@ -476,6 +476,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
             "outputsSaved": bool(output_assets),
             "wanNodeConfig": task.wan_node_config or {},
             "historySaved": str(task.status or "").upper() in TERMINAL_STATES,
+            "lastDispatchError": task.last_dispatch_error,
             "restoredFromDb": True,
         }
         created_at_fields = _task_timestamp_fields(task, "createdAt", task.created_at)

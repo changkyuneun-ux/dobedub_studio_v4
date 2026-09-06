@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
 from backend.app.db.session import get_db
-from backend.app.services import prompt_batch_service, studio_api_service
+from backend.app.services import job_service, prompt_batch_service, studio_api_service
 from backend.app.services.task_policy_service import TaskSubmissionLimitError
 
 router = APIRouter(prefix="/history", tags=["history"])
@@ -105,6 +105,8 @@ def regenerate_history_item(
         "sourceTaskId": task_id,
         "runpodJobId": job.get("runpodJobId") or "",
         "status": str(job.get("status") or "pending_submit").lower(),
+        "statusLabel": job.get("statusLabel") or job_service.localized_job_status(job),
+        "lastDispatchError": job.get("lastDispatchError"),
         "generationSeed": job.get("generationSeed"),
     }
 

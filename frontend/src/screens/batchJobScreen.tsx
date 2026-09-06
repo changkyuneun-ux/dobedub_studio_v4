@@ -12,7 +12,8 @@ type UploadRow = UploadResponse & { file: File };
 
 const FRAME_OPTIONS = [49, 81, 161];
 const PAGE_SIZE = 10;
-const DEFAULT_FRAME_DURATION_LABEL = "81f · 5초";
+const DEFAULT_REQUESTED_FRAMES = 161;
+const DEFAULT_FRAME_DURATION_LABEL = "161f · 10초";
 const PAGE_COUNT_FORMAT_LABEL = "1 / 4 페이지";
 
 const workflowName = (workflow: WorkflowItem | undefined, fallback = "") => workflow?.label || workflow?.name || workflow?.id || fallback;
@@ -22,7 +23,7 @@ function frameSeconds(frames: number) {
 }
 
 function formatFrameDuration(frames: number) {
-  if (frames === 81) return DEFAULT_FRAME_DURATION_LABEL;
+  if (frames === DEFAULT_REQUESTED_FRAMES) return DEFAULT_FRAME_DURATION_LABEL;
   return `${frames}f · ${frameSeconds(frames)}초`;
 }
 
@@ -57,7 +58,7 @@ function metricPill(value: number, tone: "gray" | "blue" | "green" | "yellow" | 
 
 export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [workflowId, setWorkflowId] = useState(workflows[0]?.id || "");
-  const [requestedFrames, setRequestedFrames] = useState(81);
+  const [requestedFrames, setRequestedFrames] = useState(DEFAULT_REQUESTED_FRAMES);
   const [folderName, setFolderName] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadedRows, setUploadedRows] = useState<UploadRow[]>([]);
@@ -72,6 +73,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [confirmingBatch, setConfirmingBatch] = useState(false);
   const folderInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -124,7 +126,27 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     setSelectedFiles(files);
     setFolderName(batchFolderName(files));
     setUploadedRows([]);
-    setNotice(files.length ? `${files.length}개 이미지를 선택했습니다.` : "처리할 이미지가 없습니다.");
+    setNotice(files.length ? "" : "처리할 이미지가 없습니다.");
+  }
+
+  function resetBatchCreation() {
+    setSelectedFiles([]);
+    setFolderName("");
+    setUploadedRows([]);
+    setRequestedFrames(DEFAULT_REQUESTED_FRAMES);
+    setNotice("");
+    if (folderInput.current) {
+      folderInput.current.value = "";
+    }
+  }
+
+  function requestBatchConfirmation() {
+    if (!workflowId || !selectedFiles.length) {
+      setNotice("워크플로우와 이미지 폴더를 먼저 선택하세요.");
+      return;
+    }
+    setNotice("");
+    setConfirmingBatch(true);
   }
 
   async function startBatch() {
@@ -191,18 +213,21 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const firstItemIndex = history.length ? (page - 1) * PAGE_SIZE + 1 : 0;
   const lastItemIndex = history.length ? Math.min(total, page * PAGE_SIZE) : 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId);
+  const selectedWorkflowLabel = workflowName(selectedWorkflow, workflowId || "-");
 
   return (
-    <AppShell
-      user={user}
-      area="generate"
-      activeItem="batchJobs"
-      onNavigate={(key) => shellNavigate(key, onGoTo)}
-      headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"
-      headerTitle="Batch 작업 요청 관리"
-      headerActions={<span className="v3-status-chip is-ok">GROK CONFIGURED</span>}
-    >
-      <section className="v3-screen-section v3-batch-management-section">
+    <>
+      <AppShell
+        user={user}
+        area="generate"
+        activeItem="batchJobs"
+        onNavigate={(key) => shellNavigate(key, onGoTo)}
+        headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"
+        headerTitle="Batch 작업 요청 관리"
+        headerActions={<span className="v3-status-chip is-ok">GROK CONFIGURED</span>}
+      >
+        <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>1</span><strong>Batch 생성</strong></div>
         <div className="v3-batch-layout-grid">
           <div className="v3-batch-field-card">
@@ -247,16 +272,16 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <small>{formatFrameDuration(requestedFrames)}</small>
           </div>
           <div className="v3-batch-create-action">
-            <button className="v3-primary-button" type="button" disabled={busy || !selectedFiles.length} onClick={startBatch}>
-              {selectedFiles.length}개 이미지 배치 생성
+            <button className="v3-primary-button" type="button" disabled={busy || !selectedFiles.length} onClick={requestBatchConfirmation}>
+              작업 요청
             </button>
             <small>{uploadedRows.length ? `업로드 ${uploadedRows.length} / ${selectedFiles.length}` : formatFrameDuration(requestedFrames)}</small>
           </div>
         </div>
         {notice ? <p className="v3-inline-notice">{notice}</p> : null}
-      </section>
+        </section>
 
-      <section className="v3-screen-section v3-batch-management-section">
+        <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>2</span><strong>진행 중 Batch</strong></div>
         <div className="v3-batch-running-grid">
           <div className="v3-batch-mini-table">
@@ -291,9 +316,9 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             {!activeJobs.length ? <div className="v3-empty-panel">진행 중인 RunPod 배치가 없습니다.</div> : null}
           </div>
         </div>
-      </section>
+        </section>
 
-      <section className="v3-screen-section v3-batch-management-section">
+        <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>3</span><strong>Batch 작업 이력</strong></div>
         <div className="v3-batch-history-toolbar">
           <label>시작일<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
@@ -354,7 +379,26 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <button type="button" disabled={page >= totalPages || busy} onClick={() => loadHistory(totalPages)}>≫</button>
           </div>
         </div>
-      </section>
-    </AppShell>
+        </section>
+      </AppShell>
+      {confirmingBatch ? (
+        <div className="v3-modal-overlay" role="presentation">
+          <div className="v3-modal-panel v3-batch-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-confirm-title">
+            <h2 className="v3-modal-title" id="batch-confirm-title">작업 요청 내역 확인</h2>
+            <div className="v3-batch-confirm-summary">
+              <div><span>워크플로우</span><strong>{selectedWorkflowLabel}</strong></div>
+              <div><span>폴더명</span><strong>{folderName || "-"}</strong></div>
+              <div><span>이미지수</span><strong>{selectedFiles.length}개</strong></div>
+              <div><span>길이</span><strong>{formatFrameDuration(requestedFrames)}</strong></div>
+            </div>
+            <p className="v3-modal-body-text">진행하시겠습니까?</p>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={busy} onClick={() => { setConfirmingBatch(false); resetBatchCreation(); }}>취소</button>
+              <button className="v3-primary-button" type="button" disabled={busy} onClick={() => { setConfirmingBatch(false); void startBatch(); }}>진행</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

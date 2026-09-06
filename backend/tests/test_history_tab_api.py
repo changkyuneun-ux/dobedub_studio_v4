@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from backend.app.core.security import create_access_token
 from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
+from backend.app.services.task_tracking_service import active_task_ids
 from pathlib import Path
 
 
@@ -461,6 +462,8 @@ def test_runpod_history_can_regenerate_failed_task_without_opening_create_screen
         "sourceTaskId": "task_history_failed_regen",
         "runpodJobId": "",
         "status": "pending_submit",
+        "statusLabel": "요청 대기",
+        "lastDispatchError": None,
         "generationSeed": None,
     }
     assert calls[0]["payload"]["workflowId"] == "1-images.json"
@@ -496,6 +499,7 @@ def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, mo
                 runpod_job_id="runpod-retry-child",
                 worker_name="History User",
                 user_id="history-user",
+                last_dispatch_error="사용자 동시 활성 Task 한도(3개)에 도달했습니다.",
                 payload_json={
                     "workflowId": "1-images.json",
                     "segments": [],
@@ -522,8 +526,118 @@ def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, mo
         "sourceTaskId": "task_history_failed_existing_retry",
         "runpodJobId": "runpod-retry-child",
         "status": "in_queue",
+        "statusLabel": "대기",
+        "lastDispatchError": "사용자 동시 활성 Task 한도(3개)에 도달했습니다.",
         "generationSeed": None,
     }
+
+
+def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
+    from backend.app.services import studio_api_service
+
+    studio_api_service.JOBS.clear()
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(WorkflowTask(
+            id="task_missing_runpod_job",
+            runpod_job_id="missing-runpod-job",
+            workflow_id="1-images.json",
+            execution_mode="runpod",
+            status="IN_PROGRESS",
+            progress=45,
+            worker_name="History User",
+            user_id="history-user",
+            payload_json={
+                "workflowId": "1-images.json",
+                "workflowName": "1-images",
+                "user": {"id": "history-user", "name": "History User"},
+                "segments": [{"index": 1, "positivePrompt": "prompt", "negativePrompt": "", "config": {}}],
+            },
+            runpod_submit_json={"id": "missing-runpod-job"},
+            runpod_status_json={"status": "IN_PROGRESS"},
+            created_at=datetime(2026, 9, 6, 12, 0, 0),
+            updated_at=datetime(2026, 9, 6, 12, 0, 0),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    def provider_404(*_args, **_kwargs):
+        raise RuntimeError('RunPod HTTP 404: {"status":404,"title":"Not Found","detail":"job not found"}')
+
+    monkeypatch.setattr(studio_api_service, "runpod_request", provider_404)
+
+    result = studio_api_service.monitor_active_jobs()
+
+    assert result["failures"] == []
+    assert "task_missing_runpod_job" not in active_task_ids()
+
+    session = SessionLocal()
+    try:
+        task = session.get(WorkflowTask, "task_missing_runpod_job")
+        assert task is not None
+        assert task.status == "FAILED"
+        assert task.progress == 100
+        assert "job not found" in str(task.runpod_status_json.get("error"))
+    finally:
+        session.close()
+
+
+def test_monitor_keeps_transient_runpod_status_errors_retryable(db_session, monkeypatch):
+    from backend.app.services import studio_api_service
+
+    studio_api_service.JOBS.clear()
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(WorkflowTask(
+            id="task_transient_runpod_error",
+            runpod_job_id="transient-runpod-job",
+            workflow_id="1-images.json",
+            execution_mode="runpod",
+            status="IN_PROGRESS",
+            progress=45,
+            worker_name="History User",
+            user_id="history-user",
+            payload_json={
+                "workflowId": "1-images.json",
+                "workflowName": "1-images",
+                "user": {"id": "history-user", "name": "History User"},
+                "segments": [{"index": 1, "positivePrompt": "prompt", "negativePrompt": "", "config": {}}],
+            },
+            runpod_submit_json={"id": "transient-runpod-job"},
+            runpod_status_json={"status": "IN_PROGRESS"},
+            created_at=datetime(2026, 9, 6, 12, 0, 0),
+            updated_at=datetime(2026, 9, 6, 12, 0, 0),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    def provider_timeout(*_args, **_kwargs):
+        raise RuntimeError("RunPod HTTP 503: endpoint warming")
+
+    monkeypatch.setattr(studio_api_service, "runpod_request", provider_timeout)
+
+    result = studio_api_service.monitor_active_jobs()
+
+    assert result["failures"] == ["task_transient_runpod_error"]
+    assert "task_transient_runpod_error" in active_task_ids()
 
 
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
@@ -555,7 +669,7 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "setItems(response.items)" in screen
     assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen
     assert "apiClient.retryImagePromptDraft(item.draftId)" in screen
-    assert "워크플로우 내장 Negative Prompt" in screen
+    assert "워크플로우 내장 Negative Prompt" not in screen
     assert "<span>복사</span>" not in screen
     assert ">Copy</button>" not in screen
     assert "Grok API 응답" in screen
