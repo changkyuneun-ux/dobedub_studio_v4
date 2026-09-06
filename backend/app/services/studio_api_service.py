@@ -21,6 +21,7 @@ from backend.app.services.task_tracking_service import (
     list_assets,
     record_job_status,
     requeue_task_for_rework,
+    restore_existing_job_for_prompt_draft,
     restore_job_from_task,
     reusable_task_prompts,
     task_history_items,
@@ -382,6 +383,13 @@ def create_job(payload: dict, *, user: dict[str, object]) -> dict:
             "role": str(user.get("role") or ""),
             "permissions": list(user.get("permissions") or []),
         }
+        existing_job = restore_existing_job_for_prompt_draft(
+            str(safe_payload.get("promptDraftId") or ""),
+            batch_job_id=str(safe_payload.get("batchJobId") or "").strip() or None,
+        )
+        if existing_job:
+            JOBS[existing_job["taskId"]] = existing_job
+            return existing_job
         return job_service.queue_job(job_runtime(), safe_payload)
 
 

@@ -698,6 +698,7 @@ export type HistoryItem = {
   workflowName?: string;
   workflow?: string;
   promptDraftId?: string;
+  promptBatchId?: string | null;
   batchJobId?: string | null;
   runpodResponse?: {
     filename?: string | null;

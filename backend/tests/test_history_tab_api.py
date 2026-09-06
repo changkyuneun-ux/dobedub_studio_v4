@@ -250,6 +250,120 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
     }
 
 
+def test_runpod_history_exposes_legacy_prompt_batch_id(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(Asset(
+            id="asset_legacy_prompt_batch",
+            asset_type="input_image",
+            file_name="legacy.png",
+            mime_type="image/png",
+            size_bytes=100,
+            storage_key="uploads/legacy.png",
+        ))
+        session.add(ImagePromptDraft(
+            id="grok_draft_legacy_batch",
+            asset_id="asset_legacy_prompt_batch",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status="READY",
+            provider="grok",
+            model="grok",
+            positive_prompt="walk",
+            prompt_batch_id="pgb_legacy_visible",
+            created_by="history-user",
+        ))
+        session.add(WorkflowTask(
+            id="task_history_legacy_prompt_batch",
+            workflow_id="1-images.json",
+            status="COMPLETED",
+            worker_name="History User",
+            user_id="history-user",
+            prompt_draft_id="grok_draft_legacy_batch",
+            payload_json={"promptDraftId": "grok_draft_legacy_batch"},
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get("/api/history/runpod?page=1&pageSize=20", headers=_authorized_headers())
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["batchJobId"] is None
+    assert item["promptBatchId"] == "pgb_legacy_visible"
+
+
+def test_runpod_history_batch_filter_matches_legacy_prompt_batch_id(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(Asset(
+            id="asset_legacy_prompt_batch_filter",
+            asset_type="input_image",
+            file_name="legacy-filter.png",
+            mime_type="image/png",
+            size_bytes=100,
+            storage_key="uploads/legacy-filter.png",
+        ))
+        session.add(ImagePromptDraft(
+            id="grok_draft_legacy_batch_filter",
+            asset_id="asset_legacy_prompt_batch_filter",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status="READY",
+            provider="grok",
+            model="grok",
+            positive_prompt="walk",
+            prompt_batch_id="pgb_legacy_filter",
+            created_by="history-user",
+        ))
+        session.add_all([
+            WorkflowTask(
+                id="task_history_legacy_prompt_batch_filter",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="History User",
+                user_id="history-user",
+                prompt_draft_id="grok_draft_legacy_batch_filter",
+                payload_json={"promptDraftId": "grok_draft_legacy_batch_filter"},
+            ),
+            WorkflowTask(
+                id="task_history_other_batch",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="History User",
+                user_id="history-user",
+                payload_json={},
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get("/api/history/runpod?page=1&batchId=pgb_legacy", headers=_authorized_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["taskId"] == "task_history_legacy_prompt_batch_filter"
+
+
 def test_runpod_history_filters_by_workflow(api_client):
     session = SessionLocal()
     try:

@@ -20,7 +20,7 @@ from backend.app.core.timezone_utils import (
     timestamp_fields,
     timestamp_pair,
 )
-from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
+from backend.app.db.models import Asset, Collection, CollectionItem, ImagePromptDraft, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
 from backend.app.services.metadata_service import get_workflow_widget_metadata
@@ -118,9 +118,10 @@ def task_history_items(
         # 이 페이지가 참조하는 자산만 읽는다. assets 테이블 전체를 읽던 이전
         # 구현은 자산이 쌓일수록 모든 이력 조회를 함께 느리게 만들었다.
         assets_by_id = _assets_by_ids(session, _history_asset_ids(tasks))
+        prompt_batch_ids_by_draft_id = _prompt_batch_ids_by_draft_id(session, tasks)
         tasks_by_id = {task.id: task for task in tasks}
         return [
-            _task_to_history_item(tasks_by_id[task_id], assets_by_id)
+            _task_to_history_item(tasks_by_id[task_id], assets_by_id, prompt_batch_ids_by_draft_id)
             for task_id in task_ids
             if task_id in tasks_by_id
         ]
@@ -173,7 +174,16 @@ def _history_filter_conditions(
     if worker_id:
         conditions.append(WorkflowTask.user_id == worker_id)
     if batch_job_id:
-        conditions.append(WorkflowTask.batch_job_id.ilike(_history_like_pattern(batch_job_id), escape="\\"))
+        batch_pattern = _history_like_pattern(batch_job_id)
+        conditions.append(or_(
+            WorkflowTask.batch_job_id.ilike(batch_pattern, escape="\\"),
+            select(ImagePromptDraft.id)
+            .where(
+                ImagePromptDraft.id == WorkflowTask.prompt_draft_id,
+                ImagePromptDraft.prompt_batch_id.ilike(batch_pattern, escape="\\"),
+            )
+            .exists(),
+        ))
     from_value = _parse_history_date_boundary(date_from, end_of_day=False)
     if from_value is not None:
         conditions.append(WorkflowTask.created_at >= from_value)
@@ -442,7 +452,11 @@ def restore_job_from_task(task_id: str) -> dict | None:
         )
         if not task:
             return None
-        history_item = _task_to_history_item(task, _assets_by_ids(session, _history_asset_ids([task])))
+        history_item = _task_to_history_item(
+            task,
+            _assets_by_ids(session, _history_asset_ids([task])),
+            _prompt_batch_ids_by_draft_id(session, [task]),
+        )
         payload = dict(task.payload_json or {})
         segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
         first_segment = segments[0] if segments else {}
@@ -490,6 +504,40 @@ def restore_job_from_task(task_id: str) -> dict | None:
         return result
     finally:
         session.close()
+
+
+def restore_existing_job_for_prompt_draft(prompt_draft_id: str, *, batch_job_id: str | None = None) -> dict | None:
+    normalized_draft_id = str(prompt_draft_id or "").strip()
+    if not normalized_draft_id:
+        return None
+    session = SessionLocal()
+    try:
+        task = session.scalar(
+            select(WorkflowTask)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.prompt_draft_id == normalized_draft_id,
+            )
+            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+            .limit(1)
+        )
+        if task is None:
+            return None
+        task_id = task.id
+        normalized_batch_job_id = str(batch_job_id or "").strip()
+        if normalized_batch_job_id and not task.batch_job_id:
+            payload = dict(task.payload_json or {})
+            payload["batchJobId"] = normalized_batch_job_id
+            task.payload_json = payload
+            task.batch_job_id = normalized_batch_job_id
+            task.updated_at = now_seoul_naive()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return restore_job_from_task(task_id)
 
 
 def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = False) -> dict:
@@ -1244,7 +1292,32 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> dict:
+def _prompt_batch_ids_by_draft_id(session: Session, tasks: list[WorkflowTask]) -> dict[str, str]:
+    draft_ids = sorted({
+        str(task.prompt_draft_id)
+        for task in tasks
+        if task.prompt_draft_id
+    })
+    if not draft_ids:
+        return {}
+    return {
+        str(draft_id): str(prompt_batch_id)
+        for draft_id, prompt_batch_id in session.execute(
+            select(ImagePromptDraft.id, ImagePromptDraft.prompt_batch_id)
+            .where(
+                ImagePromptDraft.id.in_(draft_ids),
+                ImagePromptDraft.prompt_batch_id.is_not(None),
+            )
+        ).all()
+        if prompt_batch_id
+    }
+
+
+def _task_to_history_item(
+    task: WorkflowTask,
+    assets_by_id: dict[str, dict],
+    prompt_batch_ids_by_draft_id: dict[str, str] | None = None,
+) -> dict:
     item = dict(task.payload_json or {})
     item.setdefault("taskId", task.id)
     item.update(_task_timestamp_fields(task, "timestamp", task.started_at or task.created_at))
@@ -1254,6 +1327,8 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     item.setdefault("workflowName", Path(task.workflow_id).stem)
     item.setdefault("promptDraftId", task.prompt_draft_id or "")
     item["batchJobId"] = task.batch_job_id
+    prompt_batch_id = prompt_batch_ids_by_draft_id.get(str(task.prompt_draft_id or "")) if prompt_batch_ids_by_draft_id else None
+    item.setdefault("promptBatchId", prompt_batch_id)
     item.setdefault("runpodJobId", task.runpod_job_id or "")
     item.setdefault("executionMode", task.execution_mode)
     item.setdefault("workerName", task.worker_name or "-")

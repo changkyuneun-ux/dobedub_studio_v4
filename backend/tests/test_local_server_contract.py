@@ -5,6 +5,8 @@ import importlib.util
 import types
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -80,6 +82,23 @@ def test_local_up_down_scripts_share_the_local_service_contract():
     assert start.DEFAULT_DATABASE_URL == "sqlite:///./data/dobedub-studio.db"
     assert start.PID_FILE == stop.PID_FILE
     assert start.LOG_FILE.name == "local-server.log"
+
+
+def test_run_local_blocks_the_legacy_studio_sqlite_database(monkeypatch):
+    run_local = _load_script("run_local")
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./data/studio.db")
+
+    with pytest.raises(RuntimeError, match="data/studio.db"):
+        run_local.ensure_local_database_url()
+
+
+def test_run_local_accepts_the_canonical_dobedub_sqlite_database(monkeypatch):
+    run_local = _load_script("run_local")
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./data/dobedub-studio.db")
+
+    assert run_local.ensure_local_database_url() == "sqlite:///./data/dobedub-studio.db"
 
 
 def _load_script(name: str):

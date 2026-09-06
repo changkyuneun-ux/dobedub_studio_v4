@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from sqlalchemy import select
+
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import TaskExecutionPolicy, WorkflowTask
 from backend.app.services import job_service
@@ -95,6 +97,60 @@ def test_create_job_keeps_local_queue_open_when_active_policy_is_full(db_session
 
     assert job["status"] == "PENDING_SUBMIT"
     assert job["runpodJobId"] == ""
+    assert calls == []
+
+
+def test_create_job_reuses_existing_prompt_draft_task_instead_of_creating_a_second_one(db_session, monkeypatch):
+    db_session.add(WorkflowTask(
+        id="task_existing_prompt_draft",
+        workflow_id="1-images.json",
+        user_id="operator",
+        worker_name="Operator",
+        status="FAILED",
+        prompt_draft_id="grok_draft_single_task",
+        payload_json={**_payload(), "promptDraftId": "grok_draft_single_task"},
+    ))
+    db_session.commit()
+    calls: list[tuple[str, str, dict | None]] = []
+    monkeypatch.setattr(studio_api_service, "job_runtime", lambda: _runtime(dry_run=False, calls=calls))
+
+    job = studio_api_service.create_job(
+        {**_payload(), "promptDraftId": "grok_draft_single_task"},
+        user={"id": "operator", "name": "Operator"},
+    )
+
+    assert job["taskId"] == "task_existing_prompt_draft"
+    tasks = db_session.scalars(
+        select(WorkflowTask).where(WorkflowTask.prompt_draft_id == "grok_draft_single_task")
+    ).all()
+    assert [task.id for task in tasks] == ["task_existing_prompt_draft"]
+    assert calls == []
+
+
+def test_create_job_carries_batch_id_onto_existing_prompt_draft_task(db_session, monkeypatch):
+    db_session.add(WorkflowTask(
+        id="task_existing_unlabelled_batch",
+        workflow_id="1-images.json",
+        user_id="operator",
+        worker_name="Operator",
+        status="PENDING_SUBMIT",
+        prompt_draft_id="grok_draft_missing_batch",
+        payload_json={**_payload(), "promptDraftId": "grok_draft_missing_batch"},
+    ))
+    db_session.commit()
+    calls: list[tuple[str, str, dict | None]] = []
+    monkeypatch.setattr(studio_api_service, "job_runtime", lambda: _runtime(dry_run=False, calls=calls))
+
+    job = studio_api_service.create_job(
+        {**_payload(), "promptDraftId": "grok_draft_missing_batch", "batchJobId": "worker_upload_260906"},
+        user={"id": "operator", "name": "Operator"},
+    )
+
+    assert job["taskId"] == "task_existing_unlabelled_batch"
+    db_session.expire_all()
+    stored = db_session.get(WorkflowTask, "task_existing_unlabelled_batch")
+    assert stored.batch_job_id == "worker_upload_260906"
+    assert stored.payload_json["batchJobId"] == "worker_upload_260906"
     assert calls == []
 
 

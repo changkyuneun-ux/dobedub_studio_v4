@@ -556,6 +556,7 @@ export function Create3aScreen({
           const resultStatusLabel = runpodResultStatusLabel(item);
           const resultStatusTone = isSuccessStatus(item.status) ? "is-ready" : "is-pending";
           const reworkInFlight = reworkingRunpodTaskIds.includes(item.taskId);
+          const displayBatchId = item.batchJobId || item.promptBatchId || "";
           return (
             <div
               key={item.taskId}
@@ -578,7 +579,7 @@ export function Create3aScreen({
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
               <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatKstHistoryDate(item.timestampUtc || item.timestamp)}</span>
               <span className="v3-review-prompt" title={item.workflowName || item.workflow || item.workflowId || ""}>{item.workflowName || item.workflow || item.workflowId || "-"}</span>
-              <span className="v3-review-prompt" title={item.batchJobId || ""}>{item.batchJobId || "-"}</span>
+              <span className="v3-review-prompt" title={displayBatchId}>{displayBatchId || "-"}</span>
               <span className="v3-review-prompt" title={item.promptDraftId || ""}>
                 {item.promptDraftId ? (
                   <button
@@ -703,6 +704,7 @@ export function Create3aScreen({
 function RunpodHistoryPromptDetail({ item, onClose }: { item: HistoryItem; onClose: () => void }) {
   const positivePrompts = positivePromptEntries(item);
   const negativePrompts = negativePromptEntries(item);
+  const displayBatchId = item.batchJobId || item.promptBatchId || "";
   return (
     <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3RunpodPromptTitle" onClick={onClose}>
       <div className="v3-modal-panel v3-runpod-prompt-modal" onClick={(event) => event.stopPropagation()}>
@@ -715,7 +717,7 @@ function RunpodHistoryPromptDetail({ item, onClose }: { item: HistoryItem; onClo
         </div>
         <div className="v3-summary-card">
           <div className="v3-summary-row"><span>Prompt ID</span><strong>{item.promptDraftId || "-"}</strong></div>
-          <div className="v3-summary-row"><span>Batch ID</span><strong>{item.batchJobId || "-"}</strong></div>
+          <div className="v3-summary-row"><span>Batch ID</span><strong>{displayBatchId || "-"}</strong></div>
           <div className="v3-summary-row"><span>Workflow</span><strong>{item.workflowName || item.workflow || item.workflowId || "-"}</strong></div>
         </div>
         <RunpodPromptTextBlock title="Positive Prompt" entries={positivePrompts} emptyText="저장된 positive prompt가 없습니다." />

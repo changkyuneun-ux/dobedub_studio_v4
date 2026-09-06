@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 REQUIRED_MODULES = ("alembic", "uvicorn")
 FRAMEWORK_PYTHON312 = Path("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3")
+CANONICAL_LOCAL_DATABASE_URL = "sqlite:///./data/dobedub-studio.db"
+BLOCKED_LOCAL_DATABASE_PATH = PROJECT_ROOT / "data" / "studio.db"
 
 
 def _required_modules_available() -> bool:
@@ -76,6 +78,30 @@ def load_env_file(path: Path) -> None:
             os.environ.setdefault(key, value)
 
 
+def ensure_local_database_url() -> str:
+    database_url = os.environ.get("DATABASE_URL") or CANONICAL_LOCAL_DATABASE_URL
+    sqlite_path = _sqlite_database_path(database_url)
+    if sqlite_path and sqlite_path.resolve() == BLOCKED_LOCAL_DATABASE_PATH.resolve():
+        raise RuntimeError(
+            "로컬 서버는 data/studio.db를 사용하지 않습니다. "
+            "DATABASE_URL을 비우거나 sqlite:///./data/dobedub-studio.db로 설정하세요."
+        )
+    os.environ.setdefault("DATABASE_URL", database_url)
+    return database_url
+
+
+def _sqlite_database_path(database_url: str) -> Path | None:
+    if not database_url.startswith("sqlite:///"):
+        return None
+    raw_path = database_url.removeprefix("sqlite:///")
+    if not raw_path or raw_path == ":memory:":
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
 def prepare_local_database() -> None:
     if os.environ.get("RUN_LOCAL_SKIP_DB_PREP", "0") == "1":
         return
@@ -102,6 +128,7 @@ def main() -> None:
     import uvicorn
 
     load_env_file(PROJECT_ROOT / ".env")
+    ensure_local_database_url()
     prepare_local_database()
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8787"))
