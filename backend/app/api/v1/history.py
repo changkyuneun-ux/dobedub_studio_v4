@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.security import CurrentUser, has_permission, require_permission
 from backend.app.db.session import get_db
 from backend.app.services import prompt_batch_service, studio_api_service
+from backend.app.services.task_policy_service import TaskSubmissionLimitError
 
 router = APIRouter(prefix="/history", tags=["history"])
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def prompt_history(
     page: int = 1,
     generationStatus: str = "",
     runpodStatus: str = "",
+    batchId: str = "",
     current_user: CurrentUser = Depends(require_permission("history:read")),
     db: Session = Depends(get_db),
 ):
@@ -44,6 +46,7 @@ def prompt_history(
             include_worker_stats=False,
             generation_status=generationStatus,
             runpod_status=runpodStatus,
+            batch_job_id=batchId,
         )
     except SQLAlchemyError as exc:
         LOGGER.exception("Prompt history query failed")
@@ -59,8 +62,8 @@ def runpod_history(
     workflowId: str = "",
     resultStatus: str = "",
     workerId: str = "",
-    dateFrom: str = "",
-    dateTo: str = "",
+    runDate: str = "",
+    batchId: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     """RunPod task history, deliberately fixed to 20 rows per page."""
@@ -69,9 +72,41 @@ def runpod_history(
         workflow_id=workflowId,
         result_status=resultStatus,
         worker_id=workerId,
-        date_from=dateFrom,
-        date_to=dateTo,
+        run_date=runDate,
+        batch_job_id=batchId,
     )
+
+
+@router.post("/{task_id}/regenerate", status_code=201)
+def regenerate_history_item(
+    task_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    try:
+        job = studio_api_service.regenerate_history_item(
+            task_id,
+            user={
+                "id": current_user.id,
+                "name": current_user.name,
+                "role": current_user.role,
+                "permissions": current_user.permissions,
+            },
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"History item not found: {task_id}") from exc
+    except TaskSubmissionLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "taskId": job["taskId"],
+        "sourceTaskId": task_id,
+        "runpodJobId": job.get("runpodJobId") or "",
+        "status": str(job.get("status") or "pending_submit").lower(),
+        "generationSeed": job.get("generationSeed"),
+    }
 
 
 @router.post("/{task_id}/delete")

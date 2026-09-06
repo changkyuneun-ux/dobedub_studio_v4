@@ -180,6 +180,7 @@ class WorkflowTask(Base):
         # values remain intact; only PENDING_SUBMIT is locally introduced.
         Index("ix_workflow_tasks_dispatch", "status", "next_dispatch_at", "created_at"),
         Index("ix_workflow_tasks_prompt_draft_latest", "prompt_draft_id", "deleted_at", "created_at", "id"),
+        Index("ix_workflow_tasks_batch_deleted_status", "batch_job_id", "deleted_at", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -631,6 +632,8 @@ class ImagePromptDraft(Base):
         Index("ix_image_prompt_drafts_workflow_updated_id", "workflow_id", "updated_at", "id"),
         Index("ix_image_prompt_drafts_workflow_owner_status", "workflow_id", "created_by", "status"),
         Index("ix_image_prompt_drafts_updated_id", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_batch_status", "batch_job_id", "status"),
+        Index("ix_image_prompt_drafts_promotion", "status", "promotion_claimed_at", "batch_job_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -650,6 +653,7 @@ class ImagePromptDraft(Base):
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
     batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -726,6 +730,7 @@ class RunpodRequestItem(Base):
     __table_args__ = (
         Index("ix_runpod_request_items_batch_sequence", "request_batch_id", "sequence_no"),
         Index("ix_runpod_request_items_status", "status"),
+        Index("ix_runpod_request_items_orphan", "status", "task_id", "materialization_claimed_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -740,6 +745,8 @@ class RunpodRequestItem(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_SUBMIT")
     task_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_tasks.id"), nullable=True, index=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    materialization_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    materialization_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -770,6 +777,11 @@ class BatchJob(Base):
     video_requested_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     video_completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     video_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_generating_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_pending_submit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_queued_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_in_progress_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)

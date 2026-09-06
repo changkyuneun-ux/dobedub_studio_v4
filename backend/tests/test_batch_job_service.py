@@ -1,6 +1,9 @@
 """Batch job orchestration: creation, promotion, counters and queries."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import uuid
+
 import pytest
 from sqlalchemy import inspect, select
 
@@ -41,6 +44,11 @@ def test_batch_job_table_exists(db_session):
         "video_requested_count",
         "video_completed_count",
         "video_failed_count",
+        "prompt_waiting_count",
+        "prompt_generating_count",
+        "runpod_pending_submit_count",
+        "runpod_queued_count",
+        "runpod_in_progress_count",
         "last_downloaded_at",
         "created_by",
         "created_at",
@@ -61,6 +69,15 @@ def test_batch_job_id_column_added(db_session, table, model):
     inspector = inspect(db_session.get_bind())
     assert "batch_job_id" in {column["name"] for column in inspector.get_columns(table)}
     assert hasattr(model, "batch_job_id")
+
+
+def test_batch_aggregation_indexes_exist(db_session):
+    inspector = inspect(db_session.get_bind())
+    draft_indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("image_prompt_drafts")}
+    task_indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("workflow_tasks")}
+    assert draft_indexes.get("ix_image_prompt_drafts_batch_status") == ["batch_job_id", "status"]
+    assert draft_indexes.get("ix_image_prompt_drafts_promotion") == ["status", "promotion_claimed_at", "batch_job_id"]
+    assert task_indexes.get("ix_workflow_tasks_batch_deleted_status") == ["batch_job_id", "deleted_at", "status"]
 
 
 # --- create_batch_job / batch_job_payload ---------------------------------
@@ -96,6 +113,17 @@ def _asset_items(count: int) -> list[dict]:
 def _seed_assets(db_session, count: int) -> None:
     db_session.add_all([_asset(f"asset_{index}") for index in range(1, count + 1)])
     db_session.commit()
+
+
+def _seed_unique_assets(db_session, prefix: str, count: int) -> list[str]:
+    ids = [f"{prefix}_{index}" for index in range(1, count + 1)]
+    db_session.add_all([_asset(asset_id) for asset_id in ids])
+    db_session.commit()
+    return ids
+
+
+def _asset_items_from_ids(asset_ids: list[str]) -> list[dict]:
+    return [{"assetId": asset_id, "fileName": f"{asset_id}.jpg"} for asset_id in asset_ids]
 
 
 def test_create_batch_job_persists_batch_prompt_batch_and_drafts(db_session, monkeypatch):
@@ -139,6 +167,67 @@ def test_create_batch_job_persists_batch_prompt_batch_and_drafts(db_session, mon
     assert {draft.status for draft in drafts} == {"PENDING"}
     # 사용자가 고른 Length가 모든 draft에 그대로 적용된다.
     assert {draft.requested_frames for draft in drafts} == {81}
+
+
+def test_create_batch_job_id_uses_worker_kst_date_and_daily_sequence(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    first = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "shoot-0904", "requestedFrames": 81, "items": [_asset_items(2)[0]]},
+        created_by=user.id,
+    )
+    second = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "shoot-0904", "requestedFrames": 81, "items": [_asset_items(2)[1]]},
+        created_by=user.id,
+    )
+
+    assert first["id"] == "장균은_260904_1"
+    assert second["id"] == "장균은_260904_2"
+
+
+def test_create_batch_job_leaves_no_rows_when_the_link_step_fails(db_session, monkeypatch):
+    db_session.add(_user())
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("link step failed")
+
+    monkeypatch.setattr(batch_job_service, "_link_prompt_batch", boom)
+    with pytest.raises(RuntimeError):
+        batch_job_service.create_batch_job(
+            db_session,
+            {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(2)},
+            created_by="operator_1",
+        )
+    db_session.rollback()
+    assert db_session.scalars(select(BatchJob)).all() == []
+    assert db_session.scalars(select(PromptGenerationBatch)).all() == []
+    assert db_session.scalars(select(ImagePromptDraft)).all() == []
+
+
+def test_prompt_batch_creation_still_commits_for_existing_callers(db_session, monkeypatch):
+    db_session.add(_user())
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    result = prompt_batch_service.create_prompt_generation_batch(
+        db_session,
+        {"workflowId": "Blowbang1.json", "items": [{"assetId": "asset_1", "slotIndex": 1, "requestedFrames": 81}]},
+        created_by="operator_1",
+    )
+    db_session.rollback()
+    assert db_session.get(PromptGenerationBatch, result["id"]) is not None
 
 
 @pytest.mark.parametrize("frames, expected_seconds", [(49, 3), (81, 5), (161, 10)])
@@ -223,11 +312,10 @@ def test_batch_job_payload_missing_batch_raises(db_session):
 
 # --- promote_ready_batch_drafts -------------------------------------------
 #
-# 승격은 studio_api_service.create_runpod_request_batch()를 그대로 재사용한다.
-# 그 경로는 워크플로 JSON 패치와 RunPod 호출까지 이어지므로, 테스트에서는
-# test_runpod_submission_queue.py와 같은 방식으로 job_runtime만 가짜로 바꾼다.
-# record_job은 실제 record_job_status를 쓰기 때문에 WorkflowTask 행은 실제로
-# 생성되고, G-5(배치 ID가 task까지 전달되는지)를 그대로 검증할 수 있다.
+# 폴더 기반 Batch 작업은 Prompt 생성관리/RunPod 요청관리 큐를 거치지 않는다.
+# 프롬프트가 READY가 되면 WorkflowTask를 직접 생성하고, 사용자는 Task History에서
+# 상태를 확인한다. 테스트에서는 test_runpod_submission_queue.py와 같은 방식으로
+# job_runtime만 가짜로 바꾸고 record_job_status는 실제로 호출한다.
 
 
 def _stub_job_runtime() -> job_service.JobRuntime:
@@ -275,7 +363,7 @@ def _drafts_of(db_session, batch_job_id: str) -> list[ImagePromptDraft]:
     ).all())
 
 
-def test_promote_ready_drafts_creates_runpod_request_items(db_session, monkeypatch):
+def test_promote_ready_drafts_creates_task_history_without_runpod_request_items(db_session, monkeypatch):
     created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
     for draft in _drafts_of(db_session, created["id"]):
         draft.status = "READY"
@@ -286,18 +374,67 @@ def test_promote_ready_drafts_creates_runpod_request_items(db_session, monkeypat
 
     assert result["promoted"] == 2
     assert result["batches"] == [created["id"]]
-    request_batches = db_session.scalars(
-        select(RunpodRequestBatch).where(RunpodRequestBatch.batch_job_id == created["id"])
+    tasks = db_session.scalars(
+        select(WorkflowTask)
+        .where(WorkflowTask.batch_job_id == created["id"])
+        .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
     ).all()
-    assert len(request_batches) == 1
-    items = db_session.scalars(
-        select(RunpodRequestItem).where(RunpodRequestItem.request_batch_id == request_batches[0].id)
-    ).all()
-    assert len(items) == 2
-    assert {item.requested_frames for item in items} == {81}
-    # G-5: batch_job_id는 행 생성 시점에 박혀 있어야 한다. 나중에 patch하면
-    # 바로 뒤에 만들어지는 WorkflowTask가 NULL을 물려받는다.
-    assert {item.status for item in items} == {"PENDING_SUBMIT"}
+    assert len(tasks) == 2
+    assert {task.config_json.get("frames") for task in tasks} == {81}
+    assert {task.status for task in tasks} == {"PENDING_SUBMIT"}
+    assert {task.request_batch_id for task in tasks} == {None}
+    assert {task.request_item_id for task in tasks} == {None}
+    assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+    assert db_session.scalars(select(RunpodRequestItem)).all() == []
+
+
+def test_promote_later_ready_drafts_adds_task_history_rows_without_request_batches(db_session, monkeypatch):
+    """One-by-one prompt completion still creates only task history rows."""
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=3)
+    drafts = _drafts_of(db_session, created["id"])
+    for draft in drafts:
+        draft.status = "PENDING"
+        draft.positive_prompt = None
+    db_session.commit()
+
+    for index, draft in enumerate(drafts, start=1):
+        draft.status = "READY"
+        draft.positive_prompt = f"batch prompt {index}"
+        db_session.commit()
+
+        result = batch_job_service.promote_ready_batch_drafts()
+
+        assert result["promoted"] == 1
+        tasks = db_session.scalars(
+            select(WorkflowTask)
+            .where(WorkflowTask.batch_job_id == created["id"])
+            .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+        ).all()
+        assert len(tasks) == index
+        assert [task.prompt_draft_id for task in tasks] == [ready.id for ready in drafts[:index]]
+        assert {task.request_batch_id for task in tasks} == {None}
+        assert {task.request_item_id for task in tasks} == {None}
+        assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+        assert db_session.scalars(select(RunpodRequestItem)).all() == []
+
+
+def test_batch_promotion_does_not_append_the_same_draft_twice(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "single prompt"
+    db_session.commit()
+
+    first = batch_job_service.promote_ready_batch_drafts()
+    second = batch_job_service.promote_ready_batch_drafts()
+
+    assert first["promoted"] == 1
+    assert second["promoted"] == 0
+    tasks = db_session.scalars(select(WorkflowTask)).all()
+    assert len(tasks) == 1
+    assert tasks[0].prompt_draft_id == draft.id
+    assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+    assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
 def test_promote_stamps_batch_job_id_on_created_tasks(db_session, monkeypatch):
@@ -313,7 +450,8 @@ def test_promote_stamps_batch_job_id_on_created_tasks(db_session, monkeypatch):
     tasks = db_session.scalars(select(WorkflowTask)).all()
     assert len(tasks) == 1
     assert tasks[0].batch_job_id == created["id"]
-    assert tasks[0].request_item_id
+    assert tasks[0].request_batch_id is None
+    assert tasks[0].request_item_id is None
 
 
 def test_promote_is_idempotent(db_session, monkeypatch):
@@ -329,12 +467,10 @@ def test_promote_is_idempotent(db_session, monkeypatch):
     assert first["promoted"] == 2
     assert second["promoted"] == 0
     assert second["batches"] == []
-    total_items = db_session.scalars(
-        select(RunpodRequestItem)
-        .join(RunpodRequestBatch, RunpodRequestItem.request_batch_id == RunpodRequestBatch.id)
-        .where(RunpodRequestBatch.batch_job_id == created["id"])
-    ).all()
-    assert len(total_items) == 2
+    tasks = db_session.scalars(select(WorkflowTask).where(WorkflowTask.batch_job_id == created["id"])).all()
+    assert len(tasks) == 2
+    assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+    assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
 def test_failed_drafts_are_never_promoted(db_session, monkeypatch):
@@ -349,12 +485,10 @@ def test_failed_drafts_are_never_promoted(db_session, monkeypatch):
     result = batch_job_service.promote_ready_batch_drafts()
 
     assert result["promoted"] == 1
-    items = db_session.scalars(
-        select(RunpodRequestItem)
-        .join(RunpodRequestBatch, RunpodRequestItem.request_batch_id == RunpodRequestBatch.id)
-        .where(RunpodRequestBatch.batch_job_id == created["id"])
-    ).all()
-    assert [item.prompt_draft_id for item in items] == [drafts[0].id]
+    tasks = db_session.scalars(select(WorkflowTask).where(WorkflowTask.batch_job_id == created["id"])).all()
+    assert [task.prompt_draft_id for task in tasks] == [drafts[0].id]
+    assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+    assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
 def test_promote_ignores_completed_batch_jobs(db_session, monkeypatch):
@@ -435,3 +569,96 @@ def test_one_failing_batch_does_not_block_the_others(db_session, monkeypatch):
 
     assert result == {"promoted": 1, "batches": [healthy["id"]]}
     assert broken["id"] in batch_job_service._PROMOTION_FAILURES
+
+
+def test_claim_respects_the_per_cycle_limit(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "claim_asset", 25)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    db_session.commit()
+
+    claimed, _ = batch_job_service.claim_batch_drafts_for_promotion(
+        db_session, limit=batch_job_service.PROMOTION_LIMIT_PER_CYCLE
+    )
+
+    assert len(claimed) == batch_job_service.PROMOTION_LIMIT_PER_CYCLE == 20
+
+
+def test_expired_claim_is_reclaimed_after_a_process_dies(db_session, monkeypatch):
+    db_session.add(_user())
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="operator_1",
+    )
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    draft.promotion_claimed_at = datetime.utcnow() - timedelta(seconds=batch_job_service.STALE_PROMOTION_CLAIM_SECONDS + 60)
+    db_session.commit()
+
+    reclaimed, _ = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=10)
+
+    assert [draft_id for _batch, _owner, draft_id in reclaimed] == [draft.id]
+
+
+def test_refresh_batch_job_counters_completes_terminal_tasks(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "counter_asset", 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    drafts = _drafts_of(db_session, created["id"])
+    for draft in drafts:
+        draft.status = "READY"
+        draft.positive_prompt = "ok"
+    for index, state in enumerate(("COMPLETED", "FAILED"), start=1):
+        db_session.add(WorkflowTask(
+            id=f"task_{uuid.uuid4().hex[:16]}",
+            workflow_id="Blowbang1.json",
+            status=state,
+            user_id="operator_1",
+            batch_job_id=created["id"],
+            prompt_draft_id=drafts[index - 1].id,
+        ))
+    db_session.commit()
+
+    assert batch_job_service.refresh_batch_job_counters() == {"refreshed": 1, "completed": 1}
+    db_session.expire_all()
+    batch = db_session.get(BatchJob, created["id"])
+    assert batch.status == "COMPLETE"
+    assert batch.video_completed_count == 1
+    assert batch.video_failed_count == 1
+
+
+def test_refresh_batch_job_counters_does_not_close_unpromoted_ready_drafts(db_session, monkeypatch):
+    db_session.add(_user())
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "sourceDirName": "d", "requestedFrames": 81, "items": _asset_items(1)},
+        created_by="operator_1",
+    )
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "ok"
+    db_session.commit()
+
+    batch_job_service.refresh_batch_job_counters()
+
+    db_session.expire_all()
+    assert db_session.get(BatchJob, created["id"]).status == "INCOMPLETE"

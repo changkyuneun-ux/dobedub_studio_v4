@@ -32,7 +32,14 @@ RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
 RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
 
 
-def create_prompt_generation_batch(db: Session, payload: dict[str, Any], *, created_by: str) -> dict[str, Any]:
+def create_prompt_generation_batch(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    created_by: str,
+    commit: bool = True,
+    batch_job_id: str | None = None,
+) -> dict[str, Any]:
     workflow_id = str(payload.get("workflowId") or "").strip()
     items = payload.get("items") or []
     if not workflow_id:
@@ -51,6 +58,7 @@ def create_prompt_generation_batch(db: Session, payload: dict[str, Any], *, crea
         completed_count=0,
         failed_count=0,
         created_by=created_by,
+        batch_job_id=batch_job_id,
     )
     db.add(batch)
     for fallback_slot, source in enumerate(items, start=1):
@@ -76,9 +84,13 @@ def create_prompt_generation_batch(db: Session, payload: dict[str, Any], *, crea
             warnings_json=[],
             raw_json={},
             created_by=created_by,
+            batch_job_id=batch_job_id,
         )
         db.add(draft)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return prompt_generation_batch_payload(db, batch.id)
 
 
@@ -89,7 +101,11 @@ def process_next_prompt_generation_draft() -> dict[str, Any] | None:
         draft = db.scalar(
             select(ImagePromptDraft)
             .where(ImagePromptDraft.status == DRAFT_PENDING)
-            .order_by(ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
+            .order_by(
+                ImagePromptDraft.batch_job_id.is_not(None).asc(),
+                ImagePromptDraft.created_at.asc(),
+                ImagePromptDraft.id.asc(),
+            )
             .limit(1)
         )
         if draft is None:
@@ -154,7 +170,7 @@ def list_active_prompt_generation_batches(db: Session, *, created_by: str | None
     )
     statement = (
         select(PromptGenerationBatch)
-        .where(active_draft_exists)
+        .where(active_draft_exists, PromptGenerationBatch.batch_job_id.is_(None))
         .order_by(PromptGenerationBatch.created_at.desc(), PromptGenerationBatch.id.desc())
     )
     if created_by is not None:
@@ -175,6 +191,7 @@ def list_prompt_drafts(
     page: int = 1,
     page_size: int = 50,
     include_worker_stats: bool = True,
+    batch_job_id: str = "",
 ) -> dict[str, Any]:
     """Return the current user's image-scoped prompts for RunPod request selection."""
     statement = select(ImagePromptDraft)
@@ -182,6 +199,9 @@ def list_prompt_drafts(
     if created_by is not None:
         statement = statement.where(ImagePromptDraft.created_by == created_by)
         count_statement = count_statement.where(ImagePromptDraft.created_by == created_by)
+    if batch_job_id:
+        statement = statement.where(ImagePromptDraft.batch_job_id == batch_job_id)
+        count_statement = count_statement.where(ImagePromptDraft.batch_job_id == batch_job_id)
     if workflow_id:
         statement = statement.where(ImagePromptDraft.workflow_id == workflow_id)
         count_statement = count_statement.where(ImagePromptDraft.workflow_id == workflow_id)
@@ -214,6 +234,8 @@ def list_prompt_drafts(
             stats_statement = stats_statement.where(ImagePromptDraft.created_by == created_by)
         if workflow_id:
             stats_statement = stats_statement.where(ImagePromptDraft.workflow_id == workflow_id)
+        if batch_job_id:
+            stats_statement = stats_statement.where(ImagePromptDraft.batch_job_id == batch_job_id)
         stats_rows = db.execute(stats_statement).all()
     user_names = _user_names(db, {
         str(worker_id)
@@ -573,6 +595,7 @@ def _draft_payload_from_related(
         "assetId": draft.asset_id,
         "workflowId": draft.workflow_id,
         "promptBatchId": draft.prompt_batch_id,
+        "batchJobId": draft.batch_job_id,
         "slotIndex": draft.slot_index,
         "provider": draft.provider,
         "model": draft.model,

@@ -3,6 +3,7 @@ import {
   apiClient,
   HealthResponse,
   HistoryItem,
+  JobStatusResponse,
   AssetItem,
   CollectionSummary,
   TaskPromptReviewFlags,
@@ -36,6 +37,19 @@ import {
 function workflowLabel(workflow: WorkflowItem) {
   return workflow.label || workflow.name || workflow.id;
 }
+
+function runpodRetryButtonLabel(item: HistoryItem, retryStatus?: JobStatusResponse) {
+  const raw = retryStatus?.statusLabel || retryStatus?.status || (item.taskId ? "요청됨" : "요청됨");
+  const normalized = raw.toUpperCase();
+  if (normalized === "PENDING_SUBMIT") return "제출 대기";
+  if (normalized === "DISPATCHING") return "제출 중";
+  if (normalized === "QUEUED" || normalized === "IN_QUEUE") return "RunPod Queue";
+  if (normalized === "IN_PROGRESS" || normalized === "RUNNING") return "진행 중";
+  if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Download";
+  return raw;
+}
+
+const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(88px, .55fr) 52px";
 
 // E-03 · 3a "작업 이력" — design_handoff_dobedub_v3/3 Review.dc.html의 첫 화면.
 // 목록·페이지네이션·삭제는 B-01/C-03에서 이미 완성된 로직(loadHistoryPage,
@@ -134,13 +148,18 @@ export function Create3aScreen({
   const [runpodHistoryTotal, setRunpodHistoryTotal] = useState(0);
   const [runpodHistoryLoading, setRunpodHistoryLoading] = useState(false);
   const [runpodHistoryNotice, setRunpodHistoryNotice] = useState("");
+  const [runpodHistoryNoticeKind, setRunpodHistoryNoticeKind] = useState<"error" | "success">("error");
   const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
+  const [selectedRunpodPromptItem, setSelectedRunpodPromptItem] = useState<HistoryItem | null>(null);
+  const [retryingRunpodTaskIds, setRetryingRunpodTaskIds] = useState<string[]>([]);
+  const [runpodRetryTaskIds, setRunpodRetryTaskIds] = useState<Record<string, string>>({});
+  const [runpodRetryStatuses, setRunpodRetryStatuses] = useState<Record<string, JobStatusResponse>>({});
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
+  const [runpodBatchFilter, setRunpodBatchFilter] = useState("");
   const [runpodWorkerFilter, setRunpodWorkerFilter] = useState("");
-  const [runpodDateFrom, setRunpodDateFrom] = useState("");
-  const [runpodDateTo, setRunpodDateTo] = useState("");
+  const [runpodRunDate, setRunpodRunDate] = useState("");
   const [selectedPromptHistoryItem, setSelectedPromptHistoryItem] = useState<GrokImagePromptDraftResponse | null>(null);
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
@@ -157,8 +176,9 @@ export function Create3aScreen({
     let active = true;
     setRunpodHistoryLoading(true);
     setRunpodHistoryNotice("");
+    setRunpodHistoryNoticeKind("error");
     setSelectedRunpodTaskIds([]);
-    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })
+    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })
       .then((response) => {
         if (!active) return;
         setRunpodHistoryItems(response.items);
@@ -168,6 +188,7 @@ export function Create3aScreen({
         if (!active) return;
         setRunpodHistoryItems([]);
         setRunpodHistoryTotal(0);
+        setRunpodHistoryNoticeKind("error");
         setRunpodHistoryNotice(error.message || "RunPod 이력을 불러오지 못했습니다.");
       })
       .finally(() => {
@@ -176,7 +197,47 @@ export function Create3aScreen({
     return () => {
       active = false;
     };
-  }, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodDateFrom, runpodDateTo]);
+  }, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
+
+  useEffect(() => {
+    if (historyTab !== "runpod") return;
+    const entries = Object.entries(runpodRetryTaskIds);
+    if (!entries.length) return;
+    let active = true;
+    const refreshCompletedRetries = async () => {
+      const completedSourceIds: string[] = [];
+      await Promise.all(entries.map(async ([sourceTaskId, retryTaskId]) => {
+        try {
+          const status = await apiClient.jobStatus(retryTaskId);
+          setRunpodRetryStatuses((current) => ({ ...current, [sourceTaskId]: status }));
+          if (isTerminalHistoryStatus(status.status)) completedSourceIds.push(sourceTaskId);
+        } catch {
+          completedSourceIds.push(sourceTaskId);
+        }
+      }));
+      if (!active || !completedSourceIds.length) return;
+      setRetryingRunpodTaskIds((current) => current.filter((taskId) => !completedSourceIds.includes(taskId)));
+      setRunpodRetryStatuses((current) => {
+        const next = { ...current };
+        completedSourceIds.forEach((taskId) => {
+          if (!isSuccessStatus(next[taskId]?.status)) delete next[taskId];
+        });
+        return next;
+      });
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
+      if (!active) return;
+      setRunpodHistoryItems(response.items);
+      setRunpodHistoryTotal(response.total);
+    };
+    const timer = window.setInterval(() => {
+      void refreshCompletedRetries();
+    }, 5000);
+    void refreshCompletedRetries();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [historyTab, runpodRetryTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
 
   const filteredHistory = runpodHistoryItems.filter((item) => {
     if (runpodResultFilter === "all") return true;
@@ -209,6 +270,46 @@ export function Create3aScreen({
   const toggleAllRunpodSelection = () => {
     setSelectedRunpodTaskIds(allTerminalItemsSelected ? [] : terminalRunpodItems.map((item) => item.taskId));
   };
+  async function downloadFilteredBatchZip() {
+    const batchId = runpodBatchFilter.trim();
+    if (!batchId) return;
+    setRunpodHistoryNotice("");
+    setRunpodHistoryNoticeKind("error");
+    try {
+      const blob = await apiClient.batchJobZip(batchId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${batchId}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setRunpodHistoryNoticeKind("error");
+      setRunpodHistoryNotice(error instanceof Error ? error.message : "배치 ZIP 다운로드에 실패했습니다.");
+    }
+  }
+  async function regenerateRunpodHistoryItem(item: HistoryItem) {
+    if (retryingRunpodTaskIds.includes(item.taskId)) return;
+    setRunpodHistoryNotice("");
+    setRunpodHistoryNoticeKind("error");
+    setRetryingRunpodTaskIds((current) => current.includes(item.taskId) ? current : [...current, item.taskId]);
+    try {
+      const job = await apiClient.regenerateHistoryItem(item.taskId);
+      setRunpodRetryTaskIds((current) => ({ ...current, [item.taskId]: job.taskId }));
+      setRunpodRetryStatuses((current) => ({ ...current, [item.taskId]: { taskId: job.taskId, runpodJobId: job.runpodJobId || "", status: job.status } }));
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
+      setRunpodHistoryItems(response.items);
+      setRunpodHistoryTotal(response.total);
+      setRunpodHistoryNoticeKind("success");
+      setRunpodHistoryNotice("재생성 요청이 등록되었습니다. 새 작업 상태는 RunPod 이력에서 확인하세요.");
+    } catch (error) {
+      setRetryingRunpodTaskIds((current) => current.filter((taskId) => taskId !== item.taskId));
+      setRunpodHistoryNoticeKind("error");
+      setRunpodHistoryNotice(error instanceof Error ? error.message : "RunPod 재생성 요청에 실패했습니다.");
+    }
+  }
   const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
   const isFailedSelected = selectedItem ? isTerminalHistoryStatus(selectedItem.status) && !isSuccessStatus(selectedItem.status) : false;
   const output = selectedItem ? historyOutputAsset(selectedItem) : null;
@@ -421,12 +522,20 @@ export function Create3aScreen({
       <div className="v3-runpod-history-toolbar">
         <div className="v3-runpod-filter-bar v3-runpod-history-filters">
           <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
-          <label>실행일 시작<input type="date" value={runpodDateFrom} onChange={(event) => { setRunpodDateFrom(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
-          <label>실행일 종료<input type="date" value={runpodDateTo} onChange={(event) => { setRunpodDateTo(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
+          <label>실행일<input type="date" value={runpodRunDate} onChange={(event) => { setRunpodRunDate(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
+          <label>Batch ID<input value={runpodBatchFilter} onChange={(event) => { setRunpodBatchFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="Batch ID / 작업자명 검색" /></label>
           <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
           <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option></select></label>
         </div>
         <div className="v3-inline-actions v3-runpod-history-actions">
+          <button
+            className="v3-secondary-button"
+            type="button"
+            disabled={!runpodBatchFilter.trim()}
+            onClick={downloadFilteredBatchZip}
+          >
+            배치 ZIP
+          </button>
           <button
             className="v3-secondary-button"
             type="button"
@@ -447,12 +556,12 @@ export function Create3aScreen({
           ) : null}
         </div>
       </div>
-      <div className="v3-card">
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: "32px 36px 70px 96px 130px 120px 82px 72px 72px minmax(150px, .8fr) 86px 52px", minWidth: 1120 }}>
-          <span><input type="checkbox" aria-label="종료된 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Prompt ID</span><span>결과</span><span>입력 View</span><span>결과 View</span><span>ComfyUI Response</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
+      <div className="v3-card v3-runpod-history-table">
+        <div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
+          <span><input type="checkbox" aria-label="종료된 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
         {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
-        {runpodHistoryNotice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
+        {runpodHistoryNotice ? <p className={runpodHistoryNoticeKind === "success" ? "v3-inline-success" : "v3-inline-error"} style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
         {!runpodHistoryLoading && !runpodHistoryNotice && !filteredHistory.length ? <p className="v3-muted-text" style={{ padding: 16 }}>표시할 작업이 없습니다.</p> : null}
         {filteredHistory.map((item) => {
           const isSelected = item.taskId === selectedTaskId;
@@ -460,11 +569,25 @@ export function Create3aScreen({
           const input = historyInputImages(item)[0];
           const result = historyOutputAsset(item);
           const resultUrl = result?.downloadUrl || result?.url || item.outputUrl || "";
+          const inputFileName = input?.fileName || "입력 이미지";
+          const outputFileName = result?.fileName || item.outputFile || item.runpodResponse?.filename || "생성 영상";
+          const canRegenerate = canRework && isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
+          const retryLocked = retryingRunpodTaskIds.includes(item.taskId);
+          const retryStatus = runpodRetryStatuses[item.taskId];
+          const retryTaskId = runpodRetryTaskIds[item.taskId];
+          const retryTaskItem = retryTaskId ? runpodHistoryItems.find((candidate) => candidate.taskId === retryTaskId) : null;
+          const retryTaskResult = retryTaskItem ? historyOutputAsset(retryTaskItem) : null;
+          const retryTaskUrl = retryTaskResult?.downloadUrl || retryTaskResult?.url || retryTaskItem?.outputUrl || retryStatus?.outputUrl || "";
+          const retryDownloadItem = retryTaskItem && isSuccessStatus(retryTaskItem.status) && retryTaskUrl ? retryTaskItem : (
+            retryStatus && isSuccessStatus(retryStatus.status) && retryTaskUrl
+              ? { ...item, taskId: retryStatus.taskId, runpodJobId: retryStatus.runpodJobId, status: retryStatus.status, outputUrl: retryStatus.outputUrl, outputAssets: retryStatus.outputAssets || [] }
+              : null
+          );
           return (
             <div
               key={item.taskId}
               className={`v3-review-table-row v3-history-row ${isSelected ? "is-selected" : ""}`}
-              style={{ gridTemplateColumns: "32px 36px 70px 96px 130px 120px 82px 72px 72px minmax(150px, .8fr) 86px 52px", minWidth: 1120, cursor: "pointer" }}
+              style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID, cursor: "pointer" }}
               onClick={() => onSelect(item)}
             >
               <span>
@@ -482,23 +605,50 @@ export function Create3aScreen({
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
               <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatKstHistoryDate(item.timestampUtc || item.timestamp)}</span>
               <span className="v3-review-prompt" title={item.workflowName || item.workflow || item.workflowId || ""}>{item.workflowName || item.workflow || item.workflowId || "-"}</span>
-              <span className="v3-review-prompt" title={item.promptDraftId || ""}>{item.promptDraftId || "-"}</span>
+              <span className="v3-review-prompt" title={item.batchJobId || ""}>{item.batchJobId || "-"}</span>
+              <span className="v3-review-prompt" title={item.promptDraftId || ""}>
+                {item.promptDraftId ? (
+                  <button
+                    className="v3-text-link-button v3-runpod-prompt-id-button"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedRunpodPromptItem(item);
+                    }}
+                  >
+                    {item.promptDraftId}
+                  </button>
+                ) : "-"}
+              </span>
               <span>
                 <span className={`v3-status-badge ${isSuccessStatus(item.status) ? "is-ready" : "is-pending"}`}>{item.status || "-"}</span>
               </span>
               <span>
-                {input?.assetId ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: `/api/files/${input.assetId}`, isVideo: false, alt: input.fileName || "입력 이미지" }); }}>View</button> : "-"}
+                {input?.assetId ? (
+                  <button className="v3-runpod-input-thumb-button" type="button" title={inputFileName} onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: `/api/files/${input.assetId}`, isVideo: false, alt: inputFileName }); }}>
+                    <ProtectedImage src={`/api/files/${input.assetId}`} alt={inputFileName} />
+                  </button>
+                ) : "-"}
               </span>
               <span>
-                {resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: resultUrl, isVideo: true, alt: result?.fileName || "생성 결과" }); }}>View</button> : "-"}
-              </span>
-              <span className="v3-runpod-response-cell" title={`Job ID ${item.runpodResponse?.jobId || item.runpodJobId || "-"}`}>
-                {item.runpodResponse?.filename || item.outputFile || result?.fileName || "-"}
-                <small>Delay {formatRunpodSeconds(item.runpodResponse?.delaySeconds)} · Execution {formatRunpodSeconds(item.runpodResponse?.executionSeconds)}</small>
-                <small>Job {item.runpodResponse?.jobId || item.runpodJobId || "-"}</small>
+                {resultUrl ? <button className="v3-text-link-button v3-runpod-output-link" type="button" title={`${inputFileName} -> ${outputFileName}`} onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: resultUrl, isVideo: true, alt: outputFileName }); }}>{`${inputFileName} -> ${outputFileName}`}</button> : "-"}
               </span>
               <span>
-                {resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
+                {retryDownloadItem ? (
+                  <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(retryDownloadItem); }}>Download</button>
+                ) : canRegenerate ? (
+                  <button
+                    className="v3-text-link-button"
+                    type="button"
+                    disabled={retryingRunpodTaskIds.includes(item.taskId)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void regenerateRunpodHistoryItem(item);
+                    }}
+                  >
+                    {retryLocked ? runpodRetryButtonLabel(item, retryStatus) : "재생성"}
+                  </button>
+                ) : resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
               </span>
               <span style={{ textAlign: "right" }}>
                 {canDelete && isTerminalHistoryStatus(item.status) ? (
@@ -528,6 +678,10 @@ export function Create3aScreen({
           </div>
         </div>
       </div>
+
+      {selectedRunpodPromptItem ? (
+        <RunpodHistoryPromptDetail item={selectedRunpodPromptItem} onClose={() => setSelectedRunpodPromptItem(null)} />
+      ) : null}
 
       {assetPreview ? (
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-label="자산 미리보기" onClick={() => setAssetPreview(null)}>
@@ -575,6 +729,48 @@ export function Create3aScreen({
   );
 }
 
+function RunpodHistoryPromptDetail({ item, onClose }: { item: HistoryItem; onClose: () => void }) {
+  const positivePrompts = positivePromptEntries(item);
+  const negativePrompts = negativePromptEntries(item);
+  return (
+    <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3RunpodPromptTitle" onClick={onClose}>
+      <div className="v3-modal-panel v3-runpod-prompt-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="v3-panel-title-row">
+          <div>
+            <div className="v3-label">PROMPT DETAIL</div>
+            <h2 id="v3RunpodPromptTitle" className="v3-modal-title">프롬프트 내용</h2>
+          </div>
+          <button className="v3-secondary-button" type="button" onClick={onClose}>닫기</button>
+        </div>
+        <div className="v3-summary-card">
+          <div className="v3-summary-row"><span>Prompt ID</span><strong>{item.promptDraftId || "-"}</strong></div>
+          <div className="v3-summary-row"><span>Batch ID</span><strong>{item.batchJobId || "-"}</strong></div>
+          <div className="v3-summary-row"><span>Workflow</span><strong>{item.workflowName || item.workflow || item.workflowId || "-"}</strong></div>
+        </div>
+        <RunpodPromptTextBlock title="Positive Prompt" entries={positivePrompts} emptyText="저장된 positive prompt가 없습니다." />
+        <RunpodPromptTextBlock title="Negative Prompt" entries={negativePrompts} emptyText="저장된 negative prompt가 없습니다." />
+      </div>
+    </div>
+  );
+}
+
+function RunpodPromptTextBlock({ title, entries, emptyText }: { title: string; entries: Array<{ index?: number; text?: string }>; emptyText: string }) {
+  return (
+    <section className="v3-runpod-prompt-section">
+      <h3>{title}</h3>
+      {entries.length ? (
+        <div className="v3-runpod-prompt-list">
+          {entries.map((entry, index) => (
+            <p key={`${title}-${entry.index || index + 1}`}><strong>SEG {String(entry.index || index + 1).padStart(2, "0")}</strong>{entry.text}</p>
+          ))}
+        </div>
+      ) : (
+        <p className="v3-muted-text">{emptyText}</p>
+      )}
+    </section>
+  );
+}
+
 function PromptGenerationHistory({
   user,
   onSelectGrokItem
@@ -589,6 +785,7 @@ function PromptGenerationHistory({
   const [notice, setNotice] = useState("");
   const [generationFilter, setGenerationFilter] = useState("");
   const [runpodFilter, setRunpodFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
   const [selectedPromptHistoryDraftId, setSelectedPromptHistoryDraftId] = useState("");
   const [retryingDraftId, setRetryingDraftId] = useState("");
   const pageSize = 20;
@@ -599,7 +796,7 @@ function PromptGenerationHistory({
   }
 
   async function loadPromptHistory(targetPage = page) {
-    const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter });
+    const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter });
     setItems(response.items);
     setTotal(response.total);
     return response;
@@ -609,7 +806,7 @@ function PromptGenerationHistory({
     let active = true;
     setLoading(true);
     setNotice("");
-    apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })
+    apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })
       .then((response) => {
         if (!active) return;
         setItems(response.items);
@@ -627,7 +824,7 @@ function PromptGenerationHistory({
     return () => {
       active = false;
     };
-  }, [page, generationFilter, runpodFilter]);
+  }, [page, generationFilter, runpodFilter, batchFilter]);
 
   useEffect(() => {
     selectPromptHistoryItem(items[0] || null);
@@ -662,6 +859,7 @@ function PromptGenerationHistory({
       <div className="v3-runpod-filter-bar">
         <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option></select></label>
         <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option></select></label>
+        <label>Batch ID<input value={batchFilter} onChange={(event) => { setBatchFilter(event.target.value); setPage(1); }} placeholder="전체 배치" /></label>
       </div>
       <div className="v3-prompt-history-head">
         <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>워크플로우 내장 Negative Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>

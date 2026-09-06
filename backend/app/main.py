@@ -16,6 +16,7 @@ from backend.app.api.web import router as web_router
 from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.assets import router as assets_router
+from backend.app.api.v1.batch_jobs import router as batch_jobs_router
 from backend.app.api.v1.collections import router as collections_router
 from backend.app.api.v1.configs import router as configs_router
 from backend.app.api.v1.health import router as health_router
@@ -34,7 +35,9 @@ from backend.app.db.session import engine
 from backend.app.services.grok_instruction_service import ensure_instruction_set
 from backend.app.services.prompt_builder_service import monitor_active_prompt_generations
 from backend.app.services.studio_api_service import ensure_storage_dirs, monitor_active_jobs
+from backend.app.services.batch_job_service import promote_ready_batch_drafts, refresh_batch_job_counters
 from backend.app.services.prompt_batch_service import process_next_prompt_generation_draft
+from backend.app.services.request_item_recovery_service import materialize_orphan_request_items
 from backend.app.services.workflow_storage_service import bootstrap_workflow_store
 
 
@@ -89,6 +92,18 @@ async def _lifecycle(_: FastAPI):
                 if prompt_result["failures"]:
                     LOGGER.warning("Prompt monitor could not refresh requests: %s", prompt_result["failures"])
                 await asyncio.to_thread(process_next_prompt_generation_draft)
+                try:
+                    await asyncio.to_thread(materialize_orphan_request_items)
+                except Exception:
+                    LOGGER.exception("Orphan request item recovery failed")
+                try:
+                    await asyncio.to_thread(promote_ready_batch_drafts)
+                except Exception:
+                    LOGGER.exception("Batch promotion step failed")
+                try:
+                    await asyncio.to_thread(refresh_batch_job_counters)
+                except Exception:
+                    LOGGER.exception("Batch counter refresh failed")
             except Exception:
                 LOGGER.exception("Task monitor cycle failed")
             await asyncio.sleep(settings.task_monitor_interval_seconds)
@@ -152,6 +167,7 @@ def create_app() -> FastAPI:
         admin_router,
         auth_router,
         assets_router,
+        batch_jobs_router,
         collections_router,
         workflows_router,
         segment_defaults_router,

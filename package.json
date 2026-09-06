@@ -6,8 +6,11 @@
     "build": "npm --prefix frontend run build",
     "dev": "npm --prefix frontend run dev",
     "preview": "npm --prefix frontend run preview",
-    "start": "HOST=127.0.0.1 PORT=8790 python3 scripts/run_local.py",
-    "local": "npm --prefix frontend run build && HOST=127.0.0.1 PORT=8790 python3 scripts/run_local.py",
+    "start": "HOST=127.0.0.1 PORT=8787 python3.12 scripts/run_local.py",
+    "local": "npm --prefix frontend run build && HOST=127.0.0.1 PORT=8787 python3.12 scripts/run_local.py",
+    "local:up": "python3.12 scripts/start_local.py",
+    "local:down": "python3.12 scripts/stop_local.py",
+    "local:restart": "npm run local:down && npm run local:up",
     "smoke:frontend": "python3 scripts/frontend_smoke_check.py",
     "smoke:admin": "python3 scripts/admin_smoke_check.py"
   }

@@ -6,6 +6,8 @@ import { StudioRoute } from "../router";
 export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void) {
   if (key === "workspace" || key === "promptManagement") {
     onGoTo("create.promptManagement");
+  } else if (key === "batchJobs") {
+    onGoTo("create.batchJobs");
   } else if (key === "runpodRequests") {
     onGoTo("create.runpodRequests");
   } else if (key === "taskHistory") {

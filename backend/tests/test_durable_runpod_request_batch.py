@@ -17,7 +17,14 @@ from backend.app.services.runpod_request_batch_service import (
 )
 
 
-def _draft(asset_id: str, *, draft_id: str, positive: str, frames: int = 81) -> ImagePromptDraft:
+def _draft(
+    asset_id: str,
+    *,
+    draft_id: str,
+    positive: str,
+    frames: int = 81,
+    batch_job_id: str | None = None,
+) -> ImagePromptDraft:
     return ImagePromptDraft(
         id=draft_id,
         asset_id=asset_id,
@@ -33,6 +40,7 @@ def _draft(asset_id: str, *, draft_id: str, positive: str, frames: int = 81) -> 
         warnings_json=[],
         raw_json={},
         created_by="operator",
+        batch_job_id=batch_job_id,
     )
 
 
@@ -87,6 +95,43 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         ("Pickme_Workflow.json", "first prompt", 161),
         ("1-images.json", "second prompt", 49),
     ]
+
+
+def test_request_queue_excludes_folder_batch_work(db_session):
+    """Folder batch work is tracked in Task History, not RunPod request management."""
+    db_session.add_all([
+        _asset("asset_manual_request"),
+        _asset("asset_batch_ready"),
+        _asset("asset_legacy_batch_item"),
+        _draft("asset_manual_request", draft_id="draft_manual_request", positive="manual prompt"),
+        _draft("asset_batch_ready", draft_id="draft_batch_ready", positive="batch prompt", batch_job_id="batch_auto"),
+    ])
+    legacy_batch = RunpodRequestBatch(
+        id="rpb_legacy_batch_work",
+        workflow_id="1-images.json",
+        requested_count=1,
+        status="QUEUED",
+        created_by="operator",
+        batch_job_id="batch_auto",
+    )
+    db_session.add(legacy_batch)
+    db_session.add(RunpodRequestItem(
+        id="rpi_legacy_batch_work",
+        request_batch_id=legacy_batch.id,
+        sequence_no=1,
+        prompt_draft_id="draft_batch_ready",
+        asset_id="asset_legacy_batch_item",
+        workflow_id="1-images.json",
+        positive_prompt="legacy batch prompt",
+        requested_frames=81,
+        status="QUEUED",
+    ))
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+
+    assert queue["total"] == 1
+    assert [item["promptDraftId"] for item in queue["items"]] == ["draft_manual_request"]
 
 
 def test_request_batch_keeps_worker_owner_separate_from_submitter(db_session):

@@ -80,6 +80,7 @@ export type StudioRoute =
   | "access.manual"
   | "create.load"
   | "create.promptManagement"
+  | "create.batchJobs"
   | "create.runpodRequests"
   | "create.prompt"
   | "create.confirm"
@@ -123,6 +124,7 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.manual": "/studio/access/manual",
   "create.load": "/studio/create/load",
   "create.promptManagement": "/studio/create/prompts",
+  "create.batchJobs": "/studio/create/batch-jobs",
   "create.runpodRequests": "/studio/create/runpod",
   "create.prompt": "/studio/create/prompt",
   "create.confirm": "/studio/create/confirm",

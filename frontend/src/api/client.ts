@@ -309,6 +309,7 @@ export type GrokImagePromptDraftResponse = {
   assetId: string;
   workflowId: string;
   promptBatchId?: string | null;
+  batchJobId?: string | null;
   slotIndex: number;
   status: "READY" | "GENERATING" | "MANUAL_REQUIRED" | "FAILED" | string;
   provider: string;
@@ -353,6 +354,44 @@ export type PromptGenerationBatchResponse = {
   failedCount: number;
   pendingCount: number;
   items: GrokImagePromptDraftResponse[];
+};
+
+export type BatchJobResponse = {
+  id: string;
+  workflowId: string;
+  status: string;
+  sourceDirName?: string | null;
+  requestedFrames: number;
+  durationSeconds: number;
+  totalImages: number;
+  promptCompletedCount: number;
+  promptFailedCount: number;
+  videoRequestedCount: number;
+  videoCompletedCount: number;
+  videoFailedCount: number;
+  promptWaiting: number;
+  promptGenerating: number;
+  runpodPendingSubmit: number;
+  runpodQueued: number;
+  runpodInProgress: number;
+  failedCount: number;
+  lastDownloadedAt?: string | null;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type BatchJobListResponse = {
+  items: BatchJobResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+  workers: Array<{ workerId: string; workerName: string }>;
+};
+
+export type ActiveBatchJobListResponse = {
+  items: BatchJobResponse[];
 };
 
 export type PromptDraftListResponse = {
@@ -659,6 +698,7 @@ export type HistoryItem = {
   workflowName?: string;
   workflow?: string;
   promptDraftId?: string;
+  batchJobId?: string | null;
   runpodResponse?: {
     filename?: string | null;
     delaySeconds?: number | string | null;
@@ -1040,21 +1080,22 @@ export const apiClient = {
   // Task History is intentionally split into two fixed 20-row contracts. Keeping
   // these endpoints separate prevents prompt-generation history from inheriting
   // RunPod pagination and sorting behavior.
-  promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string } = {}) => {
+  promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string; batchId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     if (params.generationStatus) query.set("generationStatus", params.generationStatus);
     if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
+    if (params.batchId) query.set("batchId", params.batchId);
     return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
   },
-  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; dateFrom?: string; dateTo?: string } = {}) => {
+  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     if (params.workflowId) query.set("workflowId", params.workflowId);
     if (params.resultStatus) query.set("resultStatus", params.resultStatus);
     if (params.workerId) query.set("workerId", params.workerId);
-    if (params.dateFrom) query.set("dateFrom", params.dateFrom);
-    if (params.dateTo) query.set("dateTo", params.dateTo);
+    if (params.runDate) query.set("runDate", params.runDate);
+    if (params.batchId) query.set("batchId", params.batchId);
     return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
   },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
@@ -1232,6 +1273,11 @@ export const apiClient = {
     requestJson<{ ok?: boolean; deleted?: boolean }>(`/api/history/${encodeURIComponent(taskId)}/delete`, {
       method: "POST"
     }),
+  regenerateHistoryItem: (taskId: string) =>
+    requestJson<{ taskId: string; sourceTaskId: string; runpodJobId?: string; status: string; generationSeed?: number | string | null }>(
+      `/api/history/${encodeURIComponent(taskId)}/regenerate`,
+      { method: "POST" }
+    ),
   upload: (payload: { fileName: string; mimeType: string; dataUrl: string }) =>
     requestJson<UploadResponse>("/api/uploads", {
       method: "POST",
@@ -1241,6 +1287,27 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
+  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; requestedFrames?: number; items: Array<{ assetId: string; fileName?: string }> }) =>
+    requestJson<BatchJobResponse>("/api/batch-jobs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
+  batchJobs: (params: { page?: number; dateFrom?: string; dateTo?: string; workerId?: string; status?: string } = {}) => {
+    const query = new URLSearchParams();
+    query.set("page", String(params.page || 1));
+    if (params.dateFrom) query.set("dateFrom", params.dateFrom);
+    if (params.dateTo) query.set("dateTo", params.dateTo);
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.status) query.set("status", params.status);
+    return requestJson<BatchJobListResponse>(`/api/batch-jobs?${query.toString()}`);
+  },
+  batchJobZip: (batchJobId: string, taskIds?: string[]) => {
+    const query = new URLSearchParams();
+    (taskIds || []).forEach((taskId) => query.append("taskIds", taskId));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return requestBlob(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/download${suffix}`);
+  },
   createJob: (payload: unknown) =>
     requestJson<JobCreateResponse>("/api/jobs", {
       method: "POST",

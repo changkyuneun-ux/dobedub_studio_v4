@@ -79,6 +79,7 @@ def task_history_items(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
 ) -> list[dict]:
     session = SessionLocal()
     try:
@@ -90,6 +91,7 @@ def task_history_items(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
         )
         id_statement = (
             select(WorkflowTask.id)
@@ -132,6 +134,7 @@ def task_history_total(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
 ) -> int:
     session = SessionLocal()
     try:
@@ -141,6 +144,7 @@ def task_history_total(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
         )
         statement = (
             select(func.count())
@@ -160,12 +164,15 @@ def _history_filter_conditions(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
 ) -> list:
     conditions = [WorkflowTask.deleted_at.is_(None)]
     if workflow_id:
         conditions.append(WorkflowTask.workflow_id == workflow_id)
     if worker_id:
         conditions.append(WorkflowTask.user_id == worker_id)
+    if batch_job_id:
+        conditions.append(WorkflowTask.batch_job_id.ilike(_history_like_pattern(batch_job_id), escape="\\"))
     from_value = _parse_history_date_boundary(date_from, end_of_day=False)
     if from_value is not None:
         conditions.append(WorkflowTask.created_at >= from_value)
@@ -176,6 +183,11 @@ def _history_filter_conditions(
     if result_condition is not None:
         conditions.append(result_condition)
     return conditions
+
+
+def _history_like_pattern(value: str) -> str:
+    escaped = str(value or "").strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _parse_history_date_boundary(value: str, *, end_of_day: bool) -> datetime | None:
@@ -514,7 +526,11 @@ def claim_next_pending_submission() -> dict | None:
                 WorkflowTask.status == "PENDING_SUBMIT",
                 or_(WorkflowTask.next_dispatch_at.is_(None), WorkflowTask.next_dispatch_at <= now),
             )
-            .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+            .order_by(
+                WorkflowTask.batch_job_id.is_not(None).asc(),
+                WorkflowTask.created_at.asc(),
+                WorkflowTask.id.asc(),
+            )
             .limit(10)
         ))
         for task_id in candidate_ids:
@@ -1166,6 +1182,7 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     # without rewriting stored payloads or requiring a data migration.
     item.setdefault("workflowName", Path(task.workflow_id).stem)
     item.setdefault("promptDraftId", task.prompt_draft_id or "")
+    item["batchJobId"] = task.batch_job_id
     item.setdefault("runpodJobId", task.runpod_job_id or "")
     item.setdefault("executionMode", task.execution_mode)
     item.setdefault("workerName", task.worker_name or "-")

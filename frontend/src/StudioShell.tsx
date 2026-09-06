@@ -77,6 +77,7 @@ import {
 } from "./screens/createScreens";
 import { GrokWorkspaceScreen } from "./screens/grokWorkspaceScreen";
 import { PromptManagementScreen } from "./screens/promptManagementScreen";
+import { BatchJobScreen } from "./screens/batchJobScreen";
 import { RunpodRequestScreen } from "./screens/runpodRequestScreen";
 import {
   Create3aScreen,
@@ -132,6 +133,10 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "access.manual": "manual:read"
 };
 
+export const ROUTE_REQUIRED_PERMISSIONS: Partial<Record<StudioRoute, string[]>> = {
+  "create.batchJobs": ["prompts:build", "jobs:run"]
+};
+
 type ConfirmationRequest = {
   title: string;
   description: string;
@@ -148,6 +153,10 @@ type PromptReuseTarget = {
 };
 
 export function routeAccessGranted(user: User | null, route: StudioRoute): boolean {
+  const requiredPermissions = ROUTE_REQUIRED_PERMISSIONS[route];
+  if (requiredPermissions?.length) {
+    return requiredPermissions.every((permission) => canUse(user, permission));
+  }
   const requiredPermission = ROUTE_REQUIRED_PERMISSION[route];
   if (!requiredPermission) {
     return true;
@@ -157,6 +166,7 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "create.promptManagement": "프롬프트 생성 관리",
+  "create.batchJobs": "배치 작업 요청 관리",
   "create.runpodRequests": "RunPod 요청 관리",
   "review.history": "Task History",
   "review.assets": "컬렉션 관리",
@@ -2002,6 +2012,8 @@ export function StudioShell({
       />
     ) : route === "create.load" || route === "create.promptManagement" ? (
       <PromptManagementScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
+    ) : route === "create.batchJobs" ? (
+      <BatchJobScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.runpodRequests" ? (
       <RunpodRequestScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.prompt" || route === "create.confirm" ? (

@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import now_seoul_naive
@@ -47,26 +47,49 @@ def create_request_batch(
         if db.get(Asset, draft.asset_id) is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
 
-    batch = RunpodRequestBatch(
-        id=f"rpb_{uuid.uuid4().hex[:16]}",
-        # Kept for legacy consumers; every item still retains its own workflow.
-        workflow_id=normalized_items[0]["workflowId"] or by_id[normalized_items[0]["promptDraftId"]].workflow_id,
-        requested_count=len(normalized_items),
-        status="QUEUED",
-        queued_count=len(normalized_items),
-        created_by=created_by,
-        submitted_by=submitted_by or created_by,
-        # Set at row creation so the tasks built from these items can read it
-        # back through job_payload_from_request_item.
-        batch_job_id=batch_job_id,
-    )
-    db.add(batch)
-    for sequence_no, requested in enumerate(normalized_items, start=1):
+    batch = _existing_batch_job_request_batch(db, batch_job_id=batch_job_id, created_by=created_by)
+    if batch is None:
+        batch = RunpodRequestBatch(
+            id=f"rpb_{uuid.uuid4().hex[:16]}",
+            # Kept for legacy consumers; every item still retains its own workflow.
+            workflow_id=normalized_items[0]["workflowId"] or by_id[normalized_items[0]["promptDraftId"]].workflow_id,
+            requested_count=0,
+            status="QUEUED",
+            queued_count=0,
+            created_by=created_by,
+            submitted_by=submitted_by or created_by,
+            # Set at row creation so the tasks built from these items can read it
+            # back through job_payload_from_request_item.
+            batch_job_id=batch_job_id,
+        )
+        db.add(batch)
+        db.flush()
+
+    existing_draft_ids = set()
+    if batch_job_id:
+        existing_draft_ids = {
+            str(draft_id)
+            for draft_id in db.scalars(
+                select(RunpodRequestItem.prompt_draft_id)
+                .where(
+                    RunpodRequestItem.request_batch_id == batch.id,
+                    RunpodRequestItem.prompt_draft_id.is_not(None),
+                )
+            ).all()
+        }
+    next_sequence = int(db.scalar(
+        select(func.max(RunpodRequestItem.sequence_no)).where(RunpodRequestItem.request_batch_id == batch.id)
+    ) or 0) + 1
+    created_item_ids: list[str] = []
+    for requested in normalized_items:
+        if batch_job_id and requested["promptDraftId"] in existing_draft_ids:
+            continue
         draft = by_id[requested["promptDraftId"]]
+        item_id = f"rpi_{uuid.uuid4().hex[:16]}"
         db.add(RunpodRequestItem(
-            id=f"rpi_{uuid.uuid4().hex[:16]}",
+            id=item_id,
             request_batch_id=batch.id,
-            sequence_no=sequence_no,
+            sequence_no=next_sequence,
             prompt_draft_id=draft.id,
             asset_id=draft.asset_id,
             workflow_id=requested["workflowId"] or draft.workflow_id,
@@ -75,8 +98,29 @@ def create_request_batch(
             requested_frames=requested["requestedFrames"] or max(1, int(draft.requested_frames or 81)),
             status="PENDING_SUBMIT",
         ))
+        created_item_ids.append(item_id)
+        existing_draft_ids.add(requested["promptDraftId"])
+        next_sequence += 1
+    refresh_request_batch_summary(db, batch.id)
     db.commit()
-    return request_batch_payload(db, batch.id, created_by=created_by)
+    payload = request_batch_payload(db, batch.id, created_by=created_by)
+    payload["createdItemIds"] = created_item_ids
+    return payload
+
+
+def _existing_batch_job_request_batch(db: Session, *, batch_job_id: str | None, created_by: str) -> RunpodRequestBatch | None:
+    normalized_batch_job_id = str(batch_job_id or "").strip()
+    if not normalized_batch_job_id:
+        return None
+    return db.scalar(
+        select(RunpodRequestBatch)
+        .where(
+            RunpodRequestBatch.batch_job_id == normalized_batch_job_id,
+            RunpodRequestBatch.created_by == created_by,
+        )
+        .order_by(RunpodRequestBatch.created_at.asc(), RunpodRequestBatch.id.asc())
+        .limit(1)
+    )
 
 
 def request_batch_payload(
@@ -307,7 +351,10 @@ def _request_queue_entries(
     batch_statement = select(RunpodRequestItem, RunpodRequestBatch).join(
         RunpodRequestBatch,
         RunpodRequestItem.request_batch_id == RunpodRequestBatch.id,
-    ).where(RunpodRequestBatch.status.not_in(terminal_batches))
+    ).where(
+        RunpodRequestBatch.status.not_in(terminal_batches),
+        RunpodRequestBatch.batch_job_id.is_(None),
+    )
     if created_by:
         batch_statement = batch_statement.where(RunpodRequestBatch.created_by == created_by)
     if workflow_id:
@@ -353,6 +400,7 @@ def _request_queue_entries(
             .where(
                 RunpodRequestItem.prompt_draft_id.is_not(None),
                 RunpodRequestBatch.status.not_in(terminal_batches),
+                RunpodRequestBatch.batch_job_id.is_(None),
             )
         ).all()
     }
@@ -368,6 +416,7 @@ def _request_queue_entries(
     draft_statement = select(ImagePromptDraft).where(
         ImagePromptDraft.status == "READY",
         ImagePromptDraft.positive_prompt.is_not(None),
+        ImagePromptDraft.batch_job_id.is_(None),
     )
     if created_by:
         draft_statement = draft_statement.where(ImagePromptDraft.created_by == created_by)
@@ -436,25 +485,70 @@ def _prompt_batch_id(db: Session, draft_id: str | None) -> str | None:
     return draft.prompt_batch_id if draft else None
 
 
-def attach_task_to_request_item(db: Session, *, item_id: str, task_id: str) -> None:
+def attach_task_to_request_item(
+    db: Session,
+    *,
+    item_id: str,
+    task_id: str,
+    materialization_claimed_at=None,
+) -> bool:
     item = db.get(RunpodRequestItem, item_id)
     if item is None:
         raise ValueError("RunPod 요청 항목을 찾을 수 없습니다.")
+    if materialization_claimed_at is not None:
+        result = db.execute(
+            update(RunpodRequestItem)
+            .where(
+                RunpodRequestItem.id == item_id,
+                RunpodRequestItem.task_id.is_(None),
+                RunpodRequestItem.materialization_claimed_at == materialization_claimed_at,
+            )
+            .values(task_id=task_id, status="PENDING_SUBMIT", failure_message=None, materialization_claimed_at=None)
+        )
+        if not result.rowcount:
+            db.rollback()
+            return False
+        refresh_request_batch_summary(db, item.request_batch_id)
+        db.commit()
+        return True
     item.task_id = task_id
     item.status = "PENDING_SUBMIT"
     item.failure_message = None
+    item.materialization_claimed_at = None
     refresh_request_batch_summary(db, item.request_batch_id)
     db.commit()
+    return True
 
 
-def mark_request_item_failed(db: Session, *, item_id: str, message: str) -> None:
+def mark_request_item_failed(db: Session, *, item_id: str, message: str, materialization_claimed_at=None) -> bool:
     item = db.get(RunpodRequestItem, item_id)
     if item is None:
-        return
+        return False
+    if materialization_claimed_at is not None:
+        result = db.execute(
+            update(RunpodRequestItem)
+            .where(
+                RunpodRequestItem.id == item_id,
+                RunpodRequestItem.materialization_claimed_at == materialization_claimed_at,
+            )
+            .values(
+                status="FAILED",
+                failure_message=str(message or "RunPod 요청 등록에 실패했습니다."),
+                materialization_claimed_at=None,
+            )
+        )
+        if not result.rowcount:
+            db.rollback()
+            return False
+        refresh_request_batch_summary(db, item.request_batch_id)
+        db.commit()
+        return True
     item.status = "FAILED"
     item.failure_message = str(message or "RunPod 요청 등록에 실패했습니다.")
+    item.materialization_claimed_at = None
     refresh_request_batch_summary(db, item.request_batch_id)
     db.commit()
+    return True
 
 
 def sync_request_batch_for_task(db: Session, task: WorkflowTask) -> None:

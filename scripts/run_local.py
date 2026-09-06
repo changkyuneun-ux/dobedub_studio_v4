@@ -4,16 +4,62 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
+import importlib.util
 from pathlib import Path
-
-import uvicorn
-from alembic import command
-from alembic.config import Config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
+REQUIRED_MODULES = ("alembic", "uvicorn")
+FRAMEWORK_PYTHON312 = Path("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3")
+
+
+def _required_modules_available() -> bool:
+    return all(importlib.util.find_spec(name) is not None for name in REQUIRED_MODULES)
+
+
+def _candidate_has_required_modules(path: Path) -> bool:
+    script = "; ".join(f"import {name}" for name in REQUIRED_MODULES)
+    return subprocess.run(
+        [str(path), "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
+def _python_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for value in (
+        os.environ.get("LOCAL_PYTHON"),
+        shutil.which("python3.12"),
+        str(FRAMEWORK_PYTHON312),
+        shutil.which("python3"),
+    ):
+        if not value:
+            continue
+        path = Path(value)
+        if path.exists() and path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def ensure_local_python_runtime() -> None:
+    if _required_modules_available():
+        return
+    current = Path(sys.executable)
+    for candidate in _python_candidates():
+        if candidate == current:
+            continue
+        if _candidate_has_required_modules(candidate):
+            os.execv(str(candidate), [str(candidate), *sys.argv])
+            return
+    missing = ", ".join(name for name in REQUIRED_MODULES if importlib.util.find_spec(name) is None)
+    checked = ", ".join(str(path) for path in _python_candidates()) or "없음"
+    raise RuntimeError(f"로컬 서버 실행에 필요한 Python 패키지가 없습니다: {missing}. 확인한 Python: {checked}")
 
 
 def load_env_file(path: Path) -> None:
@@ -33,6 +79,9 @@ def load_env_file(path: Path) -> None:
 def prepare_local_database() -> None:
     if os.environ.get("RUN_LOCAL_SKIP_DB_PREP", "0") == "1":
         return
+    from alembic import command
+    from alembic.config import Config
+
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     command.upgrade(config, "head")
     from backend.app.db.session import SessionLocal
@@ -49,9 +98,12 @@ def prepare_local_database() -> None:
 
 
 def main() -> None:
+    ensure_local_python_runtime()
+    import uvicorn
+
     load_env_file(PROJECT_ROOT / ".env")
     prepare_local_database()
-    host = os.environ.get("HOST", "0.0.0.0")
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8787"))
     uvicorn.run(
         "backend.app.main:app",

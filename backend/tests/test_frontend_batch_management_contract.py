@@ -100,13 +100,17 @@ def test_prompt_and_runpod_management_follow_the_desktop_operational_layout() ->
 def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
-    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in source
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in source
+    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in source
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })" in source
     assert "v3-runpod-history-toolbar" in source
     assert "v3-runpod-history-actions" in source
     assert "runpodResponse?.filename" in source
     assert "promptHistory" in source
     assert "runpodHistory" in source
+    assert "실행일 시작" not in source
+    assert "실행일 종료" not in source
+    assert "실행일<input type=\"date\" value={runpodRunDate}" in source
+    assert "}, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);" in source
 
 
 def test_runpod_history_supports_selected_bulk_download_and_delete() -> None:
@@ -116,6 +120,65 @@ def test_runpod_history_supports_selected_bulk_download_and_delete() -> None:
     assert "선택 다운로드" in source
     assert "선택 삭제" in source
     assert "onRequestBulkDelete" in source
+
+
+def test_runpod_history_preview_columns_show_assets_instead_of_generic_view_text() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "<span>입력 이미지</span><span>생성 영상</span>" in source
+    assert "<span>입력 View</span><span>결과 View</span>" not in source
+    assert "v3-runpod-input-thumb-button" in source
+    assert "<ProtectedImage src={`/api/files/${input.assetId}`}" in source
+    assert "v3-runpod-output-link" in source
+    assert "`${inputFileName} -> ${outputFileName}`" in source
+    assert "setAssetPreview({ src: `/api/files/${input.assetId}`, isVideo: false" in source
+    assert "setAssetPreview({ src: resultUrl, isVideo: true" in source
+    assert ".v3-runpod-input-thumb-button" in css
+    assert ".v3-runpod-output-link" in css
+
+
+def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+
+    runpod_history = source.split("function RunpodHistoryPromptDetail", 1)[0] if "function RunpodHistoryPromptDetail" in source else source
+
+    assert "regenerateHistoryItem: (taskId: string)" in client
+    assert "/api/history/${encodeURIComponent(taskId)}/regenerate" in client
+    assert "selectedRunpodPromptItem" in source
+    assert "RunpodHistoryPromptDetail" in source
+    assert "프롬프트 내용" in source
+    assert "positivePromptEntries(item)" in source
+    assert "negativePromptEntries(item)" in source
+    assert "setSelectedRunpodPromptItem(item)" in source
+    assert "retryingRunpodTaskIds" in source
+    assert "runpodRetryTaskIds" in source
+    assert "runpodRetryStatuses" in source
+    assert "runpodRetryButtonLabel(item, retryStatus)" in source
+    assert "retryStatus?.statusLabel || retryStatus?.status" in source
+    assert "apiClient.jobStatus(retryTaskId)" in source
+    assert "apiClient.regenerateHistoryItem(item.taskId)" in source
+    assert "재생성" in source
+    assert "요청됨" in source
+    assert "Batch ID / 작업자명 검색" in source
+    assert "<span>ComfyUI Response</span>" not in runpod_history
+    assert "v3-runpod-response-cell" not in runpod_history
+
+
+def test_task_history_tables_and_preview_panels_are_responsive() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "const RUNPOD_HISTORY_GRID = \"32px 36px minmax(" in source
+    assert "minWidth: 1240" not in source
+    assert "grid-template-columns: 42px 76px 98px 130px 112px minmax(190px, 1fr) minmax(170px, .75fr) 82px 96px 58px; min-width: 1230px;" not in css
+    assert ".v3-runpod-history-table { min-width: 0; overflow-x: auto; }" in css
+    assert ".v3-prompt-history-head, .v3-prompt-history-row" in css
+    assert "minmax(0, 1fr)" in css
+    assert ".v3-right-panel .v3-result-video-frame { min-width: 0; max-width: 100%; }" in css
+    assert ".v3-right-panel .v3-segment-output-grid { grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); min-width: 0; }" in css
+    assert ".v3-asset-preview-modal { max-height: min(80vh, 760px); max-width: min(900px, 90vw); overflow: auto; width: min(760px, calc(100vw - 32px)); }" in css
 
 
 def test_instruction_admin_scopes_all_document_actions_to_the_selected_workflow() -> None:
@@ -253,3 +316,29 @@ def test_assets_collection_management_uses_body_filters_without_sidebar_buttons(
     assert "v3-collection-filter-row" in screen
     assert "onCollectionFilterChange(collection.id)" in screen
     assert "event.stopPropagation(); onDeleteCollection(collection)" in screen
+
+
+def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    assert 'headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"' in screen
+    assert 'headerTitle="Batch 작업 요청 관리"' in screen
+    assert "Batch 생성" in screen
+    assert "진행 중 Batch" in screen
+    assert "프롬프트 생성" in screen
+    assert "RunPod 영상 생성" in screen
+    assert "Batch 작업 이력" in screen
+    assert "작업 폴더" in screen
+    assert "지시문 연결됨" in screen
+    assert "길이 (프레임 수)" in screen
+    assert "81f · 5초" in screen
+    assert "개 이미지 배치 생성" in screen
+    assert "Pending Submit" in screen
+    assert "ZIP 다운로드" in screen
+    assert "1 /" in screen
+    assert "v3-batch-layout-grid" in screen
+    assert "v3-batch-folder-card" in screen
+    assert "v3-batch-length-segmented" in screen
+    assert "제거" not in screen
+    assert "Batch Generations" not in screen
+    assert "Incomplete Dashboard" not in screen

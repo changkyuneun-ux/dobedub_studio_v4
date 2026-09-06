@@ -355,7 +355,7 @@ def test_runpod_history_filters_by_worker_and_execution_date(api_client):
         session.close()
 
     response = api_client.get(
-        f"/api/history/runpod?page=1&workerId={quote('worker-date-a')}&dateFrom=2026-09-03&dateTo=2026-09-03",
+        f"/api/history/runpod?page=1&workerId={quote('worker-date-a')}&runDate=2026-09-03",
         headers=_authorized_headers(),
     )
 
@@ -365,9 +365,171 @@ def test_runpod_history_filters_by_worker_and_execution_date(api_client):
     assert [item["taskId"] for item in body["items"]] == ["task_history_worker_date_a"]
 
 
+def test_runpod_history_filters_batch_id_by_partial_text(api_client):
+    session = SessionLocal()
+    try:
+        session.add_all([
+            User(id="history-user", name="History User", email=None, role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True),
+            WorkflowTask(
+                id="task_history_batch_legacy",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="Legacy Worker",
+                user_id="history-user",
+                batch_job_id="batch_legacy_260904_1",
+                payload_json={},
+            ),
+            WorkflowTask(
+                id="task_history_batch_worker",
+                workflow_id="1-images.json",
+                status="COMPLETED",
+                worker_name="장균은",
+                user_id="history-user",
+                batch_job_id="장균은_260904_1",
+                payload_json={},
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    legacy_response = api_client.get(
+        "/api/history/runpod?page=1&batchId=batch",
+        headers=_authorized_headers(),
+    )
+    worker_response = api_client.get(
+        f"/api/history/runpod?page=1&batchId={quote('장균은')}",
+        headers=_authorized_headers(),
+    )
+
+    assert legacy_response.status_code == 200
+    assert [item["taskId"] for item in legacy_response.json()["items"]] == ["task_history_batch_legacy"]
+    assert worker_response.status_code == 200
+    assert [item["taskId"] for item in worker_response.json()["items"]] == ["task_history_batch_worker"]
+
+
+def test_runpod_history_can_regenerate_failed_task_without_opening_create_screen(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(WorkflowTask(
+            id="task_history_failed_regen",
+            workflow_id="1-images.json",
+            status="FAILED",
+            worker_name="History User",
+            user_id="history-user",
+            prompt_draft_id="grok_draft_regen",
+            payload_json={
+                "workflowId": "1-images.json",
+                "workflowName": "1-images",
+                "promptDraftId": "grok_draft_regen",
+                "keyframes": [],
+                "segments": [{"index": 1, "positivePrompt": "retry this scene", "negativePrompt": "blur"}],
+            },
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    from backend.app.api.v1 import history as history_api
+
+    calls: list[dict] = []
+
+    def fake_create_job(payload: dict, *, user: dict[str, object]) -> dict:
+        calls.append({"payload": payload, "user": user})
+        return {
+            "taskId": "task_history_failed_regen_retry",
+            "runpodJobId": "",
+            "status": "PENDING_SUBMIT",
+            "generationSeed": None,
+        }
+
+    monkeypatch.setattr(history_api.studio_api_service, "create_job", fake_create_job)
+
+    response = api_client.post("/api/history/task_history_failed_regen/regenerate", headers=_authorized_headers())
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "taskId": "task_history_failed_regen_retry",
+        "sourceTaskId": "task_history_failed_regen",
+        "runpodJobId": "",
+        "status": "pending_submit",
+        "generationSeed": None,
+    }
+    assert calls[0]["payload"]["workflowId"] == "1-images.json"
+    assert calls[0]["payload"]["promptDraftId"] == "grok_draft_regen"
+    assert calls[0]["payload"]["regeneratedFromTaskId"] == "task_history_failed_regen"
+    assert calls[0]["user"]["id"] == "history-user"
+
+
+def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            WorkflowTask(
+                id="task_history_failed_existing_retry",
+                workflow_id="1-images.json",
+                status="FAILED",
+                worker_name="History User",
+                user_id="history-user",
+                payload_json={"workflowId": "1-images.json", "segments": []},
+            ),
+            WorkflowTask(
+                id="task_history_failed_existing_retry_child",
+                workflow_id="1-images.json",
+                status="IN_QUEUE",
+                runpod_job_id="runpod-retry-child",
+                worker_name="History User",
+                user_id="history-user",
+                payload_json={
+                    "workflowId": "1-images.json",
+                    "segments": [],
+                    "regeneratedFromTaskId": "task_history_failed_existing_retry",
+                },
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    from backend.app.api.v1 import history as history_api
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("existing retry should be reused")
+
+    monkeypatch.setattr(history_api.studio_api_service.job_service, "queue_job", fail_if_called)
+
+    response = api_client.post("/api/history/task_history_failed_existing_retry/regenerate", headers=_authorized_headers())
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "taskId": "task_history_failed_existing_retry_child",
+        "sourceTaskId": "task_history_failed_existing_retry",
+        "runpodJobId": "runpod-retry-child",
+        "status": "in_queue",
+        "generationSeed": None,
+    }
+
+
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    runpod_history_client = client.split("runpodHistory: (params:", 1)[1].split("batchJobs:", 1)[0]
 
     assert "promptHistory: (params:" in client
     assert 'query.set("generationStatus", params.generationStatus)' in client
@@ -376,15 +538,19 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("workflowId", params.workflowId)' in client
     assert 'query.set("resultStatus", params.resultStatus)' in client
     assert 'query.set("workerId", params.workerId)' in client
-    assert 'query.set("dateFrom", params.dateFrom)' in client
-    assert 'query.set("dateTo", params.dateTo)' in client
-    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter })" in screen
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, dateFrom: runpodDateFrom, dateTo: runpodDateTo })" in screen
+    assert 'query.set("runDate", params.runDate)' in runpod_history_client
+    assert 'query.set("dateFrom", params.dateFrom)' not in runpod_history_client
+    assert 'query.set("dateTo", params.dateTo)' not in runpod_history_client
+    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })" in screen
+    assert 'query.set("batchId", params.batchId)' in client
     assert "v3-runpod-history-toolbar" in screen
     assert "v3-runpod-history-actions" in screen
     assert "runpodWorkerFilter" in screen
-    assert "runpodDateFrom" in screen
-    assert "runpodDateTo" in screen
+    assert "runpodRunDate" in screen
+    assert "runpodDateFrom" not in screen
+    assert "runpodDateTo" not in screen
+    assert "runpodBatchFilter" in screen
     assert "selectedPromptHistoryDraftId" in screen
     assert "setItems(response.items)" in screen
     assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen

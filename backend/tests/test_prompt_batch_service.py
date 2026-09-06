@@ -227,6 +227,64 @@ def test_active_prompt_generation_batches_can_include_every_worker_for_managers(
     assert [batch["id"] for batch in batches] == ["pgb_worker_b_active", "pgb_worker_a_active"]
 
 
+def test_prompt_generation_management_excludes_folder_batch_batches(db_session):
+    db_session.add_all([
+        _asset("asset_manual_active"),
+        _asset("asset_folder_batch_active"),
+        PromptGenerationBatch(
+            id="pgb_manual_active",
+            workflow_id="1-images.json",
+            status=service.BATCH_PENDING,
+            total_count=1,
+            created_by="dobedub",
+        ),
+        PromptGenerationBatch(
+            id="pgb_folder_batch_active",
+            workflow_id="1-images.json",
+            status=service.BATCH_PENDING,
+            total_count=1,
+            created_by="dobedub",
+            batch_job_id="batch_auto",
+        ),
+        ImagePromptDraft(
+            id="draft_manual_active",
+            asset_id="asset_manual_active",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_PENDING,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_manual_active",
+            created_by="dobedub",
+        ),
+        ImagePromptDraft(
+            id="draft_folder_batch_active",
+            asset_id="asset_folder_batch_active",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status=service.DRAFT_PENDING,
+            provider="grok",
+            model="grok-test",
+            instruction_version="wf@1",
+            requested_frames=81,
+            warnings_json=[],
+            raw_json={},
+            prompt_batch_id="pgb_folder_batch_active",
+            created_by="dobedub",
+            batch_job_id="batch_auto",
+        ),
+    ])
+    db_session.commit()
+
+    batches = service.list_active_prompt_generation_batches(db_session, created_by="dobedub")
+
+    assert [batch["id"] for batch in batches] == ["pgb_manual_active"]
+
+
 def test_active_prompt_generation_batches_ignores_stale_batch_status_without_extra_payload_queries(db_session):
     base_time = now_seoul_naive()
     for index in range(8):

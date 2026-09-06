@@ -45,6 +45,7 @@ type NavItem = {
   label: string;
   /** 없으면 항상 노출(예: Workspace) */
   permission?: string;
+  permissions?: string[];
   /** 권한은 있지만 백엔드 기능이 아직 없는 항목 - 숨기지 않고 배지와 함께 비활성 처리 */
   unimplemented?: boolean;
 };
@@ -52,6 +53,7 @@ type NavItem = {
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
+  { key: "batchJobs", label: "배치 작업 요청 관리", permissions: ["prompts:build", "jobs:run"] },
   { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
   { key: "taskHistory", label: "Task History", permission: "history:read" },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "컬렉션 관리" 한
@@ -114,7 +116,12 @@ export function AppShell({
 }: AppShellProps) {
   const navItems = area === "admin" ? ADMIN_NAV_ITEMS : GENERATE_NAV_ITEMS;
   const groupLabel = area === "admin" ? "ADMIN" : "GENERATE";
-  const visibleNavItems = navItems.filter((item) => !item.permission || canUse(user, item.permission));
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.permissions?.length) {
+      return item.permissions.every((permission) => canUse(user, permission));
+    }
+    return !item.permission || canUse(user, item.permission);
+  });
   const chrome = React.useContext(AppShellChromeContext);
 
   // HELP 그룹: design_handoff 6b의 사이드바가 GENERATE 그룹 아래 두는 HELP 묶음

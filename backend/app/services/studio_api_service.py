@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from threading import RLock
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.app.core.config import get_settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
@@ -44,6 +44,16 @@ from backend.app.db.session import SessionLocal
 
 JOBS: dict[str, dict] = {}
 JOB_LOCK = RLock()
+REUSABLE_REGENERATION_STATUSES = {
+    "PENDING_SUBMIT",
+    "DISPATCHING",
+    "QUEUED",
+    "IN_QUEUE",
+    "IN_PROGRESS",
+    "RUNNING",
+    "COMPLETED",
+    "SUCCESS",
+}
 
 
 def ensure_storage_dirs() -> None:
@@ -77,6 +87,7 @@ def paginated_history(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
 ) -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
@@ -85,6 +96,7 @@ def paginated_history(
     worker_id = str(worker_id or "").strip()
     date_from = str(date_from or "").strip()
     date_to = str(date_to or "").strip()
+    batch_job_id = str(batch_job_id or "").strip()
     return {
         "items": task_history_items(
             page,
@@ -94,6 +106,7 @@ def paginated_history(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
         ),
         "page": page,
         "pageSize": page_size,
@@ -103,6 +116,7 @@ def paginated_history(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
         ),
     }
 
@@ -113,18 +127,20 @@ def paginated_runpod_history(
     workflow_id: str = "",
     result_status: str = "",
     worker_id: str = "",
-    date_from: str = "",
-    date_to: str = "",
+    run_date: str = "",
+    batch_job_id: str = "",
 ) -> dict:
     """Return the dedicated RunPod-history contract with its fixed 20-row page."""
+    run_date = str(run_date or "").strip()
     return paginated_history(
         page,
         20,
         workflow_id=workflow_id,
         result_status=result_status,
         worker_id=worker_id,
-        date_from=date_from,
-        date_to=date_to,
+        date_from=run_date,
+        date_to=run_date,
+        batch_job_id=batch_job_id,
     )
 
 
@@ -380,6 +396,49 @@ def create_job(payload: dict, *, user: dict[str, object]) -> dict:
         return job_service.queue_job(job_runtime(), safe_payload)
 
 
+def regenerate_history_item(task_id: str, *, user: dict[str, object]) -> dict:
+    restored = restore_job_from_task(task_id)
+    if not restored:
+        raise KeyError(task_id)
+    status = str(restored.get("status") or "").upper()
+    if status not in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+        raise ValueError("실패한 RunPod 작업만 재생성할 수 있습니다.")
+    existing_retry = _existing_regeneration_for_task(task_id)
+    if existing_retry:
+        return existing_retry
+    payload = dict(restored.get("payload") or {})
+    workflow_id = restored.get("workflowId") or payload.get("workflowId")
+    if not workflow_id:
+        raise ValueError("재생성할 workflowId를 찾을 수 없습니다.")
+    payload["workflowId"] = workflow_id
+    if restored.get("workflowName"):
+        payload["workflowName"] = restored["workflowName"]
+    for key in ("requestBatchId", "requestItemId", "runpodJobId", "generationSeed"):
+        payload.pop(key, None)
+    payload["regeneratedFromTaskId"] = task_id
+    return create_job(payload, user=user)
+
+
+def _existing_regeneration_for_task(task_id: str) -> dict | None:
+    session = SessionLocal()
+    try:
+        tasks = list(session.scalars(
+            select(WorkflowTask)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                func.upper(WorkflowTask.status).in_(REUSABLE_REGENERATION_STATUSES),
+            )
+            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+        ))
+        for task in tasks:
+            payload = task.payload_json if isinstance(task.payload_json, dict) else {}
+            if str(payload.get("regeneratedFromTaskId") or "") == task_id:
+                return restore_job_from_task(task.id)
+        return None
+    finally:
+        session.close()
+
+
 def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> dict:
     """Build one single-keyframe job from a persisted, reviewed Grok draft.
 
@@ -473,7 +532,9 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
         session.close()
 
 
-def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> dict:
+def create_runpod_request_batch(
+    payload: dict, *, user: dict[str, object], batch_job_id: str | None = None
+) -> dict:
     """Create durable local tasks for selected drafts without calling RunPod yet."""
     user_id = str(user.get("id") or "").strip()
     if not user_id:
@@ -503,14 +564,25 @@ def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> di
                 items=raw_items,
                 created_by=worker_id,
                 submitted_by=user_id,
-                # Only the batch pipeline sends this; the interactive path
-                # leaves it NULL so non-batch requests stay unlabelled.
-                batch_job_id=str(payload.get("batchJobId") or "").strip() or None,
+                # Only the batch pipeline passes this as an explicit keyword
+                # argument; it is never read out of the request body, so an
+                # HTTP caller has no way to attach a task to someone else's
+                # batch job. The interactive path leaves it unset, so
+                # non-batch requests stay unlabelled.
+                batch_job_id=str(batch_job_id or "").strip() or None,
             )
         finally:
             session.close()
 
-        for item in batch["items"]:
+        if "createdItemIds" in batch:
+            created_item_ids = {str(item_id) for item_id in batch.get("createdItemIds", [])}
+            materialization_items = [
+                item for item in batch["items"]
+                if str(item.get("id") or "") in created_item_ids
+            ]
+        else:
+            materialization_items = list(batch["items"])
+        for item in materialization_items:
             try:
                 job_payload = job_payload_from_request_item(item["id"], user=user, worker_id=worker_id)
                 job = create_job(job_payload, user=worker_user)
