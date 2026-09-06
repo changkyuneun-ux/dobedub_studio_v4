@@ -29,6 +29,7 @@ from backend.app.services.metadata_service import get_workflow_widget_metadata
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 PENDING_SUBMISSION_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
+REWORKABLE_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
 STALE_DISPATCH_CLAIM_SECONDS = 300
 RUNPOD_TIMESTAMP_KEYS = {
     "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
@@ -489,6 +490,75 @@ def restore_job_from_task(task_id: str) -> dict | None:
         return result
     finally:
         session.close()
+
+
+def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = False) -> dict:
+    """Reset an existing failed task so the dispatcher resubmits the same row."""
+    session = SessionLocal()
+    try:
+        task = session.scalar(
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(WorkflowTask.id == task_id, WorkflowTask.deleted_at.is_(None))
+            .limit(1)
+        )
+        if task is None:
+            raise KeyError(task_id)
+        if not can_manage and str(task.user_id or "") != str(actor_id or ""):
+            raise PermissionError("다른 작업자의 RunPod 작업은 재작업할 수 없습니다.")
+        status = str(task.status or "").upper()
+        if status not in REWORKABLE_STATES:
+            raise ValueError("실패한 RunPod 작업만 재작업할 수 있습니다.")
+
+        now = now_seoul_naive()
+        payload = dict(task.payload_json or {})
+        for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
+            payload.pop(key, None)
+        if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
+            payload["user"] = {
+                "id": task.user_id or actor_id,
+                "name": task.worker_name or (task.user.name if task.user else None) or task.user_id or actor_id,
+                "role": task.user.role if task.user else "",
+                "permissions": task.user.permissions_json if task.user else [],
+            }
+
+        task.status = "PENDING_SUBMIT"
+        task.progress = 0
+        task.runpod_job_id = None
+        task.completed_at = None
+        task.elapsed_seconds = None
+        task.runpod_submit_json = {}
+        task.runpod_status_json = {}
+        task.payload_json = payload
+        task.wan_node_config = {}
+        task.dispatch_claimed_at = None
+        task.dispatch_attempts = 0
+        task.next_dispatch_at = None
+        task.last_dispatch_error = None
+        task.started_at = now
+        task.updated_at = now
+        task.created_at = now
+        for link in list(task.output_assets):
+            session.delete(link)
+        for prompt in list(task.prompts):
+            prompt.output_asset_ids = []
+            prompt.updated_at = now
+        _sync_request_batch(session, task)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    restored = restore_job_from_task(task_id)
+    if restored is None:
+        raise KeyError(task_id)
+    return restored
 
 
 def active_task_ids() -> list[str]:

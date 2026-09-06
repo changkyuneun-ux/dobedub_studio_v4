@@ -1,14 +1,11 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from "react";
-import { apiClient, BatchJobResponse, HealthResponse, UploadResponse, WorkflowItem } from "../api/client";
+import { apiClient, BatchJobResponse, HealthResponse, WorkflowItem } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
-import { batchFolderName, batchImageFiles } from "../helpers/batchFolder";
 import { shellNavigate } from "../helpers/navigation";
-import { fileToDataUrl } from "../helpers/workflow";
 import { StudioRoute } from "../router";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; workflows: WorkflowItem[] };
-type UploadRow = UploadResponse & { file: File };
 
 const FRAME_OPTIONS = [49, 81, 161];
 const PAGE_SIZE = 10;
@@ -32,16 +29,10 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString();
 }
 
-function imageTypeSummary(files: File[]) {
-  const jpg = files.filter((file) => /\.(jpe?g)$/i.test(file.name)).length;
-  const png = files.filter((file) => /\.png$/i.test(file.name)).length;
-  const extra = files.length - jpg - png;
-  return [
-    `대상 이미지 ${files.length}건`,
-    jpg ? `JPG ${jpg}` : "",
-    png ? `PNG ${png}` : "",
-    extra ? `기타 ${extra}` : ""
-  ].filter(Boolean).join(" · ");
+function fileSizeLabel(file: File | null) {
+  if (!file) return "선택된 ZIP 파일 없음";
+  const mb = file.size / (1024 * 1024);
+  return `${file.name} · ${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`}`;
 }
 
 function statusLabel(status: string) {
@@ -59,9 +50,7 @@ function metricPill(value: number, tone: "gray" | "blue" | "green" | "yellow" | 
 export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [workflowId, setWorkflowId] = useState(workflows[0]?.id || "");
   const [requestedFrames, setRequestedFrames] = useState(DEFAULT_REQUESTED_FRAMES);
-  const [folderName, setFolderName] = useState("");
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploadedRows, setUploadedRows] = useState<UploadRow[]>([]);
+  const [selectedZipFile, setSelectedZipFile] = useState<File | null>(null);
   const [activeJobs, setActiveJobs] = useState<BatchJobResponse[]>([]);
   const [history, setHistory] = useState<BatchJobResponse[]>([]);
   const [workers, setWorkers] = useState<Array<{ workerId: string; workerName: string }>>([]);
@@ -74,7 +63,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirmingBatch, setConfirmingBatch] = useState(false);
-  const folderInput = useRef<HTMLInputElement | null>(null);
+  const zipInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!workflowId && workflows[0]?.id) {
@@ -121,28 +110,32 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     }
   }
 
-  function chooseFolder(event: ChangeEvent<HTMLInputElement>) {
-    const files = batchImageFiles(event.target.files || []);
-    setSelectedFiles(files);
-    setFolderName(batchFolderName(files));
-    setUploadedRows([]);
-    setNotice(files.length ? "" : "처리할 이미지가 없습니다.");
+  function chooseZipFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    if (file && !/\.zip$/i.test(file.name)) {
+      setSelectedZipFile(null);
+      setNotice("ZIP 파일만 선택할 수 있습니다.");
+      if (zipInput.current) {
+        zipInput.current.value = "";
+      }
+      return;
+    }
+    setSelectedZipFile(file);
+    setNotice(file ? "" : "선택된 ZIP 파일이 없습니다.");
   }
 
   function resetBatchCreation() {
-    setSelectedFiles([]);
-    setFolderName("");
-    setUploadedRows([]);
+    setSelectedZipFile(null);
     setRequestedFrames(DEFAULT_REQUESTED_FRAMES);
     setNotice("");
-    if (folderInput.current) {
-      folderInput.current.value = "";
+    if (zipInput.current) {
+      zipInput.current.value = "";
     }
   }
 
   function requestBatchConfirmation() {
-    if (!workflowId || !selectedFiles.length) {
-      setNotice("워크플로우와 이미지 폴더를 먼저 선택하세요.");
+    if (!workflowId || !selectedZipFile) {
+      setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
       return;
     }
     setNotice("");
@@ -150,39 +143,26 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   }
 
   async function startBatch() {
-    if (!workflowId || !selectedFiles.length) {
-      setNotice("워크플로우와 이미지 폴더를 먼저 선택하세요.");
+    if (!workflowId || !selectedZipFile) {
+      setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
       return;
     }
     setBusy(true);
     setNotice("");
-    const uploaded: UploadRow[] = [];
     try {
-      for (const file of selectedFiles) {
-        const upload = await apiClient.upload({
-          fileName: file.name,
-          mimeType: file.type || "image/png",
-          dataUrl: await fileToDataUrl(file)
-        });
-        uploaded.push({ ...upload, file });
-        setUploadedRows([...uploaded]);
-      }
-      const created = await apiClient.createBatchJob({
+      const created = await apiClient.createBatchJobFromZip({
         workflowId,
-        sourceDirName: folderName,
         requestedFrames,
-        items: uploaded.map((row) => ({ assetId: row.assetId, fileName: row.file.name }))
+        file: selectedZipFile
       });
-      setSelectedFiles([]);
-      setUploadedRows([]);
-      if (folderInput.current) {
-        folderInput.current.value = "";
+      setSelectedZipFile(null);
+      if (zipInput.current) {
+        zipInput.current.value = "";
       }
-      setNotice(`배치 작업 ${created.id}을 등록했습니다.`);
+      setNotice(`배치 작업 ${created.id}을 등록했습니다. 이미지 ${created.totalImages}개를 처리합니다.`);
       await refreshActive();
       await loadHistory(1);
     } catch (error) {
-      await Promise.all(uploaded.map((row) => apiClient.deleteUnsubmittedUpload(row.assetId).catch(() => undefined)));
       setNotice(error instanceof Error ? error.message : "배치 작업 등록에 실패했습니다.");
     } finally {
       setBusy(false);
@@ -209,7 +189,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     }
   }
 
-  const selectedImageSummary = selectedFiles.length ? imageTypeSummary(selectedFiles) : "대상 이미지 0건";
+  const selectedZipSummary = fileSizeLabel(selectedZipFile);
   const firstItemIndex = history.length ? (page - 1) * PAGE_SIZE + 1 : 0;
   const lastItemIndex = history.length ? Math.min(total, page * PAGE_SIZE) : 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -237,23 +217,17 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             </select>
             <div className="v3-batch-linked-state">지시문 연결됨</div>
           </div>
-          <button className="v3-batch-folder-card" type="button" onClick={() => folderInput.current?.click()}>
-            <span>작업 폴더</span>
-            <strong>{folderName || "폴더 선택"}</strong>
-            <small>{selectedImageSummary}</small>
+          <button className="v3-batch-folder-card" type="button" onClick={() => zipInput.current?.click()}>
+            <span>작업 ZIP</span>
+            <strong>{selectedZipFile?.name || "ZIP 파일 선택"}</strong>
+            <small>{selectedZipSummary}</small>
           </button>
           <input
             className="v3-batch-hidden-input"
-            ref={(node) => {
-              folderInput.current = node;
-              if (node) {
-                node.setAttribute("webkitdirectory", "");
-                node.setAttribute("directory", "");
-              }
-            }}
+            ref={zipInput}
             type="file"
-            multiple
-            onChange={chooseFolder}
+            accept=".zip,application/zip,application/x-zip-compressed"
+            onChange={chooseZipFile}
           />
           <div className="v3-batch-field-card">
             <label>길이 (프레임 수)</label>
@@ -272,10 +246,10 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <small>{formatFrameDuration(requestedFrames)}</small>
           </div>
           <div className="v3-batch-create-action">
-            <button className="v3-primary-button" type="button" disabled={busy || !selectedFiles.length} onClick={requestBatchConfirmation}>
+            <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile} onClick={requestBatchConfirmation}>
               작업 요청
             </button>
-            <small>{uploadedRows.length ? `업로드 ${uploadedRows.length} / ${selectedFiles.length}` : formatFrameDuration(requestedFrames)}</small>
+            <small>{selectedZipFile ? selectedZipFile.name : formatFrameDuration(requestedFrames)}</small>
           </div>
         </div>
         {notice ? <p className="v3-inline-notice">{notice}</p> : null}
@@ -387,8 +361,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <h2 className="v3-modal-title" id="batch-confirm-title">작업 요청 내역 확인</h2>
             <div className="v3-batch-confirm-summary">
               <div><span>워크플로우</span><strong>{selectedWorkflowLabel}</strong></div>
-              <div><span>폴더명</span><strong>{folderName || "-"}</strong></div>
-              <div><span>이미지수</span><strong>{selectedFiles.length}개</strong></div>
+              <div><span>ZIP 파일명</span><strong>{selectedZipFile?.name || "-"}</strong></div>
               <div><span>길이</span><strong>{formatFrameDuration(requestedFrames)}</strong></div>
             </div>
             <p className="v3-modal-body-text">진행하시겠습니까?</p>

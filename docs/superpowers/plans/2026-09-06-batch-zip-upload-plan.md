@@ -143,7 +143,8 @@ Implementation note:
 - Use `pathlib.PurePosixPath` for ZIP member paths.
 - Never call `extractall()` directly.
 - Copy each safe member manually into a controlled temp directory.
-- Delete temporary ZIP/extract directories in `finally`.
+- Delete the uploaded temporary ZIP in `finally`.
+- Preserve extracted image files under the normal upload storage tree because the current asset registration stores file paths instead of copying files.
 
 ### 2. Add Batch ZIP Endpoint
 

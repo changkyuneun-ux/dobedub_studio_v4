@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import quote
 
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from backend.app.core.security import create_access_token
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, User, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, TaskOutputAsset, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.task_tracking_service import active_task_ids
 from pathlib import Path
@@ -409,7 +410,89 @@ def test_runpod_history_filters_batch_id_by_partial_text(api_client):
     assert [item["taskId"] for item in worker_response.json()["items"]] == ["task_history_batch_worker"]
 
 
-def test_runpod_history_can_regenerate_failed_task_without_opening_create_screen(api_client, monkeypatch):
+def test_runpod_history_can_rework_failed_task_without_creating_a_new_task(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(Asset(
+            id="asset_stale_output",
+            asset_type="output_video",
+            file_name="stale.mp4",
+            mime_type="video/mp4",
+            size_bytes=1,
+            storage_key="outputs/stale.mp4",
+        ))
+        session.add(WorkflowTask(
+            id="task_history_failed_regen",
+            runpod_job_id="runpod-old-failed",
+            workflow_id="1-images.json",
+            status="FAILED",
+            progress=100,
+            worker_name="History User",
+            user_id="history-user",
+            prompt_draft_id="grok_draft_regen",
+            runpod_submit_json={"id": "runpod-old-failed"},
+            runpod_status_json={"status": "FAILED", "error": "old failure"},
+            last_dispatch_error="old error",
+            payload_json={
+                "workflowId": "1-images.json",
+                "workflowName": "1-images",
+                "promptDraftId": "grok_draft_regen",
+                "keyframes": [],
+                "segments": [{"index": 1, "positivePrompt": "retry this scene", "negativePrompt": "blur"}],
+            },
+        ))
+        session.flush()
+        session.add(TaskOutputAsset(task_id="task_history_failed_regen", asset_id="asset_stale_output", output_role="final"))
+        session.commit()
+    finally:
+        session.close()
+
+    from backend.app.api.v1 import history as history_api
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("rework must update the existing task, not create a new one")
+
+    monkeypatch.setattr(history_api.studio_api_service, "create_job", fail_if_called)
+
+    response = api_client.post("/api/history/task_history_failed_regen/rework", headers=_authorized_headers())
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "taskId": "task_history_failed_regen",
+        "sourceTaskId": "task_history_failed_regen",
+        "runpodJobId": "",
+        "status": "PENDING_SUBMIT",
+        "statusLabel": "요청 대기",
+        "lastDispatchError": None,
+        "generationSeed": None,
+    }
+    session = SessionLocal()
+    try:
+        tasks = session.scalars(select(WorkflowTask)).all()
+        assert [task.id for task in tasks] == ["task_history_failed_regen"]
+        task = tasks[0]
+        assert task.status == "PENDING_SUBMIT"
+        assert task.progress == 0
+        assert task.runpod_job_id is None
+        assert task.runpod_submit_json == {}
+        assert task.runpod_status_json == {}
+        assert task.last_dispatch_error is None
+        assert task.payload_json["promptDraftId"] == "grok_draft_regen"
+        assert "regeneratedFromTaskId" not in task.payload_json
+        assert session.scalars(select(TaskOutputAsset)).all() == []
+    finally:
+        session.close()
+
+
+def test_legacy_regenerate_endpoint_uses_same_rework_semantics(api_client, monkeypatch):
     session = SessionLocal()
     try:
         session.add(User(
@@ -421,92 +504,13 @@ def test_runpod_history_can_regenerate_failed_task_without_opening_create_screen
             is_active=True,
         ))
         session.add(WorkflowTask(
-            id="task_history_failed_regen",
+            id="task_history_failed_existing_retry",
             workflow_id="1-images.json",
             status="FAILED",
             worker_name="History User",
             user_id="history-user",
-            prompt_draft_id="grok_draft_regen",
-            payload_json={
-                "workflowId": "1-images.json",
-                "workflowName": "1-images",
-                "promptDraftId": "grok_draft_regen",
-                "keyframes": [],
-                "segments": [{"index": 1, "positivePrompt": "retry this scene", "negativePrompt": "blur"}],
-            },
+            payload_json={"workflowId": "1-images.json", "segments": []},
         ))
-        session.commit()
-    finally:
-        session.close()
-
-    from backend.app.api.v1 import history as history_api
-
-    calls: list[dict] = []
-
-    def fake_create_job(payload: dict, *, user: dict[str, object]) -> dict:
-        calls.append({"payload": payload, "user": user})
-        return {
-            "taskId": "task_history_failed_regen_retry",
-            "runpodJobId": "",
-            "status": "PENDING_SUBMIT",
-            "generationSeed": None,
-        }
-
-    monkeypatch.setattr(history_api.studio_api_service, "create_job", fake_create_job)
-
-    response = api_client.post("/api/history/task_history_failed_regen/regenerate", headers=_authorized_headers())
-
-    assert response.status_code == 201
-    assert response.json() == {
-        "taskId": "task_history_failed_regen_retry",
-        "sourceTaskId": "task_history_failed_regen",
-        "runpodJobId": "",
-        "status": "pending_submit",
-        "statusLabel": "요청 대기",
-        "lastDispatchError": None,
-        "generationSeed": None,
-    }
-    assert calls[0]["payload"]["workflowId"] == "1-images.json"
-    assert calls[0]["payload"]["promptDraftId"] == "grok_draft_regen"
-    assert calls[0]["payload"]["regeneratedFromTaskId"] == "task_history_failed_regen"
-    assert calls[0]["user"]["id"] == "history-user"
-
-
-def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, monkeypatch):
-    session = SessionLocal()
-    try:
-        session.add(User(
-            id="history-user",
-            name="History User",
-            email=None,
-            role="SUPER_ADMIN",
-            permissions_json=["admin:*"],
-            is_active=True,
-        ))
-        session.add_all([
-            WorkflowTask(
-                id="task_history_failed_existing_retry",
-                workflow_id="1-images.json",
-                status="FAILED",
-                worker_name="History User",
-                user_id="history-user",
-                payload_json={"workflowId": "1-images.json", "segments": []},
-            ),
-            WorkflowTask(
-                id="task_history_failed_existing_retry_child",
-                workflow_id="1-images.json",
-                status="IN_QUEUE",
-                runpod_job_id="runpod-retry-child",
-                worker_name="History User",
-                user_id="history-user",
-                last_dispatch_error="사용자 동시 활성 Task 한도(3개)에 도달했습니다.",
-                payload_json={
-                    "workflowId": "1-images.json",
-                    "segments": [],
-                    "regeneratedFromTaskId": "task_history_failed_existing_retry",
-                },
-            ),
-        ])
         session.commit()
     finally:
         session.close()
@@ -514,7 +518,7 @@ def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, mo
     from backend.app.api.v1 import history as history_api
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("existing retry should be reused")
+        raise AssertionError("legacy endpoint must not create a retry child task")
 
     monkeypatch.setattr(history_api.studio_api_service.job_service, "queue_job", fail_if_called)
 
@@ -522,12 +526,12 @@ def test_runpod_history_regeneration_reuses_existing_active_retry(api_client, mo
 
     assert response.status_code == 201
     assert response.json() == {
-        "taskId": "task_history_failed_existing_retry_child",
+        "taskId": "task_history_failed_existing_retry",
         "sourceTaskId": "task_history_failed_existing_retry",
-        "runpodJobId": "runpod-retry-child",
-        "status": "in_queue",
-        "statusLabel": "대기",
-        "lastDispatchError": "사용자 동시 활성 Task 한도(3개)에 도달했습니다.",
+        "runpodJobId": "",
+        "status": "PENDING_SUBMIT",
+        "statusLabel": "요청 대기",
+        "lastDispatchError": None,
         "generationSeed": None,
     }
 

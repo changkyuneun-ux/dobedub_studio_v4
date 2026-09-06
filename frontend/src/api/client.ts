@@ -711,6 +711,8 @@ export type HistoryItem = {
   workerName?: string;
   user?: { id?: string; name?: string };
   status?: string;
+  statusLabel?: string;
+  lastDispatchError?: string | null;
   progress?: number;
   elapsedSeconds?: number;
   prompt?: string;
@@ -1034,6 +1036,37 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+async function requestFormJson<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: sessionUserHeaders(path),
+    body: formData
+  });
+  const rawMessage = await response.text();
+  if (!response.ok) {
+    let message = friendlyApiErrorMessage(rawMessage, response, path);
+    try {
+      const parsed = JSON.parse(rawMessage) as { detail?: unknown; message?: unknown; error?: unknown };
+      const detail = parsed.detail ?? parsed.message ?? parsed.error;
+      if (typeof detail === "string" && detail.trim()) {
+        message = detail.trim();
+      }
+    } catch {
+      // Ignore non-JSON bodies and fall back to a safe, readable message.
+    }
+    throw new Error(message);
+  }
+  if (!rawMessage.trim()) {
+    return undefined as T;
+  }
+  try {
+    return JSON.parse(rawMessage) as T;
+  } catch {
+    const message = friendlyApiErrorMessage(rawMessage, response, path);
+    throw new Error(message);
+  }
+}
+
 async function requestBlob(path: string): Promise<Blob> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: sessionUserHeaders(path)
@@ -1276,9 +1309,9 @@ export const apiClient = {
     requestJson<{ ok?: boolean; deleted?: boolean }>(`/api/history/${encodeURIComponent(taskId)}/delete`, {
       method: "POST"
     }),
-  regenerateHistoryItem: (taskId: string) =>
+  reworkHistoryItem: (taskId: string) =>
     requestJson<{ taskId: string; sourceTaskId: string; runpodJobId?: string; status: string; statusLabel?: string; lastDispatchError?: string | null; generationSeed?: number | string | null }>(
-      `/api/history/${encodeURIComponent(taskId)}/regenerate`,
+      `/api/history/${encodeURIComponent(taskId)}/rework`,
       { method: "POST" }
     ),
   upload: (payload: { fileName: string; mimeType: string; dataUrl: string }) =>
@@ -1295,6 +1328,13 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; file: File }) => {
+    const formData = new FormData();
+    formData.set("workflowId", payload.workflowId);
+    formData.set("requestedFrames", String(payload.requestedFrames || 81));
+    formData.set("file", payload.file);
+    return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
+  },
   activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
   batchJobs: (params: { page?: number; dateFrom?: string; dateTo?: string; workerId?: string; status?: string } = {}) => {
     const query = new URLSearchParams();

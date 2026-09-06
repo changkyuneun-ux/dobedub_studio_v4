@@ -3,7 +3,6 @@ import {
   apiClient,
   HealthResponse,
   HistoryItem,
-  JobStatusResponse,
   AssetItem,
   CollectionSummary,
   TaskPromptReviewFlags,
@@ -38,17 +37,16 @@ function workflowLabel(workflow: WorkflowItem) {
   return workflow.label || workflow.name || workflow.id;
 }
 
-function runpodResultStatusLabel(item: HistoryItem, retryStatus?: JobStatusResponse) {
-  if (!retryStatus) return item.status || "-";
-  if (retryStatus.lastDispatchError?.includes("동시 활성 Task 한도")) return "한도 대기";
-  const normalized = String(retryStatus.status || "").toUpperCase();
+function runpodResultStatusLabel(item: HistoryItem) {
+  if (item.lastDispatchError?.includes("동시 활성 Task 한도")) return "한도 대기";
+  const normalized = String(item.status || "").toUpperCase();
   if (normalized === "PENDING_SUBMIT") return "제출 대기";
   if (normalized === "DISPATCHING") return "제출 중";
   if (normalized === "QUEUED" || normalized === "IN_QUEUE") return "RunPod Queue";
   if (normalized === "IN_PROGRESS" || normalized === "RUNNING") return "진행 중";
   if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Completed";
   if (normalized === "FAILED" || normalized === "CANCELLED" || normalized === "TIMED_OUT") return "Failed";
-  return retryStatus.statusLabel || retryStatus.status || item.status || "-";
+  return item.statusLabel || item.status || "-";
 }
 
 const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(88px, .55fr) 52px";
@@ -153,9 +151,7 @@ export function Create3aScreen({
   const [runpodHistoryNoticeKind, setRunpodHistoryNoticeKind] = useState<"error" | "success">("error");
   const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
   const [selectedRunpodPromptItem, setSelectedRunpodPromptItem] = useState<HistoryItem | null>(null);
-  const [retryingRunpodTaskIds, setRetryingRunpodTaskIds] = useState<string[]>([]);
-  const [runpodRetryTaskIds, setRunpodRetryTaskIds] = useState<Record<string, string>>({});
-  const [runpodRetryStatuses, setRunpodRetryStatuses] = useState<Record<string, JobStatusResponse>>({});
+  const [reworkingRunpodTaskIds, setReworkingRunpodTaskIds] = useState<string[]>([]);
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
@@ -203,43 +199,28 @@ export function Create3aScreen({
 
   useEffect(() => {
     if (historyTab !== "runpod") return;
-    const entries = Object.entries(runpodRetryTaskIds);
-    if (!entries.length) return;
+    if (!reworkingRunpodTaskIds.length) return;
     let active = true;
-    const refreshCompletedRetries = async () => {
-      const completedSourceIds: string[] = [];
-      await Promise.all(entries.map(async ([sourceTaskId, retryTaskId]) => {
-        try {
-          const status = await apiClient.jobStatus(retryTaskId);
-          setRunpodRetryStatuses((current) => ({ ...current, [sourceTaskId]: status }));
-          if (isTerminalHistoryStatus(status.status)) completedSourceIds.push(sourceTaskId);
-        } catch {
-          completedSourceIds.push(sourceTaskId);
-        }
-      }));
-      if (!active || !completedSourceIds.length) return;
-      setRetryingRunpodTaskIds((current) => current.filter((taskId) => !completedSourceIds.includes(taskId)));
-      setRunpodRetryStatuses((current) => {
-        const next = { ...current };
-        completedSourceIds.forEach((taskId) => {
-          if (!isSuccessStatus(next[taskId]?.status)) delete next[taskId];
-        });
-        return next;
-      });
+    const refreshReworkedTasks = async () => {
       const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
       if (!active) return;
       setRunpodHistoryItems(response.items);
       setRunpodHistoryTotal(response.total);
+      const visibleById = new Map(response.items.map((item) => [item.taskId, item]));
+      setReworkingRunpodTaskIds((current) => current.filter((taskId) => {
+        const refreshed = visibleById.get(taskId);
+        return Boolean(refreshed && !isTerminalHistoryStatus(refreshed.status));
+      }));
     };
     const timer = window.setInterval(() => {
-      void refreshCompletedRetries();
+      void refreshReworkedTasks();
     }, 5000);
-    void refreshCompletedRetries();
+    void refreshReworkedTasks();
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [historyTab, runpodRetryTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
+  }, [historyTab, reworkingRunpodTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
 
   const filteredHistory = runpodHistoryItems.filter((item) => {
     if (runpodResultFilter === "all") return true;
@@ -292,24 +273,22 @@ export function Create3aScreen({
       setRunpodHistoryNotice(error instanceof Error ? error.message : "배치 ZIP 다운로드에 실패했습니다.");
     }
   }
-  async function regenerateRunpodHistoryItem(item: HistoryItem) {
-    if (retryingRunpodTaskIds.includes(item.taskId)) return;
+  async function reworkRunpodHistoryItem(item: HistoryItem) {
+    if (reworkingRunpodTaskIds.includes(item.taskId)) return;
     setRunpodHistoryNotice("");
     setRunpodHistoryNoticeKind("error");
-    setRetryingRunpodTaskIds((current) => current.includes(item.taskId) ? current : [...current, item.taskId]);
+    setReworkingRunpodTaskIds((current) => current.includes(item.taskId) ? current : [...current, item.taskId]);
     try {
-      const job = await apiClient.regenerateHistoryItem(item.taskId);
-      setRunpodRetryTaskIds((current) => ({ ...current, [item.taskId]: job.taskId }));
-      setRunpodRetryStatuses((current) => ({ ...current, [item.taskId]: { taskId: job.taskId, runpodJobId: job.runpodJobId || "", status: job.status } }));
+      const job = await apiClient.reworkHistoryItem(item.taskId);
       const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
-      setRunpodHistoryItems(response.items);
+      setRunpodHistoryItems(response.items.map((historyItem) => historyItem.taskId === item.taskId ? { ...historyItem, status: job.status, runpodJobId: job.runpodJobId || historyItem.runpodJobId, lastDispatchError: job.lastDispatchError || undefined } : historyItem));
       setRunpodHistoryTotal(response.total);
       setRunpodHistoryNoticeKind("success");
-      setRunpodHistoryNotice("재생성 요청이 등록되었습니다. 새 작업 상태는 RunPod 이력에서 확인하세요.");
+      setRunpodHistoryNotice("재작업 요청이 등록되었습니다. 기존 작업 상태가 갱신됩니다.");
     } catch (error) {
-      setRetryingRunpodTaskIds((current) => current.filter((taskId) => taskId !== item.taskId));
+      setReworkingRunpodTaskIds((current) => current.filter((taskId) => taskId !== item.taskId));
       setRunpodHistoryNoticeKind("error");
-      setRunpodHistoryNotice(error instanceof Error ? error.message : "RunPod 재생성 요청에 실패했습니다.");
+      setRunpodHistoryNotice(error instanceof Error ? error.message : "RunPod 재작업 요청에 실패했습니다.");
     }
   }
   const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
@@ -573,20 +552,10 @@ export function Create3aScreen({
           const resultUrl = result?.downloadUrl || result?.url || item.outputUrl || "";
           const inputFileName = input?.fileName || "입력 이미지";
           const outputFileName = result?.fileName || item.outputFile || item.runpodResponse?.filename || "생성 영상";
-          const canRegenerate = canRework && isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
-          const retryStatus = runpodRetryStatuses[item.taskId];
-          const retryTaskId = runpodRetryTaskIds[item.taskId];
-          const retryTaskItem = retryTaskId ? runpodHistoryItems.find((candidate) => candidate.taskId === retryTaskId) : null;
-          const retryTaskResult = retryTaskItem ? historyOutputAsset(retryTaskItem) : null;
-          const retryTaskUrl = retryTaskResult?.downloadUrl || retryTaskResult?.url || retryTaskItem?.outputUrl || retryStatus?.outputUrl || "";
-          const resultStatusLabel = runpodResultStatusLabel(item, retryStatus);
-          const resultStatusTone = isSuccessStatus(retryStatus?.status || item.status) ? "is-ready" : "is-pending";
-          const retryInFlight = Boolean(retryStatus && !isTerminalHistoryStatus(retryStatus.status) && !isSuccessStatus(retryStatus.status));
-          const retryDownloadItem = retryTaskItem && isSuccessStatus(retryTaskItem.status) && retryTaskUrl ? retryTaskItem : (
-            retryStatus && isSuccessStatus(retryStatus.status) && retryTaskUrl
-              ? { ...item, taskId: retryStatus.taskId, runpodJobId: retryStatus.runpodJobId, status: retryStatus.status, outputUrl: retryStatus.outputUrl, outputAssets: retryStatus.outputAssets || [] }
-              : null
-          );
+          const canReworkTask = canRework && isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
+          const resultStatusLabel = runpodResultStatusLabel(item);
+          const resultStatusTone = isSuccessStatus(item.status) ? "is-ready" : "is-pending";
+          const reworkInFlight = reworkingRunpodTaskIds.includes(item.taskId);
           return (
             <div
               key={item.taskId}
@@ -638,19 +607,17 @@ export function Create3aScreen({
                 {resultUrl ? <button className="v3-text-link-button v3-runpod-output-link" type="button" title={`${inputFileName} -> ${outputFileName}`} onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: resultUrl, isVideo: true, alt: outputFileName }); }}>{`${inputFileName} -> ${outputFileName}`}</button> : "-"}
               </span>
               <span>
-                {retryDownloadItem ? (
-                  <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(retryDownloadItem); }}>Download</button>
-                ) : canRegenerate ? (
+                {canReworkTask ? (
                   <button
                     className="v3-text-link-button"
                     type="button"
-                    disabled={retryingRunpodTaskIds.includes(item.taskId) || retryInFlight}
+                    disabled={reworkInFlight}
                     onClick={(event) => {
                       event.stopPropagation();
-                      void regenerateRunpodHistoryItem(item);
+                      void reworkRunpodHistoryItem(item);
                     }}
                   >
-                    재생성
+                    {reworkInFlight ? "요청 중" : "재작업"}
                   </button>
                 ) : resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
               </span>

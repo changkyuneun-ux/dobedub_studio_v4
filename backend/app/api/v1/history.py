@@ -77,13 +77,9 @@ def runpod_history(
     )
 
 
-@router.post("/{task_id}/regenerate", status_code=201)
-def regenerate_history_item(
-    task_id: str,
-    current_user: CurrentUser = Depends(require_permission("jobs:run")),
-):
+def _rework_history_item_response(task_id: str, current_user: CurrentUser) -> dict:
     try:
-        job = studio_api_service.regenerate_history_item(
+        job = studio_api_service.rework_history_item(
             task_id,
             user={
                 "id": current_user.id,
@@ -94,6 +90,8 @@ def regenerate_history_item(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"History item not found: {task_id}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except TaskSubmissionLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -104,11 +102,27 @@ def regenerate_history_item(
         "taskId": job["taskId"],
         "sourceTaskId": task_id,
         "runpodJobId": job.get("runpodJobId") or "",
-        "status": str(job.get("status") or "pending_submit").lower(),
+        "status": str(job.get("status") or "PENDING_SUBMIT").upper(),
         "statusLabel": job.get("statusLabel") or job_service.localized_job_status(job),
         "lastDispatchError": job.get("lastDispatchError"),
         "generationSeed": job.get("generationSeed"),
     }
+
+
+@router.post("/{task_id}/rework", status_code=201)
+def rework_history_item(
+    task_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    return _rework_history_item_response(task_id, current_user)
+
+
+@router.post("/{task_id}/regenerate", status_code=201)
+def regenerate_history_item(
+    task_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    return _rework_history_item_response(task_id, current_user)
 
 
 @router.post("/{task_id}/delete")

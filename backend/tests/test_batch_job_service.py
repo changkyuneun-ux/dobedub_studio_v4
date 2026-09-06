@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 import uuid
+import zipfile
 
 import pytest
 from sqlalchemy import inspect, select
 
+from backend.app.core.security import create_access_token
 from backend.app.db.models import (
     Asset,
     BatchJob,
@@ -17,6 +20,7 @@ from backend.app.db.models import (
     User,
     WorkflowTask,
 )
+from backend.app.db.session import SessionLocal
 from backend.app.services import batch_job_service, job_service, prompt_batch_service, studio_api_service
 from backend.app.services.task_tracking_service import record_job_status
 
@@ -196,6 +200,102 @@ def test_create_batch_job_id_uses_worker_kst_date_and_daily_sequence(db_session,
     assert second["id"] == "장균은_260904_2"
 
 
+def test_create_zip_batch_job_id_uses_worker_zip_name_and_kst_date(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    result = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "픽미툰_씬",
+            "sourceZipFileName": "픽미툰_씬.zip",
+            "requestedFrames": 81,
+            "items": [_asset_items(2)[0]],
+        },
+        created_by=user.id,
+    )
+
+    assert result["id"] == "장균은_픽미툰_씬_260904"
+
+
+def test_create_zip_batch_job_id_adds_suffix_for_same_worker_zip_and_day(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    first = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "shoot",
+            "sourceZipFileName": "shoot.zip",
+            "requestedFrames": 81,
+            "items": [_asset_items(2)[0]],
+        },
+        created_by=user.id,
+    )
+    second = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "shoot",
+            "sourceZipFileName": "shoot.zip",
+            "requestedFrames": 81,
+            "items": [_asset_items(2)[1]],
+        },
+        created_by=user.id,
+    )
+
+    assert first["id"] == "장균은_shoot_260904"
+    assert second["id"] == "장균은_shoot_260904_2"
+    assert len(second["id"]) <= 64
+
+
+def test_create_zip_batch_job_id_truncates_long_zip_token_to_column_limit(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 1)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    result = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "long",
+            "sourceZipFileName": f"{'verylongzipname' * 8}.zip",
+            "requestedFrames": 81,
+            "items": _asset_items(1),
+        },
+        created_by=user.id,
+    )
+
+    assert result["id"].startswith("장균은_")
+    assert result["id"].endswith("_260904")
+    assert len(result["id"]) <= 64
+
+
 def test_create_batch_job_leaves_no_rows_when_the_link_step_fails(db_session, monkeypatch):
     db_session.add(_user())
     _seed_assets(db_session, 2)
@@ -228,6 +328,49 @@ def test_prompt_batch_creation_still_commits_for_existing_callers(db_session, mo
     )
     db_session.rollback()
     assert db_session.get(PromptGenerationBatch, result["id"]) is not None
+
+
+def _headers(user_id: str, *, name: str | None = None, role: str = "OPERATOR") -> dict[str, str]:
+    token = create_access_token({"id": user_id, "name": name or user_id, "role": role})
+    return {"Authorization": f"Bearer {token['accessToken']}"}
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(id="zip_operator", name="장균은", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True))
+        session.commit()
+    finally:
+        session.close()
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    response = api_client.post(
+        "/api/batch-jobs/zip",
+        headers=_headers("zip_operator", name="장균은"),
+        data={"workflowId": "Blowbang1.json", "requestedFrames": "161"},
+        files={"file": ("픽미툰_씬.zip", _zip_bytes({"root/0001.png": b"png", "root/nested/0002.jpg": b"jpg"}), "application/zip")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "장균은_픽미툰_씬_260904"
+    assert payload["totalImages"] == 2
+    assert payload["sourceDirName"] == "root"
+    assert payload["requestedFrames"] == 161
 
 
 @pytest.mark.parametrize("frames, expected_seconds", [(49, 3), (81, 5), (161, 10)])

@@ -20,6 +20,7 @@ from backend.app.services.task_tracking_service import (
     assets_total,
     list_assets,
     record_job_status,
+    requeue_task_for_rework,
     restore_job_from_task,
     reusable_task_prompts,
     task_history_items,
@@ -44,18 +45,6 @@ from backend.app.db.session import SessionLocal
 
 JOBS: dict[str, dict] = {}
 JOB_LOCK = RLock()
-REUSABLE_REGENERATION_STATUSES = {
-    "PENDING_SUBMIT",
-    "DISPATCHING",
-    "QUEUED",
-    "IN_QUEUE",
-    "IN_PROGRESS",
-    "RUNNING",
-    "COMPLETED",
-    "SUCCESS",
-}
-
-
 def ensure_storage_dirs() -> None:
     settings = get_settings()
     paths = data_paths()
@@ -396,47 +385,19 @@ def create_job(payload: dict, *, user: dict[str, object]) -> dict:
         return job_service.queue_job(job_runtime(), safe_payload)
 
 
+def rework_history_item(task_id: str, *, user: dict[str, object]) -> dict:
+    user_id = str(user.get("id") or "").strip()
+    permissions = {str(permission) for permission in user.get("permissions") or []}
+    can_manage = "admin:*" in permissions or "jobs:manage" in permissions
+    job = requeue_task_for_rework(task_id, actor_id=user_id, can_manage=can_manage)
+    with JOB_LOCK:
+        JOBS[task_id] = job
+    return job
+
+
 def regenerate_history_item(task_id: str, *, user: dict[str, object]) -> dict:
-    restored = restore_job_from_task(task_id)
-    if not restored:
-        raise KeyError(task_id)
-    status = str(restored.get("status") or "").upper()
-    if status not in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-        raise ValueError("실패한 RunPod 작업만 재생성할 수 있습니다.")
-    existing_retry = _existing_regeneration_for_task(task_id)
-    if existing_retry:
-        return existing_retry
-    payload = dict(restored.get("payload") or {})
-    workflow_id = restored.get("workflowId") or payload.get("workflowId")
-    if not workflow_id:
-        raise ValueError("재생성할 workflowId를 찾을 수 없습니다.")
-    payload["workflowId"] = workflow_id
-    if restored.get("workflowName"):
-        payload["workflowName"] = restored["workflowName"]
-    for key in ("requestBatchId", "requestItemId", "runpodJobId", "generationSeed"):
-        payload.pop(key, None)
-    payload["regeneratedFromTaskId"] = task_id
-    return create_job(payload, user=user)
-
-
-def _existing_regeneration_for_task(task_id: str) -> dict | None:
-    session = SessionLocal()
-    try:
-        tasks = list(session.scalars(
-            select(WorkflowTask)
-            .where(
-                WorkflowTask.deleted_at.is_(None),
-                func.upper(WorkflowTask.status).in_(REUSABLE_REGENERATION_STATUSES),
-            )
-            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
-        ))
-        for task in tasks:
-            payload = task.payload_json if isinstance(task.payload_json, dict) else {}
-            if str(payload.get("regeneratedFromTaskId") or "") == task_id:
-                return restore_job_from_task(task.id)
-        return None
-    finally:
-        session.close()
+    """Backward-compatible alias for the renamed RunPod rework operation."""
+    return rework_history_item(task_id, user=user)
 
 
 def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> dict:

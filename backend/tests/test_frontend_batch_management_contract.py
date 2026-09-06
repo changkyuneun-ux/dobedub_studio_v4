@@ -144,47 +144,59 @@ def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
 
     runpod_history = source.split("function RunpodHistoryPromptDetail", 1)[0] if "function RunpodHistoryPromptDetail" in source else source
 
-    assert "regenerateHistoryItem: (taskId: string)" in client
-    assert "/api/history/${encodeURIComponent(taskId)}/regenerate" in client
+    assert "reworkHistoryItem: (taskId: string)" in client
+    assert "/api/history/${encodeURIComponent(taskId)}/rework" in client
+    assert "regenerateHistoryItem: (taskId: string)" not in client
     assert "selectedRunpodPromptItem" in source
     assert "RunpodHistoryPromptDetail" in source
     assert "프롬프트 내용" in source
     assert "positivePromptEntries(item)" in source
     assert "negativePromptEntries(item)" in source
     assert "setSelectedRunpodPromptItem(item)" in source
-    assert "retryingRunpodTaskIds" in source
-    assert "runpodRetryTaskIds" in source
-    assert "runpodRetryStatuses" in source
-    assert "runpodResultStatusLabel(item, retryStatus)" in source
-    assert "const resultStatusLabel = runpodResultStatusLabel(item, retryStatus)" in source
-    assert "apiClient.jobStatus(retryTaskId)" in source
-    assert "apiClient.regenerateHistoryItem(item.taskId)" in source
-    assert "재생성" in source
+    assert "reworkingRunpodTaskIds" in source
+    assert "runpodRetryTaskIds" not in source
+    assert "runpodRetryStatuses" not in source
+    assert "runpodResultStatusLabel(item)" in source
+    assert "const resultStatusLabel = runpodResultStatusLabel(item)" in source
+    assert "apiClient.jobStatus(retryTaskId)" not in source
+    assert "apiClient.reworkHistoryItem(item.taskId)" in source
+    assert "재작업" in source
+    assert "재생성" not in runpod_history
     assert "Batch ID / 작업자명 검색" in source
     assert "<span>ComfyUI Response</span>" not in runpod_history
     assert "v3-runpod-response-cell" not in runpod_history
 
 
-def test_batch_job_creation_uses_studio_confirm_modal_and_ten_second_default() -> None:
+def test_batch_job_creation_uses_zip_upload_studio_confirm_modal_and_ten_second_default() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
 
     assert "window.confirm" not in source
     assert "window.alert" not in source
-    assert "webkitdirectory" in source
-    assert 'node.setAttribute("directory"' in source
-    assert "폴더 선택" in source
+    assert "webkitdirectory" not in source
+    assert 'node.setAttribute("directory"' not in source
+    assert "apiClient.upload" not in source
+    assert "fileToDataUrl" not in source
+    assert "createBatchJobFromZip" in client
+    assert "FormData" in client
+    assert '"/api/batch-jobs/zip"' in client
+    assert '"Content-Type": "application/json"' not in client.split("function requestFormJson", 1)[1].split("export const apiClient", 1)[0]
+    assert "ZIP 파일 선택" in source
+    assert 'accept=".zip,application/zip,application/x-zip-compressed"' in source
     assert "confirmingBatch" in source
     assert "작업 요청 내역 확인" in source
     assert "워크플로우" in source
-    assert "폴더명" in source
-    assert "이미지수" in source
+    assert "ZIP 파일명" in source
+    assert "이미지수" not in source
     assert "길이" in source
     assert "진행하시겠습니까?" in source
     assert "setRequestedFrames(DEFAULT_REQUESTED_FRAMES)" in source
     assert "DEFAULT_REQUESTED_FRAMES = 161" in source
     assert "161f · 10초" in source
     assert "개 이미지를 선택했습니다." not in source
+    assert "selectedZipFile" in source
+    assert "createBatchJobFromZip({" in source
     assert ".v3-batch-confirm-modal" in css
 
 
@@ -199,13 +211,13 @@ def test_prompt_history_removes_negative_prompt_column() -> None:
 
 def test_runpod_retry_status_updates_result_column_not_download_action() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
-    download_cell = source.split("const retryDownloadItem", 1)[1].split("<span style={{ textAlign: \"right\" }}", 1)[0]
+    download_cell = source.split("const reworkInFlight", 1)[1].split("<span style={{ textAlign: \"right\" }}", 1)[0]
 
-    assert "const resultStatusLabel = runpodResultStatusLabel(item, retryStatus)" in source
+    assert "const resultStatusLabel = runpodResultStatusLabel(item)" in source
     assert '<span className={`v3-status-badge ${resultStatusTone}`}>{resultStatusLabel}</span>' in source
     assert "runpodRetryButtonLabel(item, retryStatus)" not in download_cell
-    assert "retryInFlight" in download_cell
-    assert "재생성" in download_cell
+    assert "reworkInFlight" in download_cell
+    assert "재작업" in download_cell
     assert "RunPod Queue" not in download_cell
     assert "진행 중" not in download_cell
     assert "제출 대기" not in download_cell
@@ -373,7 +385,8 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "프롬프트 생성" in screen
     assert "RunPod 영상 생성" in screen
     assert "Batch 작업 이력" in screen
-    assert "작업 폴더" in screen
+    assert "작업 ZIP" in screen
+    assert "ZIP 파일 선택" in screen
     assert "지시문 연결됨" in screen
     assert "길이 (프레임 수)" in screen
     assert "161f · 10초" in screen

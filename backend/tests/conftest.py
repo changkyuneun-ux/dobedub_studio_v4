@@ -16,9 +16,17 @@ from backend.app.db.base import Base  # noqa: E402
 from backend.app.db.session import SessionLocal, engine  # noqa: E402
 
 
+def _create_test_schema() -> None:
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    for table in Base.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(bind=engine, checkfirst=True)
+
+
 @pytest.fixture
 def db_session():
-    Base.metadata.create_all(bind=engine)
+    _create_test_schema()
     session = SessionLocal()
     try:
         yield session
@@ -34,7 +42,7 @@ def api_client():
 
     from backend.app.main import create_app
 
-    Base.metadata.create_all(bind=engine)
+    _create_test_schema()
     with TestClient(create_app()) as client:
         yield client
     Base.metadata.drop_all(bind=engine)

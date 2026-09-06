@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
 from backend.app.db.session import get_db
-from backend.app.services import batch_job_service, batch_zip_service
+from backend.app.services import batch_job_service, batch_zip_import_service, batch_zip_service
 
 router = APIRouter(prefix="/batch-jobs", tags=["batch-jobs"])
 
@@ -29,6 +29,36 @@ def create_batch_job(
     _require_batch_access(current_user)
     try:
         return batch_job_service.create_batch_job(db, payload, created_by=current_user.id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/zip")
+async def create_batch_job_from_zip(
+    workflowId: str = Form(...),
+    requestedFrames: int = Form(batch_job_service.DEFAULT_FRAMES),
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    _require_batch_access(current_user)
+    try:
+        imported = batch_zip_import_service.import_zip_bytes(
+            await file.read(),
+            zip_file_name=file.filename or "upload.zip",
+        )
+        return batch_job_service.create_batch_job(
+            db,
+            {
+                "workflowId": workflowId,
+                "requestedFrames": requestedFrames,
+                "sourceDirName": imported.source_dir_name,
+                "sourceZipFileName": imported.source_zip_file_name,
+                "items": imported.items,
+            },
+            created_by=current_user.id,
+        )
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc

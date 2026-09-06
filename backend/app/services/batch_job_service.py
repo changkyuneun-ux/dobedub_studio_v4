@@ -7,6 +7,7 @@ keeps denormalized counters so the dashboards never join across three tables.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -112,6 +113,40 @@ def _next_batch_job_id(db: Session, *, created_by: str, created_at: datetime) ->
     return f"{worker_token[:max_worker_length]}{suffix}"
 
 
+def _safe_batch_token(value: str, *, fallback: str = "unknown") -> str:
+    compact = "_".join(str(value or "").strip().split())
+    compact = compact.replace("/", "_").replace("\\", "_").replace(":", "_")
+    cleaned = "".join(ch for ch in compact if ch.isprintable()).strip("._")
+    return cleaned or fallback
+
+
+def _fit_zip_batch_job_id(
+    worker_token: str,
+    zip_token: str,
+    date_suffix: str,
+    collision_suffix: str,
+    *,
+    max_length: int = 64,
+) -> str:
+    fixed_length = len(worker_token) + 1 + len(date_suffix) + len(collision_suffix)
+    max_zip_length = max(1, max_length - fixed_length)
+    return f"{worker_token}_{zip_token[:max_zip_length]}{date_suffix}{collision_suffix}"
+
+
+def _next_zip_batch_job_id(db: Session, *, created_by: str, created_at: datetime, zip_file_name: str) -> str:
+    created_at_utc = _aware_utc(created_at)
+    date_suffix = f"_{created_at_utc.astimezone(SEOUL_TIMEZONE).strftime('%y%m%d')}"
+    worker_token = _safe_batch_token(_worker_batch_token(db, created_by))
+    zip_token = _safe_batch_token(Path(Path(zip_file_name).name).stem, fallback="upload")
+    candidate = _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, "")
+    sequence = 2
+    while db.get(BatchJob, candidate) is not None:
+        collision_suffix = f"_{sequence}"
+        candidate = _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, collision_suffix)
+        sequence += 1
+    return candidate
+
+
 def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -> dict[str, Any]:
     """Create the batch job and its prompt generation batch in one transaction."""
     workflow_id = str(payload.get("workflowId") or "").strip()
@@ -123,8 +158,13 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     requested_frames = _validated_frames(payload.get("requestedFrames", DEFAULT_FRAMES))
 
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
+    source_zip_file_name = str(payload.get("sourceZipFileName") or "").strip()
     batch = BatchJob(
-        id=_next_batch_job_id(db, created_by=created_by, created_at=created_at),
+        id=(
+            _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
+            if source_zip_file_name
+            else _next_batch_job_id(db, created_by=created_by, created_at=created_at)
+        ),
         workflow_id=workflow_id,
         status=BATCH_JOB_INCOMPLETE,
         source_dir_name=str(payload.get("sourceDirName") or "").strip()[:512] or None,
