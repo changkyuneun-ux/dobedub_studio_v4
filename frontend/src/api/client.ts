@@ -391,6 +391,10 @@ export type BatchJobListResponse = {
   workers: Array<{ workerId: string; workerName: string }>;
 };
 
+export type BatchJobCandidateListResponse = {
+  items: BatchJobResponse[];
+};
+
 export type ActiveBatchJobListResponse = {
   items: BatchJobResponse[];
 };
@@ -1340,6 +1344,12 @@ export const apiClient = {
     return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
   },
   activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
+  batchJobCandidates: (params: { query: string; limit?: number }) => {
+    const query = new URLSearchParams();
+    query.set("query", params.query);
+    query.set("limit", String(params.limit || 10));
+    return requestJson<BatchJobCandidateListResponse>(`/api/batch-jobs/search?${query.toString()}`);
+  },
   batchJobs: (params: { page?: number; dateFrom?: string; dateTo?: string; workerId?: string; status?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));

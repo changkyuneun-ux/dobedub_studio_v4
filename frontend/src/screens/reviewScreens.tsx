@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   apiClient,
+  BatchJobResponse,
   HealthResponse,
   HistoryItem,
   AssetItem,
@@ -47,6 +48,12 @@ function runpodResultStatusLabel(item: HistoryItem) {
   if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Completed";
   if (normalized === "FAILED" || normalized === "CANCELLED" || normalized === "TIMED_OUT") return "Failed";
   return item.statusLabel || item.status || "-";
+}
+
+function batchZipDownloadName(batch: BatchJobResponse) {
+  const source = String(batch.sourceZipFileName || batch.sourceDirName || batch.id || "batch").trim();
+  const base = source.replace(/\.zip$/i, "") || "batch";
+  return `${base}_output.zip`;
 }
 
 const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(88px, .55fr) 52px";
@@ -155,10 +162,15 @@ export function Create3aScreen({
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
-  const [runpodBatchFilter, setRunpodBatchFilter] = useState("");
+  const [batchSearchText, setBatchSearchText] = useState("");
+  const [selectedBatchJob, setSelectedBatchJob] = useState<BatchJobResponse | null>(null);
+  const [batchCandidates, setBatchCandidates] = useState<BatchJobResponse[]>([]);
+  const [batchSearchLoading, setBatchSearchLoading] = useState(false);
+  const [batchCandidateOpen, setBatchCandidateOpen] = useState(false);
   const [runpodWorkerFilter, setRunpodWorkerFilter] = useState("");
   const [runpodRunDate, setRunpodRunDate] = useState("");
   const [selectedPromptHistoryItem, setSelectedPromptHistoryItem] = useState<GrokImagePromptDraftResponse | null>(null);
+  const selectedBatchJobId = selectedBatchJob?.id || "";
   // 2026-08-11: 우측 패널 아코디언 펼침 상태 - Assets는 기본 펼침(결과물을 바로
   // 확인하는 빈도가 가장 높다는 판단), Node Config·Prompt Review는 기본 접힘.
   // 선택한 Run이 바뀌어도 사용자가 펼쳐둔 섹션은 유지한다(세션 내 UX 편의).
@@ -176,7 +188,7 @@ export function Create3aScreen({
     setRunpodHistoryNotice("");
     setRunpodHistoryNoticeKind("error");
     setSelectedRunpodTaskIds([]);
-    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })
+    apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })
       .then((response) => {
         if (!active) return;
         setRunpodHistoryItems(response.items);
@@ -195,14 +207,47 @@ export function Create3aScreen({
     return () => {
       active = false;
     };
-  }, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
+  }, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId]);
+
+  useEffect(() => {
+    if (historyTab !== "runpod") return;
+    const query = batchSearchText.trim();
+    if (!query || (selectedBatchJob && query === selectedBatchJob.id)) {
+      setBatchCandidates([]);
+      setBatchCandidateOpen(false);
+      setBatchSearchLoading(false);
+      return;
+    }
+    let active = true;
+    setBatchSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      apiClient.batchJobCandidates({ query, limit: 10 })
+        .then((response) => {
+          if (!active) return;
+          setBatchCandidates(response.items || []);
+          setBatchCandidateOpen(true);
+        })
+        .catch(() => {
+          if (!active) return;
+          setBatchCandidates([]);
+          setBatchCandidateOpen(true);
+        })
+        .finally(() => {
+          if (active) setBatchSearchLoading(false);
+        });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [historyTab, batchSearchText, selectedBatchJob]);
 
   useEffect(() => {
     if (historyTab !== "runpod") return;
     if (!reworkingRunpodTaskIds.length) return;
     let active = true;
     const refreshReworkedTasks = async () => {
-      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
       if (!active) return;
       setRunpodHistoryItems(response.items);
       setRunpodHistoryTotal(response.total);
@@ -220,7 +265,7 @@ export function Create3aScreen({
       active = false;
       window.clearInterval(timer);
     };
-  }, [historyTab, reworkingRunpodTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);
+  }, [historyTab, reworkingRunpodTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId]);
 
   const filteredHistory = runpodHistoryItems.filter((item) => {
     if (runpodResultFilter === "all") return true;
@@ -254,16 +299,15 @@ export function Create3aScreen({
     setSelectedRunpodTaskIds(allTerminalItemsSelected ? [] : terminalRunpodItems.map((item) => item.taskId));
   };
   async function downloadFilteredBatchZip() {
-    const batchId = runpodBatchFilter.trim();
-    if (!batchId) return;
+    if (!selectedBatchJob) return;
     setRunpodHistoryNotice("");
     setRunpodHistoryNoticeKind("error");
     try {
-      const blob = await apiClient.batchJobZip(batchId);
+      const blob = await apiClient.batchJobZip(selectedBatchJob.id);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${batchId}.zip`;
+      anchor.download = batchZipDownloadName(selectedBatchJob);
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -280,7 +324,7 @@ export function Create3aScreen({
     setReworkingRunpodTaskIds((current) => current.includes(item.taskId) ? current : [...current, item.taskId]);
     try {
       const job = await apiClient.reworkHistoryItem(item.taskId);
-      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter });
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
       setRunpodHistoryItems(response.items.map((historyItem) => historyItem.taskId === item.taskId ? { ...historyItem, status: job.status, runpodJobId: job.runpodJobId || historyItem.runpodJobId, lastDispatchError: job.lastDispatchError || undefined } : historyItem));
       setRunpodHistoryTotal(response.total);
       setRunpodHistoryNoticeKind("success");
@@ -504,7 +548,48 @@ export function Create3aScreen({
         <div className="v3-runpod-filter-bar v3-runpod-history-filters">
           <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
           <label>실행일<input type="date" value={runpodRunDate} onChange={(event) => { setRunpodRunDate(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
-          <label>Batch ID<input value={runpodBatchFilter} onChange={(event) => { setRunpodBatchFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="Batch ID / 작업자명 검색" /></label>
+          <label className="v3-batch-search-field">Batch ID
+            <input
+              value={batchSearchText}
+              onBlur={() => window.setTimeout(() => setBatchCandidateOpen(false), 160)}
+              onChange={(event) => {
+                setBatchSearchText(event.target.value);
+                setSelectedBatchJob(null);
+                setRunpodPage(1);
+                setSelectedRunpodTaskIds([]);
+              }}
+              onFocus={() => {
+                if (batchSearchText.trim()) setBatchCandidateOpen(true);
+              }}
+              placeholder="Batch ID / 작업자명 검색"
+            />
+            {selectedBatchJob ? <span className="v3-batch-selected-label">선택됨 · {selectedBatchJob.id}</span> : null}
+            {batchCandidateOpen && batchSearchText.trim() && !selectedBatchJob ? (
+              <div className="v3-batch-candidate-list" role="listbox" aria-label="Batch ID 검색 결과">
+                {batchSearchLoading ? <div className="v3-batch-candidate-empty">검색 중...</div> : null}
+                {!batchSearchLoading && !batchCandidates.length ? <div className="v3-batch-candidate-empty">검색 결과 없음</div> : null}
+                {!batchSearchLoading && batchCandidates.map((candidate) => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    role="option"
+                    className="v3-batch-candidate-option"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setSelectedBatchJob(candidate);
+                      setBatchSearchText(candidate.id);
+                      setBatchCandidateOpen(false);
+                      setRunpodPage(1);
+                      setSelectedRunpodTaskIds([]);
+                    }}
+                  >
+                    <strong>{candidate.id}</strong>
+                    <span>{candidate.createdByName || candidate.createdBy || "-"} · {candidate.totalImages}건 · 완료 {candidate.videoCompletedCount}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </label>
           <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
           <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option></select></label>
         </div>
@@ -512,7 +597,7 @@ export function Create3aScreen({
           <button
             className="v3-secondary-button"
             type="button"
-            disabled={!runpodBatchFilter.trim()}
+            disabled={!selectedBatchJob}
             onClick={downloadFilteredBatchZip}
           >
             배치 ZIP

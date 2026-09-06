@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import unicodedata
 import uuid
 import zipfile
 
@@ -406,6 +407,42 @@ def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, mon
     assert payload["totalImages"] == 2
     assert payload["sourceDirName"] == "root"
     assert payload["requestedFrames"] == 161
+
+
+def test_batch_job_search_finds_partial_worker_and_nfc_nfd_batch_ids(api_client):
+    decomposed_id = unicodedata.normalize("NFD", "장균은_2권_08-10화_260906")
+    session = SessionLocal()
+    try:
+        session.add(User(id="history-admin", name="History Admin", role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True))
+        session.add(User(id="zip_operator", name=unicodedata.normalize("NFD", "장균은"), role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True))
+        session.add(BatchJob(
+            id=decomposed_id,
+            workflow_id="1-images.json",
+            status="COMPLETE",
+            source_dir_name=unicodedata.normalize("NFD", "2권 08-10화"),
+            source_zip_file_name=unicodedata.normalize("NFD", "2권 08-10화.zip"),
+            requested_frames=161,
+            duration_seconds=10,
+            total_images=170,
+            video_completed_count=4,
+            created_by="zip_operator",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get(
+        "/api/batch-jobs/search?query=장균은_2권&limit=10",
+        headers=_headers("history-admin", name="History Admin", role="SUPER_ADMIN"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["id"] == decomposed_id
+    assert payload["items"][0]["createdByName"] == unicodedata.normalize("NFD", "장균은")
+    assert payload["items"][0]["sourceZipFileName"] == unicodedata.normalize("NFD", "2권 08-10화.zip")
+    assert payload["items"][0]["totalImages"] == 170
+    assert payload["items"][0]["videoCompletedCount"] == 4
 
 
 @pytest.mark.parametrize("frames, expected_seconds", [(49, 3), (81, 5), (161, 10)])

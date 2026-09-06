@@ -774,7 +774,7 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("dateFrom", params.dateFrom)' not in runpod_history_client
     assert 'query.set("dateTo", params.dateTo)' not in runpod_history_client
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in screen
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })" in screen
     assert 'query.set("batchId", params.batchId)' in client
     assert "v3-runpod-history-toolbar" in screen
     assert "v3-runpod-history-actions" in screen
@@ -782,7 +782,8 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "runpodRunDate" in screen
     assert "runpodDateFrom" not in screen
     assert "runpodDateTo" not in screen
-    assert "runpodBatchFilter" in screen
+    assert "batchSearchText" in screen
+    assert "selectedBatchJobId" in screen
     assert "selectedPromptHistoryDraftId" in screen
     assert "setItems(response.items)" in screen
     assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen

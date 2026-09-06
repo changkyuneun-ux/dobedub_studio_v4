@@ -74,6 +74,21 @@ def active_batch_jobs(
     return batch_job_service.list_active_batch_jobs(db, created_by=_scope(current_user))
 
 
+@router.get("/search")
+def batch_job_candidates(
+    query: str = Query(""),
+    limit: int = Query(10),
+    current_user: CurrentUser = Depends(require_permission("history:read")),
+    db: Session = Depends(get_db),
+):
+    return batch_job_service.list_batch_job_candidates(
+        db,
+        created_by=_scope(current_user),
+        query=query,
+        limit=limit,
+    )
+
+
 @router.get("")
 def batch_job_history(
     page: int = 1,

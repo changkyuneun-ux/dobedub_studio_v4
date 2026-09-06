@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -85,7 +86,7 @@ def _aware_utc(value: datetime) -> datetime:
 def _worker_batch_token(db: Session, created_by: str) -> str:
     user = db.get(User, created_by) if created_by else None
     raw = str(user.name if user and user.name else created_by or "unknown").strip()
-    compact = "_".join(raw.split())
+    compact = "_".join(unicodedata.normalize("NFC", raw).split())
     return compact or "unknown"
 
 
@@ -114,7 +115,7 @@ def _next_batch_job_id(db: Session, *, created_by: str, created_at: datetime) ->
 
 
 def _safe_batch_token(value: str, *, fallback: str = "unknown") -> str:
-    compact = "_".join(str(value or "").strip().split())
+    compact = "_".join(unicodedata.normalize("NFC", str(value or "").strip()).split())
     compact = compact.replace("/", "_").replace("\\", "_").replace(":", "_")
     cleaned = "".join(ch for ch in compact if ch.isprintable()).strip("._")
     return cleaned or fallback
@@ -158,7 +159,8 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     requested_frames = _validated_frames(payload.get("requestedFrames", DEFAULT_FRAMES))
 
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
-    source_zip_file_name = str(payload.get("sourceZipFileName") or "").strip()
+    source_dir_name = unicodedata.normalize("NFC", str(payload.get("sourceDirName") or "").strip())
+    source_zip_file_name = unicodedata.normalize("NFC", str(payload.get("sourceZipFileName") or "").strip())
     batch = BatchJob(
         id=(
             _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
@@ -167,7 +169,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         ),
         workflow_id=workflow_id,
         status=BATCH_JOB_INCOMPLETE,
-        source_dir_name=str(payload.get("sourceDirName") or "").strip()[:512] or None,
+        source_dir_name=source_dir_name[:512] or None,
         source_zip_file_name=source_zip_file_name[:512] or None,
         requested_frames=requested_frames,
         duration_seconds=resolve_duration_seconds(workflow_id, requested_frames),
@@ -268,6 +270,76 @@ def _user_name(db: Session, user_id: str | None) -> str | None:
         return None
     user = db.get(User, user_id)
     return user.name if user else None
+
+
+def _normalized_search_text(value: str | None) -> str:
+    return unicodedata.normalize("NFC", str(value or "")).casefold()
+
+
+def _batch_candidate_payload(batch: BatchJob, worker_name: str | None) -> dict[str, Any]:
+    return {
+        "id": batch.id,
+        "workflowId": batch.workflow_id,
+        "status": batch.status,
+        "sourceDirName": batch.source_dir_name,
+        "sourceZipFileName": batch.source_zip_file_name,
+        "requestedFrames": batch.requested_frames,
+        "durationSeconds": batch.duration_seconds,
+        "totalImages": batch.total_images,
+        "promptCompletedCount": batch.prompt_completed_count,
+        "promptFailedCount": batch.prompt_failed_count,
+        "videoRequestedCount": batch.video_requested_count,
+        "videoCompletedCount": batch.video_completed_count,
+        "videoFailedCount": batch.video_failed_count,
+        "promptWaiting": batch.prompt_waiting_count,
+        "promptGenerating": batch.prompt_generating_count,
+        "runpodPendingSubmit": batch.runpod_pending_submit_count,
+        "runpodQueued": batch.runpod_queued_count,
+        "runpodInProgress": batch.runpod_in_progress_count,
+        "failedCount": batch.prompt_failed_count + batch.video_failed_count,
+        "lastDownloadedAt": batch.last_downloaded_at.isoformat() if batch.last_downloaded_at else None,
+        "createdBy": batch.created_by,
+        "createdByName": worker_name or batch.created_by,
+        "createdAt": batch.created_at.isoformat() if batch.created_at else None,
+        "updatedAt": batch.updated_at.isoformat() if batch.updated_at else None,
+    }
+
+
+def list_batch_job_candidates(
+    db: Session,
+    *,
+    created_by: str | None,
+    query: str,
+    limit: int = 10,
+) -> dict[str, Any]:
+    needle = _normalized_search_text(query).strip()
+    safe_limit = max(1, min(20, int(limit or 10)))
+    if not needle:
+        return {"items": []}
+
+    statement = (
+        select(BatchJob, User.name)
+        .join(User, User.id == BatchJob.created_by, isouter=True)
+        .order_by(BatchJob.created_at.desc(), BatchJob.id.desc())
+        .limit(1000)
+    )
+    if created_by:
+        statement = statement.where(BatchJob.created_by == created_by)
+
+    items: list[dict[str, Any]] = []
+    for batch, worker_name in db.execute(statement).all():
+        haystacks = (
+            batch.id,
+            batch.source_dir_name,
+            batch.source_zip_file_name,
+            batch.created_by,
+            worker_name,
+        )
+        if any(needle in _normalized_search_text(value) for value in haystacks):
+            items.append(_batch_candidate_payload(batch, worker_name))
+            if len(items) >= safe_limit:
+                break
+    return {"items": items}
 
 
 def promote_ready_batch_drafts() -> dict[str, Any]:
@@ -621,6 +693,7 @@ __all__ = [
     "resolve_duration_seconds",
     "create_batch_job",
     "batch_job_payload",
+    "list_batch_job_candidates",
     "claim_batch_drafts_for_promotion",
     "still_owns_claim",
     "release_promotion_claim",

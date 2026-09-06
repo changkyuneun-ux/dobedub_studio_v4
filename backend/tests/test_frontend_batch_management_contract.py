@@ -101,7 +101,7 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in source
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: runpodBatchFilter })" in source
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })" in source
     assert "v3-runpod-history-toolbar" in source
     assert "v3-runpod-history-actions" in source
     assert "runpodResponse?.filename" in source
@@ -110,7 +110,21 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     assert "실행일 시작" not in source
     assert "실행일 종료" not in source
     assert "실행일<input type=\"date\" value={runpodRunDate}" in source
-    assert "}, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, runpodBatchFilter]);" in source
+    assert "}, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId]);" in source
+
+
+def test_runpod_history_batch_zip_uses_selected_batch_candidate_not_search_text() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+
+    assert "batchJobCandidates" in client
+    assert "selectedBatchJob" in source
+    assert "setSelectedBatchJob(null)" in source
+    assert "apiClient.batchJobZip(selectedBatchJob.id)" in source
+    assert "disabled={!selectedBatchJob}" in source
+    assert "v3-batch-candidate-list" in source
+    assert "batchSearchText" in source
+    assert "const batchId = runpodBatchFilter.trim()" not in source
 
 
 def test_runpod_history_supports_selected_bulk_download_and_delete() -> None:
