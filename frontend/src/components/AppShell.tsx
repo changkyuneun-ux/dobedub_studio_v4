@@ -27,8 +27,8 @@ export const AppShellChromeContext = React.createContext<AppShellChrome | null>(
 // 순서대로 이관). 지금은 신규 화면을 지을 때 쓸 재사용 가능한 뼈대만 갖춘 상태다.
 //
 // 사이드바 상단 고정 메뉴는 두 가지 영역(area)으로 나뉜다 - design_handoff의
-// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(프롬프트 생성 관리 /
-// RunPod 요청 관리 / Task History / 컬렉션 관리)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
+// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(작업 이력 /
+// Batch 처리 / 단위 작업 / Collection 관리)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
 // 프롬프트 카탈로그 / 워크플로 정의 / Sandbox Pod / 감사 로그)을 공통으로 반복한다.
 // 각 화면이 다르게 그리는 부분(스텝 트래커, 필터, 카탈로그 트리 등)은 sidebarExtra로,
 // 화면 하단 고정 정보(서비스 상태, 보관 기한 안내 등)는 sidebarFooter로 화면이 채운다.
@@ -52,14 +52,14 @@ type NavItem = {
 
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
-  { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
-  { key: "batchJobs", label: "배치 작업 요청 관리", permissions: ["prompts:build", "jobs:run"] },
-  { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
-  { key: "taskHistory", label: "Task History", permission: "history:read" },
+  { key: "taskHistory", label: "작업 이력", permission: "history:read" },
+  { key: "batchJobs", label: "Batch 처리", permissions: ["prompts:build", "jobs:run"] },
+  { key: "promptManagement", label: "Grok 프롬프트 생성", permission: "prompts:build" },
+  { key: "runpodRequests", label: "Runpod ComfyUI 요청", permission: "jobs:run" },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "컬렉션 관리" 한
   // 화면으로 통합 - 사이드바 메뉴도 컬렉션 관리 하나로 줄었다(컬렉션은 그 화면
   // 안의 필터로 이동).
-  { key: "assets", label: "컬렉션 관리", permission: "history:read" }
+  { key: "assets", label: "Collection 관리", permission: "history:read" }
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.

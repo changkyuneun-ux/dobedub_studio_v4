@@ -262,7 +262,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   }
 
   return (
-    <AppShell user={user} area="generate" activeItem="promptManagement" onNavigate={(key) => shellNavigate(key, onGoTo)} headerEyebrow="GENERATE · PROMPT MANAGEMENT" headerTitle="프롬프트 생성 관리" headerActions={<span className="v3-status-chip is-ok">{generating ? "GROK GENERATING" : "GROK CONFIGURED"}</span>}>
+    <AppShell user={user} area="generate" activeItem="promptManagement" onNavigate={(key) => shellNavigate(key, onGoTo)} headerEyebrow="GENERATE · PROMPT MANAGEMENT" headerTitle="Grok 프롬프트 생성" headerActions={<span className="v3-status-chip is-ok">{generating ? "GROK GENERATING" : "GROK CONFIGURED"}</span>}>
       <section className="v3-card v3-prompt-workflow-card">
         <div className="v3-card-header"><div className="v3-card-header-title">Prompt Workflow</div><span className="v3-muted-text">프롬프트 생성 전에 워크플로우 지시문을 선택합니다.</span></div>
         <div className="v3-prompt-workflow-list">{workflows.map((workflow) => <button key={workflow.id} type="button" className={`v3-prompt-workflow-option ${workflow.id === workflowId ? "is-selected" : ""}`} onClick={() => selectWorkflow(workflow.id)}><b>{workflowName(workflow)}</b><small>{workflow.keyframeCount || 1} kf · {workflow.id === workflowId ? "SELECTED" : "ACTIVE"}</small></button>)}</div>

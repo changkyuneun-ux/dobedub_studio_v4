@@ -69,7 +69,7 @@ def test_prompt_history_returns_image_prompt_and_grok_metadata(api_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["pageSize"] == 20
+    assert body["pageSize"] == 10
     assert body["total"] == 1
     item = body["items"][0]
     assert item["createdBy"] == "history-user"
@@ -236,7 +236,7 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["pageSize"] == 20
+    assert body["pageSize"] == 10
     assert body["total"] == 1
     item = body["items"][0]
     assert item["taskId"] == "task_history_runpod_1"

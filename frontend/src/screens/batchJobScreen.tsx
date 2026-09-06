@@ -204,7 +204,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         activeItem="batchJobs"
         onNavigate={(key) => shellNavigate(key, onGoTo)}
         headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"
-        headerTitle="Batch 작업 요청 관리"
+        headerTitle="Batch 처리"
         headerActions={<span className="v3-status-chip is-ok">GROK CONFIGURED</span>}
       >
         <section className="v3-screen-section v3-batch-management-section">

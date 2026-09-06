@@ -165,11 +165,11 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 }
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
-  "create.promptManagement": "프롬프트 생성 관리",
-  "create.batchJobs": "배치 작업 요청 관리",
-  "create.runpodRequests": "RunPod 요청 관리",
-  "review.history": "Task History",
-  "review.assets": "컬렉션 관리",
+  "create.promptManagement": "Grok 프롬프트 생성",
+  "create.batchJobs": "Batch 처리",
+  "create.runpodRequests": "Runpod ComfyUI 요청",
+  "review.history": "작업 이력",
+  "review.assets": "Collection 관리",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
   "admin.taskPolicy": "Task Policy",

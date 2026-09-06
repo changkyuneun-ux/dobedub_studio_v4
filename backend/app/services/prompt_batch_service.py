@@ -69,6 +69,14 @@ def create_prompt_generation_batch(
             raise ValueError("각 이미지에 assetId가 필요합니다.")
         slot_index = _positive_int(source.get("slotIndex"), fallback_slot)
         requested_frames = _positive_int(source.get("requestedFrames"), 81)
+        source_metadata = {
+            key: value
+            for key, value in {
+                "sourceRelativePath": str(source.get("sourceRelativePath") or "").strip(),
+                "sourceZipFileName": str(source.get("sourceZipFileName") or "").strip(),
+            }.items()
+            if value
+        }
         draft = ImagePromptDraft(
             id=f"grok_draft_{uuid.uuid4().hex[:16]}",
             asset_id=asset_id,
@@ -82,7 +90,7 @@ def create_prompt_generation_batch(
             negative_prompt=str(source.get("negativePrompt") or "").strip() or None,
             requested_frames=requested_frames,
             warnings_json=[],
-            raw_json={},
+            raw_json=source_metadata,
             created_by=created_by,
             batch_job_id=batch_job_id,
         )
@@ -324,11 +332,12 @@ def update_prompt_draft(
 
 def retry_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[str, Any]:
     draft = _owned_draft(db, draft_id, created_by)
+    source_metadata = _draft_source_metadata(draft)
     draft.status = DRAFT_PENDING
     draft.positive_prompt = None
     draft.failure_message = None
     draft.warnings_json = []
-    draft.raw_json = {}
+    draft.raw_json = source_metadata
     _refresh_batch_counts(db, draft.prompt_batch_id)
     db.commit()
     db.refresh(draft)
@@ -368,6 +377,15 @@ def _owned_draft(db: Session, draft_id: str, created_by: str) -> ImagePromptDraf
     return draft
 
 
+def _draft_source_metadata(draft: ImagePromptDraft) -> dict[str, str]:
+    raw = draft.raw_json if isinstance(draft.raw_json, dict) else {}
+    return {
+        key: str(raw.get(key) or "").strip()
+        for key in ("sourceRelativePath", "sourceZipFileName")
+        if str(raw.get(key) or "").strip()
+    }
+
+
 def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
     batch = db.get(PromptGenerationBatch, draft.prompt_batch_id) if draft.prompt_batch_id else None
     if batch is not None:
@@ -389,6 +407,7 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
     db.commit()
     started_clock = time.monotonic()
     try:
+        source_metadata = _draft_source_metadata(draft)
         instruction_text, _ = active_instruction_text(draft.workflow_id)
         asset, asset_path = studio_api_service.get_asset(draft.asset_id)
         result = generate_image_prompt(
@@ -403,7 +422,7 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
         draft.status = "MANUAL_REQUIRED" if not result.positive_prompt else DRAFT_READY
         draft.positive_prompt = result.positive_prompt
         draft.warnings_json = result.warnings
-        draft.raw_json = {"imageType": result.image_type, "response": result.raw_response}
+        draft.raw_json = {**source_metadata, "imageType": result.image_type, "response": result.raw_response}
         attempt.status = DRAFT_READY
         attempt.response_json = result.raw_response
         attempt.input_tokens, attempt.output_tokens = _usage_tokens(result.raw_response)

@@ -40,6 +40,7 @@ def test_batch_job_table_exists(db_session):
         "workflow_id",
         "status",
         "source_dir_name",
+        "source_zip_file_name",
         "requested_frames",
         "duration_seconds",
         "total_images",
@@ -225,6 +226,40 @@ def test_create_zip_batch_job_id_uses_worker_zip_name_and_kst_date(db_session, m
     )
 
     assert result["id"] == "장균은_픽미툰_씬_260904"
+    assert result["sourceZipFileName"] == "픽미툰_씬.zip"
+
+
+def test_create_zip_batch_job_preserves_source_relative_paths_on_drafts(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+
+    result = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "홍길동",
+            "sourceZipFileName": "홍길동.zip",
+            "requestedFrames": 81,
+            "items": [
+                {"assetId": "asset_1", "fileName": "a.jpg", "relativePath": "홍길동/홍길동1/a.jpg"},
+                {"assetId": "asset_2", "fileName": "b.jpg", "relativePath": "홍길동/홍길동2/b.jpg"},
+            ],
+        },
+        created_by=user.id,
+    )
+
+    drafts = db_session.scalars(
+        select(ImagePromptDraft)
+        .where(ImagePromptDraft.batch_job_id == result["id"])
+        .order_by(ImagePromptDraft.slot_index.asc())
+    ).all()
+    assert [draft.raw_json["sourceRelativePath"] for draft in drafts] == [
+        "홍길동/홍길동1/a.jpg",
+        "홍길동/홍길동2/b.jpg",
+    ]
+    assert {draft.raw_json["sourceZipFileName"] for draft in drafts} == {"홍길동.zip"}
 
 
 def test_create_zip_batch_job_id_adds_suffix_for_same_worker_zip_and_day(db_session, monkeypatch):

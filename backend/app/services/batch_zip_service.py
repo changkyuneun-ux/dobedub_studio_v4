@@ -1,14 +1,16 @@
-"""Stream completed batch outputs as an output/-prefixed ZIP archive."""
+"""Stream completed batch outputs as a source-shaped ZIP archive."""
 from __future__ import annotations
 
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Iterator
 import zipfile
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.db.models import Asset, BatchJob, TaskInputAsset, TaskOutputAsset, WorkflowTask
+from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, TaskInputAsset, TaskOutputAsset, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services import batch_job_service
 
@@ -29,7 +31,68 @@ def zip_entry_name(source_file_name: str, used: set[str]) -> str:
     return f"{OUTPUT_DIR}/{stem}-{index}.mp4"
 
 
+def batch_output_zip_filename(batch: BatchJob) -> str:
+    source_name = str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip()
+    stem = Path(Path(source_name).name).stem or "batch"
+    return f"{stem}_output.zip"
+
+
+def content_disposition_for_batch_zip(batch: BatchJob) -> str:
+    filename = batch_output_zip_filename(batch)
+    fallback = "batch_output.zip"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def zip_entry_name_for_source_path(
+    *,
+    source_file_name: str,
+    source_relative_path: str,
+    source_root_name: str,
+    output_root_name: str,
+    used: set[str],
+) -> str:
+    relative_path = _safe_relative_path(source_relative_path)
+    if relative_path is None:
+        return zip_entry_name(source_file_name, used)
+
+    parts = list(relative_path.parts)
+    if source_root_name and parts and parts[0] == source_root_name and len(parts) > 1:
+        parts = parts[1:]
+    if not parts:
+        return zip_entry_name(source_file_name, used)
+
+    output_dirs = [f"{part}_output" for part in parts[:-1]]
+    file_stem = PurePosixPath(parts[-1]).stem or Path(str(source_file_name or "video")).stem or "video"
+    prefix = "/".join([output_root_name, *output_dirs])
+    candidate = f"{prefix}/{file_stem}.mp4"
+    if candidate not in used:
+        return candidate
+    index = 1
+    while f"{prefix}/{file_stem}-{index}.mp4" in used:
+        index += 1
+    return f"{prefix}/{file_stem}-{index}.mp4"
+
+
+def _safe_relative_path(value: str) -> PurePosixPath | None:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return None
+    path = PurePosixPath(raw)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path
+
+
+def _output_root_name(batch: BatchJob) -> str:
+    source_name = str(batch.source_zip_file_name or batch.source_dir_name or batch.id or "batch").strip()
+    stem = Path(Path(source_name).name).stem or "batch"
+    return f"{stem}_output"
+
+
 def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str] | None) -> list[dict]:
+    batch = db.get(BatchJob, batch_job_id)
+    if batch is None:
+        raise ValueError("배치 작업을 찾을 수 없습니다.")
     query = (
         select(WorkflowTask.id, TaskOutputAsset.asset_id, Asset.file_name)
         .join(TaskOutputAsset, TaskOutputAsset.task_id == WorkflowTask.id)
@@ -48,24 +111,40 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
     used: set[str] = set()
     collected: list[dict] = []
     for task_id, asset_id, output_file_name in db.execute(query).all():
-        base_name = source_names.get(str(task_id)) or output_file_name or task_id
-        entry = zip_entry_name(str(base_name), used)
+        source = source_names.get(str(task_id)) or {}
+        source_file_name = str(source.get("fileName") or output_file_name or task_id)
+        source_relative_path = str(source.get("relativePath") or "")
+        if source_relative_path:
+            entry = zip_entry_name_for_source_path(
+                source_file_name=source_file_name,
+                source_relative_path=source_relative_path,
+                source_root_name=str(batch.source_dir_name or ""),
+                output_root_name=_output_root_name(batch),
+                used=used,
+            )
+        else:
+            entry = zip_entry_name(source_file_name, used)
         used.add(entry)
         collected.append({"assetId": str(asset_id), "entryName": entry})
     return collected
 
 
-def _source_file_names(db: Session, batch_job_id: str) -> dict[str, str]:
+def _source_file_names(db: Session, batch_job_id: str) -> dict[str, dict[str, str]]:
     rows = db.execute(
-        select(WorkflowTask.id, Asset.file_name)
+        select(WorkflowTask.id, Asset.file_name, ImagePromptDraft.raw_json)
         .join(TaskInputAsset, TaskInputAsset.task_id == WorkflowTask.id)
         .join(Asset, Asset.id == TaskInputAsset.asset_id)
+        .outerjoin(ImagePromptDraft, ImagePromptDraft.id == WorkflowTask.prompt_draft_id)
         .where(WorkflowTask.batch_job_id == batch_job_id)
         .order_by(TaskInputAsset.slot_index.asc())
     ).all()
-    names: dict[str, str] = {}
-    for task_id, file_name in rows:
-        names.setdefault(str(task_id), str(file_name))
+    names: dict[str, dict[str, str]] = {}
+    for task_id, file_name, raw_json in rows:
+        raw = raw_json if isinstance(raw_json, dict) else {}
+        names.setdefault(str(task_id), {
+            "fileName": str(file_name),
+            "relativePath": str(raw.get("sourceRelativePath") or ""),
+        })
     return names
 
 

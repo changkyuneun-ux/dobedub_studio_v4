@@ -333,6 +333,14 @@ def test_instruction_copy_source_uses_the_shared_workflow_select_style() -> None
     assert "v3-grok-workflow-select-control" in screen
 
 
+def test_generate_sidebar_labels_do_not_include_unit_task_suffix() -> None:
+    shell = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
+
+    assert 'label: "Grok 프롬프트 생성"' in shell
+    assert 'label: "Runpod ComfyUI 요청"' in shell
+    assert "(단위작업)" not in shell
+
+
 def test_admin_navigation_uses_the_korean_prompt_instruction_label() -> None:
     source = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
 
@@ -348,7 +356,7 @@ def test_prompt_library_menu_is_removed_from_generate_sidebar() -> None:
 
     assert "promptLibrary" not in generate_nav
     assert "Prompt Library" not in generate_nav
-    assert '{ key: "assets", label: "컬렉션 관리", permission: "history:read" }' in generate_nav
+    assert '{ key: "assets", label: "Collection 관리", permission: "history:read" }' in generate_nav
 
 
 def test_assets_collection_management_uses_body_filters_without_sidebar_buttons() -> None:
@@ -379,7 +387,7 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
 
     assert 'headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"' in screen
-    assert 'headerTitle="Batch 작업 요청 관리"' in screen
+    assert 'headerTitle="Batch 처리"' in screen
     assert "Batch 생성" in screen
     assert "진행 중 Batch" in screen
     assert "프롬프트 생성" in screen

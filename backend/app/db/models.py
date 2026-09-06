@@ -769,6 +769,7 @@ class BatchJob(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="INCOMPLETE")
     # Browsers never expose an absolute path, so only the picked folder name is stored.
     source_dir_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_zip_file_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     requested_frames: Mapped[int] = mapped_column(Integer, nullable=False, default=81)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

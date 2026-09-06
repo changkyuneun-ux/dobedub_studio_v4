@@ -33,7 +33,7 @@ def prompt_history(
     current_user: CurrentUser = Depends(require_permission("history:read")),
     db: Session = Depends(get_db),
 ):
-    """Image-scoped Grok history, deliberately fixed to 20 rows per page."""
+    """Image-scoped Grok history, deliberately fixed to 10 rows per page."""
     # A manager needs the per-worker operational dashboard. Other users keep
     # the original isolation and only receive their own prompt history.
     created_by = None if has_permission(current_user.permissions, "jobs:manage") else current_user.id
@@ -42,7 +42,7 @@ def prompt_history(
             db,
             created_by=created_by,
             page=page,
-            page_size=20,
+            page_size=10,
             include_worker_stats=False,
             generation_status=generationStatus,
             runpod_status=runpodStatus,
@@ -66,7 +66,7 @@ def runpod_history(
     batchId: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
-    """RunPod task history, deliberately fixed to 20 rows per page."""
+    """RunPod task history, deliberately fixed to 10 rows per page."""
     return studio_api_service.paginated_runpod_history(
         page,
         workflow_id=workflowId,

@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
+from backend.app.db.models import BatchJob
 from backend.app.db.session import get_db
 from backend.app.services import batch_job_service, batch_zip_import_service, batch_zip_service
 
@@ -115,12 +116,15 @@ def download_batch_zip(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     batch_job_service.mark_batch_downloaded(db, batch_job_id)
+    batch_row = db.get(BatchJob, batch_job_id)
+    if batch_row is None:
+        raise HTTPException(status_code=404, detail="배치 작업을 찾을 수 없습니다.")
     return StreamingResponse(
         chunks,
         media_type="application/zip",
         headers={
             **batch_zip_service.ZIP_RESPONSE_HEADERS,
-            "Content-Disposition": f'attachment; filename="{batch_job_id}.zip"',
+            "Content-Disposition": batch_zip_service.content_disposition_for_batch_zip(batch_row),
             "X-Batch-Zip-Skipped": str(skipped),
         },
     )

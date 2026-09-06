@@ -120,11 +120,11 @@ def paginated_runpod_history(
     run_date: str = "",
     batch_job_id: str = "",
 ) -> dict:
-    """Return the dedicated RunPod-history contract with its fixed 20-row page."""
+    """Return the dedicated RunPod-history contract with its fixed 10-row page."""
     run_date = str(run_date or "").strip()
     return paginated_history(
         page,
-        20,
+        10,
         workflow_id=workflow_id,
         result_status=result_status,
         worker_id=worker_id,

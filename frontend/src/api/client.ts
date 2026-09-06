@@ -361,6 +361,7 @@ export type BatchJobResponse = {
   workflowId: string;
   status: string;
   sourceDirName?: string | null;
+  sourceZipFileName?: string | null;
   requestedFrames: number;
   durationSeconds: number;
   totalImages: number;
@@ -1114,12 +1115,13 @@ export const apiClient = {
   // 명시 전송하므로 이 기본값은 호출부가 실수로 pageSize를 생략했을 때의
   // 안전망일 뿐이다.
   history: (page = 1, pageSize = 20) => requestJson<HistoryResponse>(`/api/history?page=${page}&pageSize=${pageSize}`),
-  // Task History is intentionally split into two fixed 20-row contracts. Keeping
+  // Task History is intentionally split into two fixed 10-row contracts. Keeping
   // these endpoints separate prevents prompt-generation history from inheriting
   // RunPod pagination and sorting behavior.
   promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string; batchId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
+    query.set("pageSize", "10");
     if (params.generationStatus) query.set("generationStatus", params.generationStatus);
     if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
     if (params.batchId) query.set("batchId", params.batchId);
@@ -1128,6 +1130,7 @@ export const apiClient = {
   runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
+    query.set("pageSize", "10");
     if (params.workflowId) query.set("workflowId", params.workflowId);
     if (params.resultStatus) query.set("resultStatus", params.resultStatus);
     if (params.workerId) query.set("workerId", params.workerId);
@@ -1324,7 +1327,7 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; requestedFrames?: number; items: Array<{ assetId: string; fileName?: string }> }) =>
+  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)

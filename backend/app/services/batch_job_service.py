@@ -168,6 +168,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         workflow_id=workflow_id,
         status=BATCH_JOB_INCOMPLETE,
         source_dir_name=str(payload.get("sourceDirName") or "").strip()[:512] or None,
+        source_zip_file_name=source_zip_file_name[:512] or None,
         requested_frames=requested_frames,
         duration_seconds=resolve_duration_seconds(workflow_id, requested_frames),
         total_images=len(items),
@@ -186,6 +187,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         requested_frames=requested_frames,
         created_by=created_by,
         batch_job_id=batch.id,
+        source_zip_file_name=source_zip_file_name,
     )
     db.commit()
     return batch_job_payload(db, batch.id)
@@ -199,6 +201,7 @@ def _link_prompt_batch(
     requested_frames: int,
     created_by: str,
     batch_job_id: str,
+    source_zip_file_name: str = "",
 ) -> dict[str, Any]:
     """Create linked prompt rows while create_batch_job owns the transaction."""
     return prompt_batch_service.create_prompt_generation_batch(
@@ -207,6 +210,14 @@ def _link_prompt_batch(
             "workflowId": workflow_id,
             "items": [
                 {"assetId": str(item.get("assetId") or "").strip(), "slotIndex": index, "requestedFrames": requested_frames}
+                | {
+                    key: value
+                    for key, value in {
+                        "sourceRelativePath": str(item.get("relativePath") or "").strip(),
+                        "sourceZipFileName": source_zip_file_name,
+                    }.items()
+                    if value
+                }
                 for index, item in enumerate(items, start=1)
             ],
         },
@@ -229,6 +240,7 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "workflowId": batch.workflow_id,
         "status": batch.status,
         "sourceDirName": batch.source_dir_name,
+        "sourceZipFileName": batch.source_zip_file_name,
         "requestedFrames": batch.requested_frames,
         "durationSeconds": batch.duration_seconds,
         "totalImages": batch.total_images,

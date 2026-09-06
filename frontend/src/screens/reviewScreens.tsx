@@ -142,7 +142,7 @@ export function Create3aScreen({
   canGiveFeedback: boolean;
   workflows: WorkflowItem[];
 }) {
-  const [historyTab, setHistoryTab] = useState<"prompt" | "runpod">("prompt");
+  const [historyTab, setHistoryTab] = useState<"prompt" | "runpod">("runpod");
   const [runpodPage, setRunpodPage] = useState(1);
   const [runpodHistoryItems, setRunpodHistoryItems] = useState<HistoryItem[]>([]);
   const [runpodHistoryTotal, setRunpodHistoryTotal] = useState(0);
@@ -232,7 +232,7 @@ export function Create3aScreen({
   const selectedItem = historyTab === "runpod"
     ? runpodHistoryItems.find((item) => item.taskId === selectedTaskId) || runpodHistoryItems[0] || null
     : null;
-  const runpodPageSize = 20;
+  const runpodPageSize = 10;
   const runpodPageCount = Math.max(1, Math.ceil(runpodHistoryTotal / runpodPageSize));
   const pageStart = runpodHistoryTotal ? (runpodPage - 1) * runpodPageSize + 1 : 0;
   const pageEnd = Math.min(runpodHistoryTotal, runpodPage * runpodPageSize);
@@ -312,7 +312,7 @@ export function Create3aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="TASK HISTORY"
       headerTitle="작업 이력"
-      sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 20건 / 페이지 · 이후 Assets만 유지</p>}
+      sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 10건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
         historyTab === "prompt" ? (
           <PromptGrokResponseDetail item={selectedPromptHistoryItem} />
@@ -479,20 +479,20 @@ export function Create3aScreen({
         <button
           type="button"
           role="tab"
-          aria-selected={historyTab === "prompt"}
-          className={`v3-scope-tab ${historyTab === "prompt" ? "is-active" : ""}`}
-          onClick={() => setHistoryTab("prompt")}
-        >
-          프롬프트 이력
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={historyTab === "runpod"}
           className={`v3-scope-tab ${historyTab === "runpod" ? "is-active" : ""}`}
           onClick={() => setHistoryTab("runpod")}
         >
           RunPod 이력
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={historyTab === "prompt"}
+          className={`v3-scope-tab ${historyTab === "prompt" ? "is-active" : ""}`}
+          onClick={() => setHistoryTab("prompt")}
+        >
+          프롬프트 이력
         </button>
       </div>
 
@@ -646,7 +646,7 @@ export function Create3aScreen({
             <button className="v3-page-button" type="button" disabled={runpodPage <= 1} onClick={() => setRunpodPage((value) => value - 1)}>이전</button>
             <span className="v3-page-button is-current">{runpodPage}</span>
             <button className="v3-page-button" type="button" disabled={runpodPage >= runpodPageCount} onClick={() => setRunpodPage((value) => value + 1)}>다음</button>
-            <span className="v3-pagination-meta">20건 / 페이지</span>
+            <span className="v3-pagination-meta">10건 / 페이지</span>
           </div>
         </div>
       </div>
@@ -761,7 +761,7 @@ function PromptGenerationHistory({
   const [batchFilter, setBatchFilter] = useState("");
   const [selectedPromptHistoryDraftId, setSelectedPromptHistoryDraftId] = useState("");
   const [retryingDraftId, setRetryingDraftId] = useState("");
-  const pageSize = 20;
+  const pageSize = 10;
 
   function selectPromptHistoryItem(item: GrokImagePromptDraftResponse | null) {
     setSelectedPromptHistoryDraftId(item?.draftId || "");
@@ -827,7 +827,7 @@ function PromptGenerationHistory({
       <div className="v3-card v3-prompt-history-card">
       <div className="v3-card-header">
         <div className="v3-card-header-title">프롬프트 생성 이력</div>
-        <span className="v3-card-header-meta">{total}건 · 20건 / 페이지</span>
+        <span className="v3-card-header-meta">{total}건 · 10건 / 페이지</span>
       </div>
       <div className="v3-runpod-filter-bar">
         <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option></select></label>
