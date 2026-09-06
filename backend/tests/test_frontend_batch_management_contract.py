@@ -100,7 +100,7 @@ def test_prompt_and_runpod_management_follow_the_desktop_operational_layout() ->
 def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
 
-    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in source
+    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId })" in source
     assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })" in source
     assert "v3-runpod-history-toolbar" in source
     assert "v3-runpod-history-actions" in source
@@ -111,6 +111,23 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     assert "실행일 종료" not in source
     assert "실행일<input type=\"date\" value={runpodRunDate}" in source
     assert "}, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId]);" in source
+
+
+def test_prompt_history_exposes_batch_id_and_uses_selected_batch_candidate_filter() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+    prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
+
+    assert "selectedPromptBatchJob" in prompt_history
+    assert "promptBatchCandidates" in prompt_history
+    assert "apiClient.batchJobCandidates({ query, limit: 10 })" in prompt_history
+    assert "batchId: selectedPromptBatchJobId" in prompt_history
+    assert "Batch ID / 작업자명 검색" in prompt_history
+    assert "<span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span>" in prompt_history
+    assert "item.batchJobId || item.promptBatchId || \"\"" in prompt_history
+    assert "v3-prompt-history-batch-id" in prompt_history
+    assert "batchId: batchFilter" not in prompt_history
+    assert ".v3-prompt-history-batch-id" in css
 
 
 def test_runpod_history_batch_zip_uses_selected_batch_candidate_not_search_text() -> None:

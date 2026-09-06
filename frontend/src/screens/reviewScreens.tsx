@@ -843,10 +843,15 @@ function PromptGenerationHistory({
   const [notice, setNotice] = useState("");
   const [generationFilter, setGenerationFilter] = useState("");
   const [runpodFilter, setRunpodFilter] = useState("");
-  const [batchFilter, setBatchFilter] = useState("");
+  const [promptBatchSearchText, setPromptBatchSearchText] = useState("");
+  const [selectedPromptBatchJob, setSelectedPromptBatchJob] = useState<BatchJobResponse | null>(null);
+  const [promptBatchCandidates, setPromptBatchCandidates] = useState<BatchJobResponse[]>([]);
+  const [promptBatchSearchLoading, setPromptBatchSearchLoading] = useState(false);
+  const [promptBatchCandidateOpen, setPromptBatchCandidateOpen] = useState(false);
   const [selectedPromptHistoryDraftId, setSelectedPromptHistoryDraftId] = useState("");
   const [retryingDraftId, setRetryingDraftId] = useState("");
   const pageSize = 10;
+  const selectedPromptBatchJobId = selectedPromptBatchJob?.id || "";
 
   function selectPromptHistoryItem(item: GrokImagePromptDraftResponse | null) {
     setSelectedPromptHistoryDraftId(item?.draftId || "");
@@ -854,17 +859,46 @@ function PromptGenerationHistory({
   }
 
   async function loadPromptHistory(targetPage = page) {
-    const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter });
+    const response = await apiClient.promptHistory({ page: targetPage, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId });
     setItems(response.items);
     setTotal(response.total);
     return response;
   }
 
   useEffect(() => {
+    const query = promptBatchSearchText.trim();
+    if (!query || (selectedPromptBatchJob && query === selectedPromptBatchJob.id)) {
+      setPromptBatchCandidates([]);
+      setPromptBatchSearchLoading(false);
+      return;
+    }
+    let active = true;
+    setPromptBatchSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      apiClient.batchJobCandidates({ query, limit: 10 })
+        .then((response) => {
+          if (!active) return;
+          setPromptBatchCandidates(response.items);
+          setPromptBatchCandidateOpen(true);
+        })
+        .catch(() => {
+          if (active) setPromptBatchCandidates([]);
+        })
+        .finally(() => {
+          if (active) setPromptBatchSearchLoading(false);
+        });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [promptBatchSearchText, selectedPromptBatchJob]);
+
+  useEffect(() => {
     let active = true;
     setLoading(true);
     setNotice("");
-    apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })
+    apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId })
       .then((response) => {
         if (!active) return;
         setItems(response.items);
@@ -882,7 +916,7 @@ function PromptGenerationHistory({
     return () => {
       active = false;
     };
-  }, [page, generationFilter, runpodFilter, batchFilter]);
+  }, [page, generationFilter, runpodFilter, selectedPromptBatchJobId]);
 
   useEffect(() => {
     selectPromptHistoryItem(items[0] || null);
@@ -915,19 +949,60 @@ function PromptGenerationHistory({
         <span className="v3-card-header-meta">{total}건 · 10건 / 페이지</span>
       </div>
       <div className="v3-runpod-filter-bar">
-        <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option></select></label>
+        <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패/수동 필요</option></select></label>
         <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option></select></label>
-        <label>Batch ID<input value={batchFilter} onChange={(event) => { setBatchFilter(event.target.value); setPage(1); }} placeholder="전체 배치" /></label>
+        <label className="v3-batch-search-field">Batch ID
+          <input
+            value={promptBatchSearchText}
+            onBlur={() => window.setTimeout(() => setPromptBatchCandidateOpen(false), 160)}
+            onChange={(event) => {
+              setPromptBatchSearchText(event.target.value);
+              setSelectedPromptBatchJob(null);
+              setPage(1);
+            }}
+            onFocus={() => {
+              if (promptBatchSearchText.trim()) setPromptBatchCandidateOpen(true);
+            }}
+            placeholder="Batch ID / 작업자명 검색"
+          />
+          {selectedPromptBatchJob ? <span className="v3-batch-selected-label">선택됨 · {selectedPromptBatchJob.id}</span> : null}
+          {promptBatchCandidateOpen && promptBatchSearchText.trim() && !selectedPromptBatchJob ? (
+            <div className="v3-batch-candidate-list" role="listbox" aria-label="Batch ID 검색 결과">
+              {promptBatchSearchLoading ? <div className="v3-batch-candidate-empty">검색 중...</div> : null}
+              {!promptBatchSearchLoading && !promptBatchCandidates.length ? <div className="v3-batch-candidate-empty">검색 결과가 없습니다.</div> : null}
+              {!promptBatchSearchLoading && promptBatchCandidates.map((candidate) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  role="option"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    setSelectedPromptBatchJob(candidate);
+                    setPromptBatchSearchText(candidate.id);
+                    setPromptBatchCandidateOpen(false);
+                    setPage(1);
+                  }}
+                >
+                  <strong>{candidate.id}</strong>
+                  <span>{candidate.createdByName || candidate.createdBy || "-"} · {candidate.sourceZipFileName || candidate.sourceDirName || "-"} · {candidate.workflowId}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </label>
       </div>
       <div className="v3-prompt-history-head">
-        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
       </div>
       {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
       {!loading && !notice && !items.length ? <p className="v3-muted-text" style={{ padding: 16 }}>생성된 프롬프트 이력이 없습니다.</p> : null}
       {!loading && items.map((item, index) => {
         const generated = item.status === "READY";
-        const generationLabel = item.status === "FAILED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
+        const normalizedStatus = String(item.status || "").toUpperCase();
+        const generationLabel = normalizedStatus === "MANUAL_REQUIRED" ? "수동 필요" : normalizedStatus === "FAILED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
+        const generationTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-ready" : "is-pending";
+        const displayBatchId = item.batchJobId || item.promptBatchId || "";
         const canRetry = Boolean(user?.id && item.createdBy === user.id);
         return (
           <div
@@ -941,12 +1016,13 @@ function PromptGenerationHistory({
             <span className="v3-prompt-history-worker">{item.createdByName || item.createdBy || "-"}</span>
             <span className="v3-prompt-history-date">{formatKstHistoryDate(item.createdAt)}</span>
             <span className="v3-prompt-history-workflow">{item.workflowId || "-"}</span>
+            <span className="v3-prompt-history-batch-id" title={displayBatchId}>{displayBatchId || "-"}</span>
             <div className="v3-prompt-history-image" title={item.assetId}>
               {item.assetId ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.asset?.fileName || item.assetId} /> : <span>-</span>}
               <small>{item.assetId}</small>
             </div>
-            <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : "null"}</div>
-            <span className={`v3-status-badge ${generated ? "is-ready" : "is-pending"}`}>{generationLabel}</span>
+            <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : item.error || "-"}</div>
+            <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
           </div>

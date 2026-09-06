@@ -26,6 +26,8 @@ DRAFT_PENDING = "PENDING"
 DRAFT_GENERATING = "GENERATING"
 DRAFT_READY = "READY"
 DRAFT_FAILED = "FAILED"
+DRAFT_MANUAL_REQUIRED = "MANUAL_REQUIRED"
+PROMPT_FAILURE_STATES = {DRAFT_FAILED, DRAFT_MANUAL_REQUIRED}
 RUNPOD_WAITING_STATES = {"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"}
 RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
 RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
@@ -221,8 +223,8 @@ def list_prompt_drafts(
         statement = statement.where(ImagePromptDraft.status == DRAFT_READY)
         count_statement = count_statement.where(ImagePromptDraft.status == DRAFT_READY)
     elif generation_filter == "FAILED":
-        statement = statement.where(ImagePromptDraft.status == DRAFT_FAILED)
-        count_statement = count_statement.where(ImagePromptDraft.status == DRAFT_FAILED)
+        statement = statement.where(ImagePromptDraft.status.in_(PROMPT_FAILURE_STATES))
+        count_statement = count_statement.where(ImagePromptDraft.status.in_(PROMPT_FAILURE_STATES))
     runpod_filter = _runpod_status_filter_condition(runpod_status)
     if runpod_filter is not None:
         statement = statement.where(runpod_filter)

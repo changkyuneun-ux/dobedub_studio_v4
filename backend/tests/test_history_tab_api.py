@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from backend.app.core.security import create_access_token
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, TaskOutputAsset, User, WorkflowTask
+from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, TaskOutputAsset, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.task_tracking_service import active_task_ids
 from pathlib import Path
@@ -160,7 +160,16 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
         session.add_all([
             Asset(id="asset_prompt_ready_unrequested", asset_type="input_image", file_name="ready.png", mime_type="image/png", size_bytes=1, storage_key="uploads/ready.png"),
             Asset(id="asset_prompt_failed", asset_type="input_image", file_name="failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/failed.png"),
+            Asset(id="asset_prompt_manual_required", asset_type="input_image", file_name="manual.png", mime_type="image/png", size_bytes=1, storage_key="uploads/manual.png"),
             Asset(id="asset_prompt_runpod_failed", asset_type="input_image", file_name="runpod-failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/runpod-failed.png"),
+            BatchJob(
+                id="history-user_zip_260906",
+                workflow_id="1-images.json",
+                status="INCOMPLETE",
+                source_zip_file_name="zip.zip",
+                total_images=1,
+                created_by="history-user",
+            ),
             ImagePromptDraft(
                 id="grok_draft_ready_unrequested", asset_id="asset_prompt_ready_unrequested", workflow_id="1-images.json",
                 slot_index=1, status="READY", model="grok", positive_prompt="ready", created_by="history-user",
@@ -168,6 +177,11 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
             ImagePromptDraft(
                 id="grok_draft_generation_failed", asset_id="asset_prompt_failed", workflow_id="1-images.json",
                 slot_index=1, status="FAILED", model="grok", failure_message="failed", created_by="history-user",
+            ),
+            ImagePromptDraft(
+                id="grok_draft_manual_required_batch", asset_id="asset_prompt_manual_required", workflow_id="1-images.json",
+                slot_index=1, status="MANUAL_REQUIRED", model="grok", failure_message="manual review", created_by="history-user",
+                batch_job_id="history-user_zip_260906",
             ),
             ImagePromptDraft(
                 id="grok_draft_runpod_failed", asset_id="asset_prompt_runpod_failed", workflow_id="1-images.json",
@@ -198,11 +212,65 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
     )
 
     assert failed_generation.status_code == 200
-    assert [item["draftId"] for item in failed_generation.json()["items"]] == ["grok_draft_generation_failed"]
+    failed_items = failed_generation.json()["items"]
+    assert {item["draftId"] for item in failed_items} == {"grok_draft_generation_failed", "grok_draft_manual_required_batch"}
+    assert next(item for item in failed_items if item["draftId"] == "grok_draft_manual_required_batch")["batchJobId"] == "history-user_zip_260906"
     assert unrequested_success.status_code == 200
     assert [item["draftId"] for item in unrequested_success.json()["items"]] == ["grok_draft_ready_unrequested"]
     assert failed_runpod.status_code == 200
     assert [item["draftId"] for item in failed_runpod.json()["items"]] == ["grok_draft_runpod_failed"]
+
+
+def test_prompt_failed_batch_drafts_do_not_appear_in_runpod_history(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            BatchJob(
+                id="history-user_failed_zip_260906",
+                workflow_id="1-images.json",
+                status="INCOMPLETE",
+                source_zip_file_name="failed.zip",
+                total_images=2,
+                created_by="history-user",
+            ),
+            Asset(id="asset_prompt_failed_only", asset_type="input_image", file_name="failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/failed.png"),
+            Asset(id="asset_prompt_manual_only", asset_type="input_image", file_name="manual.png", mime_type="image/png", size_bytes=1, storage_key="uploads/manual.png"),
+            ImagePromptDraft(
+                id="grok_draft_failed_no_runpod", asset_id="asset_prompt_failed_only", workflow_id="1-images.json",
+                slot_index=1, status="FAILED", model="grok", failure_message="failed", created_by="history-user",
+                batch_job_id="history-user_failed_zip_260906",
+            ),
+            ImagePromptDraft(
+                id="grok_draft_manual_no_runpod", asset_id="asset_prompt_manual_only", workflow_id="1-images.json",
+                slot_index=2, status="MANUAL_REQUIRED", model="grok", failure_message="manual", created_by="history-user",
+                batch_job_id="history-user_failed_zip_260906",
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    prompts = api_client.get(
+        "/api/history/prompts?page=1&generationStatus=FAILED",
+        headers=_authorized_headers(),
+    )
+    runpod = api_client.get(
+        "/api/history/runpod?page=1&batchId=history-user_failed_zip_260906",
+        headers=_authorized_headers(),
+    )
+
+    assert prompts.status_code == 200
+    assert {item["draftId"] for item in prompts.json()["items"]} >= {"grok_draft_failed_no_runpod", "grok_draft_manual_no_runpod"}
+    assert runpod.status_code == 200
+    assert runpod.json()["items"] == []
 
 
 def test_runpod_history_returns_task_and_provider_response(api_client):
@@ -773,7 +841,7 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("runDate", params.runDate)' in runpod_history_client
     assert 'query.set("dateFrom", params.dateFrom)' not in runpod_history_client
     assert 'query.set("dateTo", params.dateTo)' not in runpod_history_client
-    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: batchFilter })" in screen
+    assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId })" in screen
     assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })" in screen
     assert 'query.set("batchId", params.batchId)' in client
     assert "v3-runpod-history-toolbar" in screen

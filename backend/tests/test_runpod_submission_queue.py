@@ -5,9 +5,10 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from backend.app.core.timezone_utils import now_seoul_naive
-from backend.app.db.models import TaskExecutionPolicy, WorkflowTask
+from backend.app.db.models import Asset, ImagePromptDraft, TaskExecutionPolicy, User, WorkflowTask
 from backend.app.services import job_service
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
+from backend.app.services.runpod_request_batch_service import request_batch_queue
 from backend.app.services import studio_api_service
 from backend.app.services.task_policy_service import TaskSubmissionLimitError, active_task_counts
 from backend.app.services.task_tracking_service import claim_next_pending_submission, release_pending_submission
@@ -152,6 +153,58 @@ def test_create_job_carries_batch_id_onto_existing_prompt_draft_task(db_session,
     assert stored.batch_job_id == "worker_upload_260906"
     assert stored.payload_json["batchJobId"] == "worker_upload_260906"
     assert calls == []
+
+
+def test_runpod_request_queue_excludes_failed_prompt_generation_drafts(db_session):
+    db_session.add(User(
+        id="operator",
+        name="Operator",
+        email=None,
+        role="OPERATOR",
+        permissions_json=[],
+        is_active=True,
+    ))
+    db_session.add_all([
+        Asset(id="asset_queue_ready", asset_type="input_image", file_name="ready.png", mime_type="image/png", size_bytes=1, storage_key="uploads/ready.png"),
+        Asset(id="asset_queue_failed", asset_type="input_image", file_name="failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/failed.png"),
+        Asset(id="asset_queue_manual", asset_type="input_image", file_name="manual.png", mime_type="image/png", size_bytes=1, storage_key="uploads/manual.png"),
+        ImagePromptDraft(
+            id="draft_queue_ready",
+            asset_id="asset_queue_ready",
+            workflow_id="1-images.json",
+            slot_index=1,
+            status="READY",
+            model="grok",
+            positive_prompt="ready prompt",
+            created_by="operator",
+        ),
+        ImagePromptDraft(
+            id="draft_queue_failed",
+            asset_id="asset_queue_failed",
+            workflow_id="1-images.json",
+            slot_index=2,
+            status="FAILED",
+            model="grok",
+            failure_message="grok failed",
+            created_by="operator",
+        ),
+        ImagePromptDraft(
+            id="draft_queue_manual",
+            asset_id="asset_queue_manual",
+            workflow_id="1-images.json",
+            slot_index=3,
+            status="MANUAL_REQUIRED",
+            model="grok",
+            positive_prompt="",
+            failure_message="empty prompt",
+            created_by="operator",
+        ),
+    ])
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator")
+
+    assert [item["promptDraftId"] for item in queue["items"]] == ["draft_queue_ready"]
 
 
 def test_dispatch_checks_active_policy_before_calling_runpod(db_session, monkeypatch):
