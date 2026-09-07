@@ -1170,6 +1170,81 @@ def test_retry_failed_batch_items_reuses_existing_prompt_and_task_rows(db_sessio
     assert len(db_session.scalars(select(WorkflowTask).where(WorkflowTask.prompt_draft_id == drafts[1].id)).all()) == 1
 
 
+def test_batch_retry_modal_api_reworks_runpod_404_task_without_provider_lookup(api_client, monkeypatch):
+    session = SessionLocal()
+    try:
+        session.add(User(id="modal_operator", name="Modal Operator", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True))
+        session.add(_asset("modal_retry_asset_1"))
+        batch = BatchJob(
+            id="modal_retry_batch",
+            workflow_id="Blowbang1.json",
+            status="COMPLETE",
+            source_zip_file_name="source.zip",
+            requested_frames=161,
+            duration_seconds=10,
+            total_images=1,
+            video_failed_count=1,
+            created_by="modal_operator",
+        )
+        draft = ImagePromptDraft(
+            id="modal_retry_draft_1",
+            asset_id="modal_retry_asset_1",
+            workflow_id="Blowbang1.json",
+            slot_index=1,
+            status="READY",
+            provider="grok",
+            model="grok",
+            instruction_version="wf@1",
+            positive_prompt="ready prompt",
+            created_by="modal_operator",
+            batch_job_id=batch.id,
+        )
+        task = WorkflowTask(
+            id="modal_retry_task_1",
+            workflow_id="Blowbang1.json",
+            execution_mode="runpod",
+            status="FAILED",
+            progress=100,
+            user_id="modal_operator",
+            batch_job_id=batch.id,
+            prompt_draft_id=draft.id,
+            runpod_job_id="missing-runpod-job",
+            runpod_status_json={"status": "FAILED", "error": 'RunPod HTTP 404: {"detail":"job not found"}'},
+            last_dispatch_error='RunPod HTTP 404: {"detail":"job not found"}',
+            completed_at=datetime(2026, 9, 7, 10, 5, 0),
+            created_at=datetime(2026, 9, 7, 10, 0, 0),
+        )
+        session.add_all([batch, draft, task])
+        session.commit()
+    finally:
+        session.close()
+
+    def provider_lookup_must_not_run(*_args, **_kwargs):
+        raise AssertionError("Batch retry modal API must not call RunPod status while requeueing")
+
+    monkeypatch.setattr(studio_api_service, "runpod_request", provider_lookup_must_not_run)
+
+    response = api_client.post(
+        "/api/batch-jobs/modal_retry_batch/items/retry",
+        headers=_headers("modal_operator", name="Modal Operator"),
+        json={"stage": "all", "draftIds": [], "taskIds": ["modal_retry_task_1"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["runpodReworked"] == 1
+
+    session = SessionLocal()
+    try:
+        reworked_task = session.get(WorkflowTask, "modal_retry_task_1")
+        assert reworked_task is not None
+        assert reworked_task.status == "PENDING_SUBMIT"
+        assert reworked_task.runpod_job_id is None
+        assert reworked_task.runpod_status_json == {}
+        assert reworked_task.last_dispatch_error is None
+    finally:
+        session.close()
+
+
 def test_batch_job_detail_repairs_task_missing_batch_link_when_prompt_link_is_clear(db_session, monkeypatch):
     db_session.add(_user())
     asset_ids = _seed_unique_assets(db_session, "repair_asset", 1)

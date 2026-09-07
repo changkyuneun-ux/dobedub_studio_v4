@@ -452,6 +452,9 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "const PAGE_SIZE = 5;" in screen
     assert "const PAGE_SIZE = 10;" not in screen
     assert "openRecoveryModal(job)" in screen
+    dashboard_section = screen.split("<strong>진행 중 Batch</strong>", 1)[1].split("<strong>Batch 작업 이력</strong>", 1)[0]
+    assert 'onGoTo("review.history")' not in dashboard_section
+    assert 'onClick={() => onGoTo("review.history")}' not in dashboard_section
     assert "재처리 관리" in screen
     assert "상태 새로고침" in screen
     assert "선택 항목 재처리" in screen

@@ -459,14 +459,14 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <h3>프롬프트 생성</h3>
             <div className="v3-batch-mini-head is-prompt"><span>Batch ID</span><span>작업자</span><span>대기</span><span>생성 중</span><span>완료</span><span>실패</span></div>
             {activeJobs.map((job) => (
-              <button className="v3-batch-mini-row is-prompt" type="button" key={`prompt-${job.id}`} onClick={() => onGoTo("review.history")}>
+              <div className="v3-batch-mini-row is-prompt" key={`prompt-${job.id}`}>
                 <span>{job.id}</span>
                 <span>{job.createdByName || job.createdBy || "-"}</span>
                 {metricPill(job.promptWaiting)}
                 {metricPill(job.promptGenerating, "blue")}
                 {metricPill(job.promptCompletedCount, "green")}
                 {metricPill(job.promptFailedCount, "red")}
-              </button>
+              </div>
             ))}
             {!activeJobs.length ? <div className="v3-empty-panel">진행 중인 프롬프트 배치가 없습니다.</div> : null}
           </div>
@@ -475,14 +475,14 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <h3>RunPod 영상 생성</h3>
             <div className="v3-batch-mini-head is-runpod"><span>Batch ID</span><span>Pending Submit</span><span>Queue</span><span>진행</span><span>완료</span><span>실패</span></div>
             {activeJobs.map((job) => (
-              <button className="v3-batch-mini-row is-runpod" type="button" key={`runpod-${job.id}`} onClick={() => onGoTo("review.history")}>
+              <div className="v3-batch-mini-row is-runpod" key={`runpod-${job.id}`}>
                 <span>{job.id}</span>
                 {metricPill(job.runpodPendingSubmit)}
                 {metricPill(job.runpodQueued, "yellow")}
                 {metricPill(job.runpodInProgress, "blue")}
                 {metricPill(job.videoCompletedCount, "green")}
                 {metricPill(job.videoFailedCount, "red")}
-              </button>
+              </div>
             ))}
             {!activeJobs.length ? <div className="v3-empty-panel">진행 중인 RunPod 배치가 없습니다.</div> : null}
           </div>
