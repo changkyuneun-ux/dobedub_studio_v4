@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from backend.app.core.config import get_settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
-from backend.app.services import job_service, output_service, workflow_patch_service
+from backend.app.services import job_service, output_service, workflow_patch_service, workflow_service
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services.asset_storage import encode_file_base64, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
@@ -59,6 +59,43 @@ def ensure_storage_dirs() -> None:
 # 최근 200건이면 그 100건을 채우고도 남는다. 전체 이력을 읽던 이전 구현은
 # workflow_tasks 전 행을 한 요청에서 메모리로 올려 ECS 메모리 부족의 직접 원인이었다.
 PROMPT_OPTION_HISTORY_LIMIT = 200
+DEFAULT_REQUESTED_FRAMES = 81
+DEFAULT_WORKFLOW_FPS = 16
+
+
+def _workflow_default_fps(workflow_id: str) -> int:
+    fps = DEFAULT_WORKFLOW_FPS
+    try:
+        schema = workflow_service.get_workflow_schema(workflow_id)
+    except Exception:
+        return fps
+    for segment in schema.get("segments") or []:
+        for control in segment.get("configControls") or []:
+            if str(control.get("key")) not in {"output_fps", "fps"}:
+                continue
+            candidate = control.get("default")
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool) and candidate > 0:
+                return int(candidate)
+    return fps
+
+
+def _video_config_from_requested_frames(workflow_id: str, requested_frames: int | None) -> dict[str, int]:
+    try:
+        frames = int(requested_frames or DEFAULT_REQUESTED_FRAMES)
+    except (TypeError, ValueError):
+        frames = DEFAULT_REQUESTED_FRAMES
+    frames = max(1, frames)
+    fps = _workflow_default_fps(workflow_id)
+    duration_seconds = max(1, round(frames / fps))
+    return {
+        "frames": frames,
+        "frame_count": frames,
+        "length": frames,
+        "duration": duration_seconds,
+        "duration_seconds": duration_seconds,
+        "fps": fps,
+        "output_fps": fps,
+    }
 
 
 def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
@@ -429,11 +466,10 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
         asset = session.get(Asset, draft.asset_id)
         if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
-        frames = max(1, int(draft.requested_frames or 81))
         # Draft-based jobs are submitted outside the legacy workspace form.
         # Carry the persisted source dimensions so the Wan node receives the
         # exact uploaded image size, just as it does for a direct submission.
-        config = {"frames": frames, "frame_count": frames, "length": frames, "fps": 16}
+        config = _video_config_from_requested_frames(draft.workflow_id, draft.requested_frames)
         if asset.image_width and int(asset.image_width) > 0:
             config["width"] = int(asset.image_width)
         if asset.image_height and int(asset.image_height) > 0:
@@ -477,7 +513,7 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
         asset = session.get(Asset, item.asset_id)
         if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
-        config = {"frames": item.requested_frames, "frame_count": item.requested_frames, "length": item.requested_frames, "fps": 16}
+        config = _video_config_from_requested_frames(item.workflow_id, item.requested_frames)
         if asset.image_width and int(asset.image_width) > 0:
             config["width"] = int(asset.image_width)
         if asset.image_height and int(asset.image_height) > 0:

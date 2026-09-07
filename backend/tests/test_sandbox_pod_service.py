@@ -4,11 +4,39 @@ import unittest
 from unittest.mock import patch
 
 from backend.app.core.config import Settings
-from backend.app.services.sandbox_pod_service import _lifecycle_event_timestamp, _present_pod, _runtime_metrics
+from backend.app.services.sandbox_pod_service import _lifecycle_event_timestamp, _present_pod, _request, _runtime_metrics
 from backend.app.core.timezone_utils import UTC_TIMEZONE
 
 
 class SandboxPodLifecycleTimestampTests(unittest.TestCase):
+    @patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen")
+    def test_runpod_rest_request_uses_explicit_http_client_headers(self, urlopen: object) -> None:
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b"{}"
+
+        def fake_urlopen(request: object, timeout: int) -> Response:
+            captured["headers"] = dict(request.header_items())
+            captured["timeout"] = timeout
+            return Response()
+
+        urlopen.side_effect = fake_urlopen
+
+        _request(Settings(sandbox_pod_api_key="test-key", sandbox_pod_timeout=7), "GET", "/pods")
+
+        self.assertEqual(captured["timeout"], 7)
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(captured["headers"]["User-agent"], "dobedub-studio/1.0")
+        self.assertEqual(captured["headers"]["Accept"], "application/json")
+
     def test_extracts_runpod_lifecycle_event_timestamp(self) -> None:
         value = "Rented by User: Fri Aug 07 2026 07:51:24 GMT+0000 (Coordinated Universal Time)"
 

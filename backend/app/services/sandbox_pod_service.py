@@ -11,6 +11,9 @@ from backend.app.core.config import Settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, parse_timestamp, timestamp_fields, utc_now
 
 
+RUNPOD_HTTP_USER_AGENT = "dobedub-studio/1.0"
+
+
 def sandbox_pod_is_configured(settings: Settings) -> bool:
     selector = (
         settings.sandbox_pod_network_volume_id.strip()
@@ -187,13 +190,16 @@ def _network_volume_id(pod: dict) -> str:
 
 def _request(settings: Settings, method: str, path: str, body: dict | None = None) -> dict:
     url = f"{settings.sandbox_pod_rest_url.rstrip('/')}{path}"
+    api_key = settings.sandbox_pod_api_key.strip()
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8") if body is not None else None,
         method=method,
         headers={
-            "Authorization": f"Bearer {settings.sandbox_pod_api_key}",
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
             "Content-Type": "application/json",
+            "User-Agent": RUNPOD_HTTP_USER_AGENT,
         },
     )
     try:
@@ -216,7 +222,11 @@ def _graphql_request(settings: Settings, query: str, variables: dict[str, str]) 
         url,
         data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": RUNPOD_HTTP_USER_AGENT,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=settings.sandbox_pod_timeout) as response:

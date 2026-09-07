@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.app.db.models import Asset, ImagePromptDraft
-from backend.app.services import studio_api_service
+from backend.app.services import studio_api_service, workflow_patch_service
 
 
 def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session):
@@ -43,5 +45,20 @@ def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session
     assert payload["segments"][0]["positivePrompt"] == "a person walks forward"
     assert payload["segments"][0]["negativePromptAddition"] == "blur"
     assert payload["segments"][0]["config"]["frames"] == 49
+    assert payload["segments"][0]["config"]["duration_seconds"] == 3
+    assert payload["segments"][0]["config"]["duration"] == 3
+    assert payload["segments"][0]["config"]["fps"] == 16
+    assert payload["segments"][0]["config"]["output_fps"] == 16
     assert payload["segments"][0]["config"]["width"] == 720
     assert payload["segments"][0]["config"]["height"] == 1280
+
+    workflow = {"129:161": {"inputs": {}}, "129:162": {"inputs": {}}}
+    applied = workflow_patch_service.apply_node_config_to_workflow(
+        workflow,
+        payload["workflowId"],
+        payload["segments"],
+        Path("workflows"),
+    )
+
+    assert {"segment": 1, "param": "duration_seconds", "node": "129:161", "field": "value", "value": 3} in applied
+    assert workflow["129:161"]["inputs"]["value"] == 3

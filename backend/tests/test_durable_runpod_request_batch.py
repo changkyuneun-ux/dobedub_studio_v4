@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from sqlalchemy import select
+
 from backend.app.core.security import create_access_token
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
+from backend.app.services import studio_api_service
 from backend.app.services.runpod_request_batch_service import (
     create_request_batch,
     request_batch_queue,
@@ -96,6 +99,18 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         ("Pickme_Workflow.json", "first prompt", 161),
         ("1-images.json", "second prompt", 49),
     ]
+
+    request_item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.prompt_draft_id == "draft_request_1")
+    )
+    assert request_item is not None
+    job_payload = studio_api_service.job_payload_from_request_item(request_item.id, user={"id": "operator"})
+    config = job_payload["segments"][0]["config"]
+    assert config["frames"] == 161
+    assert config["duration_seconds"] == 10
+    assert config["duration"] == 10
+    assert config["fps"] == 16
+    assert config["output_fps"] == 16
 
 
 def test_request_batch_uses_workflow_default_negative_when_draft_is_blank(db_session):
