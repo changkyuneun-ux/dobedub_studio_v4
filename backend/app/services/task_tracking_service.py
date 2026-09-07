@@ -185,13 +185,12 @@ def _history_filter_conditions(
     if worker_id:
         conditions.append(WorkflowTask.user_id == worker_id)
     if batch_job_id:
-        batch_pattern = _history_like_pattern(batch_job_id)
         conditions.append(or_(
-            WorkflowTask.batch_job_id.ilike(batch_pattern, escape="\\"),
+            WorkflowTask.batch_job_id == batch_job_id,
             select(ImagePromptDraft.id)
             .where(
                 ImagePromptDraft.id == WorkflowTask.prompt_draft_id,
-                ImagePromptDraft.prompt_batch_id.ilike(batch_pattern, escape="\\"),
+                ImagePromptDraft.prompt_batch_id == batch_job_id,
             )
             .exists(),
         ))
@@ -205,11 +204,6 @@ def _history_filter_conditions(
     if result_condition is not None:
         conditions.append(result_condition)
     return conditions
-
-
-def _history_like_pattern(value: str) -> str:
-    escaped = str(value or "").strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
 
 
 def _parse_history_date_boundary(value: str, *, end_of_day: bool) -> datetime | None:

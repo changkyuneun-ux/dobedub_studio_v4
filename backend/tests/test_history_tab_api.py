@@ -426,7 +426,7 @@ def test_runpod_history_batch_filter_matches_legacy_prompt_batch_id(api_client):
     finally:
         session.close()
 
-    response = api_client.get("/api/history/runpod?page=1&batchId=pgb_legacy", headers=_authorized_headers())
+    response = api_client.get("/api/history/runpod?page=1&batchId=pgb_legacy_filter", headers=_authorized_headers())
 
     assert response.status_code == 200
     body = response.json()
@@ -551,27 +551,27 @@ def test_runpod_history_filters_by_worker_and_execution_date(api_client):
     assert [item["taskId"] for item in body["items"]] == ["task_history_worker_date_a"]
 
 
-def test_runpod_history_filters_batch_id_by_partial_text(api_client):
+def test_runpod_history_filters_selected_batch_id_exactly(api_client):
     session = SessionLocal()
     try:
         session.add_all([
             User(id="history-user", name="History User", email=None, role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True),
             WorkflowTask(
-                id="task_history_batch_legacy",
+                id="task_history_batch_original",
                 workflow_id="1-images.json",
                 status="COMPLETED",
                 worker_name="Legacy Worker",
                 user_id="history-user",
-                batch_job_id="batch_legacy_260904_1",
+                batch_job_id="batch_legacy_260904",
                 payload_json={},
             ),
             WorkflowTask(
-                id="task_history_batch_worker",
+                id="task_history_batch_retry",
                 workflow_id="1-images.json",
                 status="COMPLETED",
-                worker_name="장균은",
+                worker_name="Legacy Worker",
                 user_id="history-user",
-                batch_job_id="장균은_260904_1",
+                batch_job_id="batch_legacy_260904_2",
                 payload_json={},
             ),
         ])
@@ -579,19 +579,14 @@ def test_runpod_history_filters_batch_id_by_partial_text(api_client):
     finally:
         session.close()
 
-    legacy_response = api_client.get(
-        "/api/history/runpod?page=1&batchId=batch",
-        headers=_authorized_headers(),
-    )
-    worker_response = api_client.get(
-        f"/api/history/runpod?page=1&batchId={quote('장균은')}",
+    response = api_client.get(
+        "/api/history/runpod?page=1&batchId=batch_legacy_260904",
         headers=_authorized_headers(),
     )
 
-    assert legacy_response.status_code == 200
-    assert [item["taskId"] for item in legacy_response.json()["items"]] == ["task_history_batch_legacy"]
-    assert worker_response.status_code == 200
-    assert [item["taskId"] for item in worker_response.json()["items"]] == ["task_history_batch_worker"]
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [item["taskId"] for item in response.json()["items"]] == ["task_history_batch_original"]
 
 
 def test_runpod_history_can_rework_failed_task_without_creating_a_new_task(api_client, monkeypatch):
