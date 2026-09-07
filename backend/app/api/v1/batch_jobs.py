@@ -46,6 +46,13 @@ async def create_batch_job_from_zip(
 ):
     _require_batch_access(current_user)
     try:
+        # Reject duplicate IDs before extracting the ZIP or registering assets.
+        batch_id = batch_job_service.zip_batch_job_id(
+            db,
+            created_by=current_user.id,
+            zip_file_name=file.filename or "upload.zip",
+        )
+        batch_job_service.ensure_batch_job_id_available(db, batch_id)
         imported = batch_zip_import_service.import_zip_bytes(
             await file.read(),
             zip_file_name=file.filename or "upload.zip",

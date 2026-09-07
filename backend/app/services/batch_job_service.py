@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 import unicodedata
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, utc_now
@@ -34,6 +35,7 @@ DEFAULT_FRAMES = 81
 DEFAULT_FPS = 16
 PROMOTION_LIMIT_PER_CYCLE = 20
 STALE_PROMOTION_CLAIM_SECONDS = 300
+PROMOTION_RETRY_DELAY_SECONDS = 30
 PAGE_SIZE = 5
 TERMINAL_DRAFT_STATES = frozenset({"READY", "FAILED", "MANUAL_REQUIRED"})
 FAILED_DRAFT_STATES = frozenset({"FAILED", "MANUAL_REQUIRED"})
@@ -41,9 +43,13 @@ TERMINAL_TASK_STATES = frozenset({"COMPLETED", "SUCCESS", "FAILED", "CANCELLED",
 SUCCESS_TASK_STATES = frozenset({"COMPLETED", "SUCCESS"})
 REWORKABLE_TASK_STATES = TERMINAL_TASK_STATES - SUCCESS_TASK_STATES
 ACTIVE_TASK_STATES = frozenset({"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"})
+PROMOTION_PENDING = "PENDING"
+PROMOTION_DISPATCHING = "DISPATCHING"
+PROMOTION_TASK_CREATED = "TASK_CREATED"
+PROMOTION_FAILED = "FAILED"
 
-# Last promotion error per batch job, for operator diagnosis. Deliberately
-# in-memory: it is a transient monitor detail, not batch state.
+# Kept as a short-lived monitor diagnostic for existing callers. The durable
+# per-draft promotion error is stored on ImagePromptDraft.
 _PROMOTION_FAILURES: dict[str, str] = {}
 
 
@@ -143,13 +149,23 @@ def _next_zip_batch_job_id(db: Session, *, created_by: str, created_at: datetime
     date_suffix = f"_{created_at_utc.astimezone(SEOUL_TIMEZONE).strftime('%y%m%d')}"
     worker_token = _safe_batch_token(_worker_batch_token(db, created_by))
     zip_token = _safe_batch_token(Path(Path(zip_file_name).name).stem, fallback="upload")
-    candidate = _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, "")
-    sequence = 2
-    while db.get(BatchJob, candidate) is not None:
-        collision_suffix = f"_{sequence}"
-        candidate = _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, collision_suffix)
-        sequence += 1
-    return candidate
+    return _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, "")
+
+
+def zip_batch_job_id(db: Session, *, created_by: str, zip_file_name: str) -> str:
+    """Return the deterministic Batch ID used for a ZIP upload request."""
+    created_at = _aware_utc(utc_now()).replace(tzinfo=None)
+    return _next_zip_batch_job_id(
+        db,
+        created_by=created_by,
+        created_at=created_at,
+        zip_file_name=unicodedata.normalize("NFC", str(zip_file_name or "").strip()),
+    )
+
+
+def ensure_batch_job_id_available(db: Session, batch_id: str) -> None:
+    if db.get(BatchJob, batch_id) is not None:
+        raise ValueError(f"동일한 Batch ID({batch_id})가 이미 존재합니다. 기존 작업 이력에서 상태를 확인하세요.")
 
 
 def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -> dict[str, Any]:
@@ -166,12 +182,15 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
     source_dir_name = unicodedata.normalize("NFC", str(payload.get("sourceDirName") or "").strip())
     source_zip_file_name = unicodedata.normalize("NFC", str(payload.get("sourceZipFileName") or "").strip())
+    batch_id = (
+        _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
+        if source_zip_file_name
+        else _next_batch_job_id(db, created_by=created_by, created_at=created_at)
+    )
+    ensure_batch_job_id_available(db, batch_id)
+
     batch = BatchJob(
-        id=(
-            _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
-            if source_zip_file_name
-            else _next_batch_job_id(db, created_by=created_by, created_at=created_at)
-        ),
+        id=batch_id,
         workflow_id=workflow_id,
         status=BATCH_JOB_INCOMPLETE,
         source_dir_name=source_dir_name[:512] or None,
@@ -185,7 +204,13 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         updated_at=created_at,
     )
     db.add(batch)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        # BatchJob.id is the primary-key unique index. This is the race-safe
+        # guard when two requests pass the preflight check at the same time.
+        db.rollback()
+        raise ValueError(f"동일한 Batch ID({batch_id})가 이미 존재합니다. 기존 작업 이력에서 상태를 확인하세요.") from exc
 
     _link_prompt_batch(
         db,
@@ -331,6 +356,7 @@ def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
 
 
 def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
+    promotion_failed_count = _promotion_failed_count(db, batch.id)
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
@@ -350,7 +376,8 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "runpodPendingSubmit": batch.runpod_pending_submit_count,
         "runpodQueued": batch.runpod_queued_count,
         "runpodInProgress": batch.runpod_in_progress_count,
-        "failedCount": batch.prompt_failed_count + batch.video_failed_count,
+        "promotionFailedCount": promotion_failed_count,
+        "failedCount": batch.prompt_failed_count + batch.video_failed_count + promotion_failed_count,
         "lastDownloadedAt": batch.last_downloaded_at.isoformat() if batch.last_downloaded_at else None,
         "createdBy": batch.created_by,
         "createdByName": _user_name(db, batch.created_by),
@@ -403,12 +430,18 @@ def _batch_detail_item(
     prompt_failed = prompt_status in FAILED_DRAFT_STATES
     runpod_failed = latest_task is not None and runpod_status in REWORKABLE_TASK_STATES
     runpod_active = latest_task is not None and runpod_status in ACTIVE_TASK_STATES
+    promotion_failed = latest_task is None and prompt_status == "READY" and draft.promotion_status == PROMOTION_FAILED
     retry_kind = "none"
     retryable = False
     action_label = "제외"
     error = ""
     if duplicate:
         error = "동일 프롬프트에 연결된 RunPod 작업이 2개 이상입니다."
+    elif promotion_failed:
+        retry_kind = "promotion"
+        retryable = True
+        action_label = "RunPod 요청 재처리"
+        error = str(draft.promotion_last_error or "RunPod 작업 연결에 실패했습니다.")
     elif prompt_failed and latest_task is None:
         retry_kind = "prompt"
         retryable = True
@@ -440,6 +473,9 @@ def _batch_detail_item(
         "actionLabel": action_label,
         "retryCount": int((latest_task.dispatch_attempts if latest_task else 0) or 0),
         "nextRetryAt": latest_task.next_dispatch_at.isoformat() if latest_task and latest_task.next_dispatch_at else None,
+        "promotionStatus": draft.promotion_status,
+        "promotionAttempts": int(draft.promotion_attempts or 0),
+        "promotionLastError": draft.promotion_last_error,
     }
 
 
@@ -461,7 +497,22 @@ def _orphan_task_detail_item(task: WorkflowTask) -> dict[str, Any]:
         "actionLabel": "확인",
         "retryCount": int(task.dispatch_attempts or 0),
         "nextRetryAt": task.next_dispatch_at.isoformat() if task.next_dispatch_at else None,
+        "promotionStatus": None,
+        "promotionAttempts": 0,
+        "promotionLastError": None,
     }
+
+
+def _promotion_failed_count(db: Session, batch_job_id: str) -> int:
+    return int(db.scalar(
+        select(func.count())
+        .select_from(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.batch_job_id == batch_job_id,
+            ImagePromptDraft.status == "READY",
+            ImagePromptDraft.promotion_status == PROMOTION_FAILED,
+        )
+    ) or 0)
 
 
 def _user_name(db: Session, user_id: str | None) -> str | None:
@@ -574,7 +625,6 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
             recheck_db.close()
         if not owned_ids:
             continue
-        failed_claims: dict[str, datetime] = {}
         promoted_count = 0
         try:
             worker_user = _submitter_user(owner_id)
@@ -583,31 +633,25 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
                     job_payload = studio_api_service.job_payload_from_prompt_draft(draft_id, user=worker_user)
                     job_payload["batchJobId"] = batch_id
                     studio_api_service.create_job(job_payload, user=worker_user)
+                    _mark_promotion_task_created(draft_id, claim_stamps[draft_id])
                     promoted_count += 1
-                except Exception as exc:  # noqa: BLE001 - keep later drafts retryable
+                except Exception as exc:  # noqa: BLE001 - preserve a durable retry reason
                     _PROMOTION_FAILURES[batch_id] = str(exc)
-                    if draft_id in claim_stamps:
-                        failed_claims[draft_id] = claim_stamps[draft_id]
+                    _mark_promotion_failed(draft_id, claim_stamps[draft_id], str(exc))
         except Exception as exc:  # noqa: BLE001 - one bad batch must not stop the rest
             _PROMOTION_FAILURES[batch_id] = str(exc)
-            failed_claims = {draft_id: claim_stamps[draft_id] for draft_id in owned_ids if draft_id in claim_stamps}
-        if failed_claims:
-            release_db = SessionLocal()
-            try:
-                release_promotion_claim(release_db, failed_claims)
-            finally:
-                release_db.close()
+            for draft_id in owned_ids:
+                _mark_promotion_failed(draft_id, claim_stamps[draft_id], str(exc))
         if promoted_count == 0:
             continue
-        if not failed_claims:
-            _PROMOTION_FAILURES.pop(batch_id, None)
+        _PROMOTION_FAILURES.pop(batch_id, None)
         promoted += promoted_count
         promoted_batches.append(batch_id)
 
     return {"promoted": promoted, "batches": promoted_batches}
 
 
-def _unpromoted_ready_drafts(limit: int, cutoff: datetime):
+def _unpromoted_ready_drafts(limit: int, cutoff: datetime, now: datetime):
     already_promoted = (
         select(WorkflowTask.id)
         .where(
@@ -625,6 +669,15 @@ def _unpromoted_ready_drafts(limit: int, cutoff: datetime):
             ImagePromptDraft.status == "READY",
             ImagePromptDraft.positive_prompt.is_not(None),
             func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
+            or_(
+                ImagePromptDraft.promotion_status.in_((PROMOTION_PENDING, PROMOTION_FAILED)),
+                ImagePromptDraft.promotion_status.is_(None),
+                and_(
+                    ImagePromptDraft.promotion_status == PROMOTION_DISPATCHING,
+                    ImagePromptDraft.promotion_claimed_at <= cutoff,
+                ),
+            ),
+            or_(ImagePromptDraft.promotion_next_attempt_at.is_(None), ImagePromptDraft.promotion_next_attempt_at <= now),
             or_(ImagePromptDraft.promotion_claimed_at.is_(None), ImagePromptDraft.promotion_claimed_at <= cutoff),
             ~already_promoted,
         )
@@ -638,7 +691,8 @@ def claim_batch_drafts_for_promotion(
 ) -> tuple[list[tuple[str, str, str]], dict[str, datetime]]:
     now = datetime.utcnow()
     cutoff = now - timedelta(seconds=STALE_PROMOTION_CLAIM_SECONDS)
-    candidates = db.execute(_unpromoted_ready_drafts(limit, cutoff)).all()
+    _reconcile_existing_batch_task_promotions(db, now)
+    candidates = db.execute(_unpromoted_ready_drafts(limit, cutoff, now)).all()
     claimed: list[tuple[str, str, str]] = []
     for draft_id, batch_id, owner_id in candidates:
         if not owner_id:
@@ -649,7 +703,14 @@ def claim_batch_drafts_for_promotion(
                 ImagePromptDraft.id == draft_id,
                 or_(ImagePromptDraft.promotion_claimed_at.is_(None), ImagePromptDraft.promotion_claimed_at <= cutoff),
             )
-            .values(promotion_claimed_at=now)
+            .values(
+                promotion_claimed_at=now,
+                promotion_status=PROMOTION_DISPATCHING,
+                promotion_attempts=ImagePromptDraft.promotion_attempts + 1,
+                promotion_last_error=None,
+                promotion_next_attempt_at=None,
+                promotion_updated_at=now,
+            )
         )
         if result.rowcount:
             claimed.append((str(batch_id), str(owner_id), str(draft_id)))
@@ -676,6 +737,7 @@ def still_owns_claim(db: Session, claims: dict[str, datetime]) -> list[str]:
             select(ImagePromptDraft.id).where(
                 ImagePromptDraft.id == draft_id,
                 ImagePromptDraft.promotion_claimed_at == claimed_at,
+                ImagePromptDraft.promotion_status == PROMOTION_DISPATCHING,
             )
         )
         if row is not None:
@@ -693,6 +755,80 @@ def release_promotion_claim(db: Session, claims: dict[str, datetime]) -> None:
             .values(promotion_claimed_at=None)
         )
     db.commit()
+
+
+def _reconcile_existing_batch_task_promotions(db: Session, now: datetime) -> None:
+    """Mark tasks created before a process restart as successfully promoted."""
+    task_exists = (
+        select(WorkflowTask.id)
+        .where(
+            WorkflowTask.prompt_draft_id == ImagePromptDraft.id,
+            WorkflowTask.batch_job_id == ImagePromptDraft.batch_job_id,
+            WorkflowTask.deleted_at.is_(None),
+        )
+        .exists()
+    )
+    rows = db.scalars(
+        select(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id.is_not(None),
+            ImagePromptDraft.promotion_status != PROMOTION_TASK_CREATED,
+            task_exists,
+        )
+    ).all()
+    for draft in rows:
+        draft.promotion_status = PROMOTION_TASK_CREATED
+        draft.promotion_last_error = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = now
+    if rows:
+        db.flush()
+
+
+def _mark_promotion_task_created(draft_id: str, claimed_at: datetime) -> None:
+    db = SessionLocal()
+    try:
+        draft = db.scalar(
+            select(ImagePromptDraft).where(
+                ImagePromptDraft.id == draft_id,
+                ImagePromptDraft.promotion_claimed_at == claimed_at,
+            )
+        )
+        if draft is None:
+            return
+        now = datetime.utcnow()
+        draft.promotion_status = PROMOTION_TASK_CREATED
+        draft.promotion_last_error = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = now
+        db.commit()
+    finally:
+        db.close()
+
+
+def _mark_promotion_failed(draft_id: str, claimed_at: datetime, error: str) -> None:
+    db = SessionLocal()
+    try:
+        draft = db.scalar(
+            select(ImagePromptDraft).where(
+                ImagePromptDraft.id == draft_id,
+                ImagePromptDraft.promotion_claimed_at == claimed_at,
+            )
+        )
+        if draft is None:
+            return
+        now = datetime.utcnow()
+        attempts = max(1, int(draft.promotion_attempts or 1))
+        delay = min(300, PROMOTION_RETRY_DELAY_SECONDS * attempts)
+        draft.promotion_status = PROMOTION_FAILED
+        draft.promotion_last_error = str(error or "RunPod 작업 연결에 실패했습니다.")[:4000]
+        draft.promotion_next_attempt_at = now + timedelta(seconds=delay)
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = now
+        db.commit()
+    finally:
+        db.close()
 
 
 def refresh_batch_job_counters() -> dict[str, Any]:
@@ -893,11 +1029,15 @@ def retry_failed_batch_items(
     has_explicit_selection = bool(selected_draft_ids or selected_task_ids)
     skipped: list[dict[str, str]] = []
     prompt_retried = 0
+    promotion_retried = 0
     runpod_reworked = 0
     duplicate_prompt_ids = _duplicate_prompt_task_ids(db, batch.id)
 
     if normalized_stage in {"all", "prompt"}:
-        prompt_query = select(ImagePromptDraft).where(ImagePromptDraft.batch_job_id == batch.id)
+        prompt_query = select(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status.in_(FAILED_DRAFT_STATES),
+        )
         if selected_draft_ids:
             prompt_query = prompt_query.where(ImagePromptDraft.id.in_(selected_draft_ids))
         elif has_explicit_selection:
@@ -927,6 +1067,29 @@ def retry_failed_batch_items(
             prompt_retried += 1
 
     if normalized_stage in {"all", "runpod"}:
+        promotion_task_exists = (
+            select(WorkflowTask.id)
+            .where(
+                WorkflowTask.batch_job_id == batch.id,
+                WorkflowTask.prompt_draft_id == ImagePromptDraft.id,
+                WorkflowTask.deleted_at.is_(None),
+            )
+            .exists()
+        )
+        promotion_query = select(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status == "READY",
+            ImagePromptDraft.promotion_status == PROMOTION_FAILED,
+            ~promotion_task_exists,
+        )
+        if selected_draft_ids:
+            promotion_query = promotion_query.where(ImagePromptDraft.id.in_(selected_draft_ids))
+        elif has_explicit_selection:
+            promotion_query = promotion_query.where(False)
+        for draft in db.scalars(promotion_query.order_by(ImagePromptDraft.slot_index.asc(), ImagePromptDraft.id.asc())).all():
+            _reset_batch_promotion_for_retry(draft)
+            promotion_retried += 1
+
         task_query = select(WorkflowTask).where(WorkflowTask.batch_job_id == batch.id, WorkflowTask.deleted_at.is_(None))
         if selected_task_ids:
             task_query = task_query.where(WorkflowTask.id.in_(selected_task_ids))
@@ -954,6 +1117,7 @@ def retry_failed_batch_items(
     return {
         "batchJobId": batch.id,
         "promptRetried": prompt_retried,
+        "promotionRetried": promotion_retried,
         "runpodReworked": runpod_reworked,
         "skipped": skipped,
         "batch": _batch_payload(db, batch),
@@ -981,8 +1145,23 @@ def _reset_prompt_draft_for_retry(draft: ImagePromptDraft) -> None:
     draft.failure_message = None
     draft.warnings_json = []
     draft.raw_json = source_metadata
+    draft.promotion_status = PROMOTION_PENDING if draft.batch_job_id else "NOT_APPLICABLE"
+    draft.promotion_last_error = None
+    draft.promotion_next_attempt_at = None
     draft.promotion_claimed_at = None
+    draft.promotion_updated_at = now_seoul_naive()
     draft.updated_at = now_seoul_naive()
+
+
+def _reset_batch_promotion_for_retry(draft: ImagePromptDraft) -> None:
+    """Retry only the Ready-draft to RunPod handoff; never regenerate Grok."""
+    now = now_seoul_naive()
+    draft.promotion_status = PROMOTION_PENDING
+    draft.promotion_last_error = None
+    draft.promotion_next_attempt_at = None
+    draft.promotion_claimed_at = None
+    draft.promotion_updated_at = now
+    draft.updated_at = now
 
 
 def _reset_runpod_task_for_rework(db: Session, task: WorkflowTask, *, actor_id: str) -> None:
@@ -1066,6 +1245,8 @@ __all__ = [
     "BATCH_JOB_INCOMPLETE",
     "BATCH_JOB_COMPLETE",
     "resolve_duration_seconds",
+    "zip_batch_job_id",
+    "ensure_batch_job_id_available",
     "create_batch_job",
     "batch_job_payload",
     "list_batch_job_candidates",

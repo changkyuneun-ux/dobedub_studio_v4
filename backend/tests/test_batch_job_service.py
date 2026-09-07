@@ -8,7 +8,7 @@ import uuid
 import zipfile
 
 import pytest
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 
 from backend.app.core.security import create_access_token
 from backend.app.db.models import (
@@ -22,7 +22,7 @@ from backend.app.db.models import (
     WorkflowTask,
 )
 from backend.app.db.session import SessionLocal
-from backend.app.services import batch_job_service, job_service, prompt_batch_service, studio_api_service
+from backend.app.services import batch_job_service, batch_zip_import_service, job_service, prompt_batch_service, studio_api_service
 from backend.app.services.task_tracking_service import record_job_status
 
 # NOTE: this module deliberately relies on the shared `db_session` fixture
@@ -293,7 +293,7 @@ def test_create_zip_batch_job_records_custom_negative_prompt_on_drafts(db_sessio
     assert [draft.negative_prompt for draft in drafts] == ["custom batch negative", "custom batch negative"]
 
 
-def test_create_zip_batch_job_id_adds_suffix_for_same_worker_zip_and_day(db_session, monkeypatch):
+def test_create_zip_batch_job_rejects_duplicate_batch_id(db_session, monkeypatch):
     user = User(id="operator_1", name="장균은", role="OPERATOR")
     db_session.add(user)
     _seed_assets(db_session, 2)
@@ -316,21 +316,22 @@ def test_create_zip_batch_job_id_adds_suffix_for_same_worker_zip_and_day(db_sess
         },
         created_by=user.id,
     )
-    second = batch_job_service.create_batch_job(
-        db_session,
-        {
-            "workflowId": "Blowbang1.json",
-            "sourceDirName": "shoot",
-            "sourceZipFileName": "shoot.zip",
-            "requestedFrames": 81,
-            "items": [_asset_items(2)[1]],
-        },
-        created_by=user.id,
-    )
+    with pytest.raises(ValueError, match="동일한 Batch ID"):
+        batch_job_service.create_batch_job(
+            db_session,
+            {
+                "workflowId": "Blowbang1.json",
+                "sourceDirName": "shoot",
+                "sourceZipFileName": "shoot.zip",
+                "requestedFrames": 81,
+                "items": [_asset_items(2)[1]],
+            },
+            created_by=user.id,
+        )
 
     assert first["id"] == "장균은_shoot_260904"
-    assert second["id"] == "장균은_shoot_260904_2"
-    assert len(second["id"]) <= 64
+    assert len(db_session.scalars(select(BatchJob)).all()) == 1
+    assert len(db_session.scalars(select(PromptGenerationBatch)).all()) == 1
 
 
 def test_create_zip_batch_job_id_truncates_long_zip_token_to_column_limit(db_session, monkeypatch):
@@ -437,6 +438,33 @@ def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, mon
     assert payload["totalImages"] == 2
     assert payload["sourceDirName"] == "root"
     assert payload["requestedFrames"] == 161
+
+    session = SessionLocal()
+    try:
+        asset_count_before_duplicate = int(session.scalar(select(func.count()).select_from(Asset)) or 0)
+    finally:
+        session.close()
+
+    def duplicate_import_must_not_run(*_args, **_kwargs):
+        raise AssertionError("duplicate Batch ID must be rejected before ZIP import")
+
+    monkeypatch.setattr(batch_zip_import_service, "import_zip_bytes", duplicate_import_must_not_run)
+
+    duplicate = api_client.post(
+        "/api/batch-jobs/zip",
+        headers=_headers("zip_operator", name="장균은"),
+        data={"workflowId": "Blowbang1.json", "requestedFrames": "161"},
+        files={"file": ("픽미툰_씬.zip", _zip_bytes({"root/0001.png": b"png"}), "application/zip")},
+    )
+
+    assert duplicate.status_code == 400
+    assert "동일한 Batch ID" in duplicate.json()["detail"]
+    session = SessionLocal()
+    try:
+        assert int(session.scalar(select(func.count()).select_from(BatchJob)) or 0) == 1
+        assert int(session.scalar(select(func.count()).select_from(Asset)) or 0) == asset_count_before_duplicate
+    finally:
+        session.close()
 
 
 def test_batch_job_search_finds_partial_worker_and_nfc_nfd_batch_ids(api_client):
@@ -708,6 +736,62 @@ def test_batch_promotion_does_not_append_the_same_draft_twice(db_session, monkey
     assert tasks[0].prompt_draft_id == draft.id
     assert db_session.scalars(select(RunpodRequestBatch)).all() == []
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
+
+
+def test_promotion_failure_is_persisted_and_retry_reuses_the_ready_draft(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "single prompt"
+    db_session.commit()
+
+    original_create_job = studio_api_service.create_job
+
+    def fail_create_job(*_args, **_kwargs):
+        raise RuntimeError("RunPod queue is unavailable")
+
+    monkeypatch.setattr(studio_api_service, "create_job", fail_create_job)
+
+    first = batch_job_service.promote_ready_batch_drafts()
+
+    db_session.expire_all()
+    failed_draft = db_session.get(ImagePromptDraft, draft.id)
+    assert first == {"promoted": 0, "batches": []}
+    assert failed_draft is not None
+    assert failed_draft.promotion_status == "FAILED"
+    assert failed_draft.promotion_last_error == "RunPod queue is unavailable"
+    assert failed_draft.promotion_attempts == 1
+    assert db_session.scalars(select(WorkflowTask).where(WorkflowTask.prompt_draft_id == draft.id)).all() == []
+
+    detail = batch_job_service.batch_job_detail(db_session, created["id"])
+    assert detail["batch"]["promotionFailedCount"] == 1
+    assert detail["batch"]["failedCount"] == 1
+    assert detail["items"][0]["retryKind"] == "promotion"
+    assert detail["items"][0]["error"] == "RunPod queue is unavailable"
+
+    retry = batch_job_service.retry_failed_batch_items(
+        db_session,
+        created["id"],
+        actor_id="operator_1",
+        can_manage=False,
+        stage="runpod",
+        draft_ids=[draft.id],
+    )
+    assert retry["promotionRetried"] == 1
+    assert retry["skipped"] == []
+
+    monkeypatch.setattr(studio_api_service, "create_job", original_create_job)
+    second = batch_job_service.promote_ready_batch_drafts()
+
+    db_session.expire_all()
+    recovered_draft = db_session.get(ImagePromptDraft, draft.id)
+    tasks = db_session.scalars(select(WorkflowTask).where(WorkflowTask.prompt_draft_id == draft.id)).all()
+    assert second["promoted"] == 1
+    assert recovered_draft is not None
+    assert recovered_draft.promotion_status == "TASK_CREATED"
+    assert recovered_draft.promotion_attempts == 2
+    assert len(tasks) == 1
+    assert tasks[0].prompt_draft_id == draft.id
 
 
 def test_promote_stamps_batch_job_id_on_created_tasks(db_session, monkeypatch):

@@ -634,6 +634,7 @@ class ImagePromptDraft(Base):
         Index("ix_image_prompt_drafts_updated_id", "updated_at", "id"),
         Index("ix_image_prompt_drafts_batch_status", "batch_job_id", "status"),
         Index("ix_image_prompt_drafts_promotion", "status", "promotion_claimed_at", "batch_job_id"),
+        Index("ix_image_prompt_drafts_batch_promotion_retry", "batch_job_id", "promotion_status", "promotion_next_attempt_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -654,6 +655,14 @@ class ImagePromptDraft(Base):
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
     batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Batch jobs promote a completed Grok draft into one durable RunPod task.
+    # Keep that handoff state separate from prompt generation status so a
+    # browser logout or app restart cannot hide a failed handoff.
+    promotion_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_APPLICABLE", index=True)
+    promotion_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promotion_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    promotion_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    promotion_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 

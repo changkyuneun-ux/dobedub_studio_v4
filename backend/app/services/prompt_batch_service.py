@@ -97,6 +97,7 @@ def create_prompt_generation_batch(
             raw_json=source_metadata,
             created_by=created_by,
             batch_job_id=batch_job_id,
+            promotion_status="PENDING" if batch_job_id else "NOT_APPLICABLE",
         )
         db.add(draft)
     if commit:
@@ -439,6 +440,12 @@ def retry_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[s
     draft.failure_message = None
     draft.warnings_json = []
     draft.raw_json = source_metadata
+    if draft.batch_job_id:
+        draft.promotion_status = "PENDING"
+        draft.promotion_last_error = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = _utc_naive_now()
     _refresh_batch_counts(db, draft.prompt_batch_id)
     db.commit()
     db.refresh(draft)

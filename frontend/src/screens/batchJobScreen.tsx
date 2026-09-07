@@ -77,7 +77,7 @@ function retryItemKey(item: BatchJobDetailItemResponse) {
 }
 
 function isRecoveryErrorItem(item: BatchJobDetailItemResponse) {
-  if (item.retryKind === "prompt" || item.retryKind === "runpod") return true;
+  if (item.retryKind === "prompt" || item.retryKind === "promotion" || item.retryKind === "runpod") return true;
   if (String(item.error || "").trim()) return true;
   const promptStatus = String(item.promptStatus || "").toUpperCase();
   const runpodStatus = String(item.runpodStatus || "").toUpperCase();
@@ -238,7 +238,9 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
 
   async function retryRecoveryItems(selectedItems: BatchJobDetailItemResponse[], fallbackMessage: string) {
     if (!recoveryDetail || !selectedItems.length) return;
-    const draftIds = selectedItems.filter((item) => item.retryKind === "prompt" && item.promptDraftId).map((item) => item.promptDraftId!);
+    const draftIds = selectedItems
+      .filter((item) => (item.retryKind === "prompt" || item.retryKind === "promotion") && item.promptDraftId)
+      .map((item) => item.promptDraftId!);
     const taskIds = selectedItems.filter((item) => item.retryKind === "runpod" && item.taskId).map((item) => item.taskId!);
     if (!draftIds.length && !taskIds.length) return;
     setRecoveryBusy(true);
@@ -368,7 +370,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const recoveryErrorItems = recoveryItems.filter(isRecoveryErrorItem);
   const recoveryRetryableCount = recoveryItems.filter((item) => item.retryable).length;
   const recoveryPromptFailedCount = recoveryItems.filter((item) => item.retryKind === "prompt").length;
-  const recoveryRunpodFailedCount = recoveryItems.filter((item) => item.retryKind === "runpod").length;
+  const recoveryRunpodFailedCount = recoveryItems.filter((item) => item.retryKind === "runpod" || item.retryKind === "promotion").length;
   const recoveryActiveCount = recoveryItems.filter((item) => ["PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING", "GENERATING"].includes(String(item.runpodStatus || item.promptStatus || "").toUpperCase())).length;
   const recoveryCompletedCount = recoveryItems.filter((item) => ["COMPLETED", "SUCCESS"].includes(String(item.runpodStatus || "").toUpperCase())).length;
   const recoveryTotalPages = Math.max(1, Math.ceil(recoveryErrorItems.length / RECOVERY_PAGE_SIZE));

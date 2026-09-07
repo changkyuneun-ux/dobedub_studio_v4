@@ -375,6 +375,7 @@ export type BatchJobResponse = {
   runpodPendingSubmit: number;
   runpodQueued: number;
   runpodInProgress: number;
+  promotionFailedCount: number;
   failedCount: number;
   lastDownloadedAt?: string | null;
   createdBy?: string | null;
@@ -402,12 +403,15 @@ export type BatchJobDetailItemResponse = {
   promptStatus: string;
   runpodStatus: string;
   error?: string | null;
-  retryKind: "prompt" | "runpod" | "none" | string;
+  retryKind: "prompt" | "promotion" | "runpod" | "none" | string;
   retryable: boolean;
   selectable: boolean;
   actionLabel: string;
   retryCount: number;
   nextRetryAt?: string | null;
+  promotionStatus?: string | null;
+  promotionAttempts?: number;
+  promotionLastError?: string | null;
 };
 
 export type BatchJobDetailResponse = {
@@ -419,6 +423,7 @@ export type BatchJobDetailResponse = {
 export type BatchJobRetryResponse = {
   batchJobId: string;
   promptRetried: number;
+  promotionRetried: number;
   runpodReworked: number;
   skipped: Array<{ id: string; reason: string }>;
   batch: BatchJobResponse;
