@@ -5,6 +5,7 @@ from time import perf_counter
 from email.utils import formatdate
 from pathlib import Path
 from typing import Callable, Iterator
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -107,7 +108,7 @@ def get_file(
     disposition = "attachment" if download == "1" else "inline"
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        "Content-Disposition": _content_disposition(disposition, file_name),
         # Keep an authenticated browser cache, but require validation before
         # reuse. This avoids serving a previously cached asset after logout
         # while still allowing a cheap 304 response instead of retransferring
@@ -151,6 +152,14 @@ def get_file(
         )
 
     return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers, stat_result=stat_result)
+
+
+def _content_disposition(disposition: str, file_name: str) -> str:
+    try:
+        file_name.encode("ascii")
+    except UnicodeEncodeError:
+        return f"{disposition}; filename*=utf-8''{quote(file_name)}"
+    return f'{disposition}; filename="{file_name}"'
 
 
 def _iter_file_range(

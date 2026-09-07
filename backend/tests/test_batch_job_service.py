@@ -764,6 +764,27 @@ def test_failed_drafts_are_never_promoted(db_session, monkeypatch):
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
+def test_blank_ready_drafts_are_counted_failed_and_not_promoted(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
+    drafts = _drafts_of(db_session, created["id"])
+    drafts[0].status = "READY"
+    drafts[0].positive_prompt = "ok"
+    drafts[1].status = "READY"
+    drafts[1].positive_prompt = "   "
+    db_session.commit()
+
+    result = batch_job_service.promote_ready_batch_drafts()
+    payload = batch_job_service.batch_job_detail(db_session, created["id"])["batch"]
+
+    assert result["promoted"] == 1
+    assert payload["promptCompletedCount"] == 1
+    assert payload["promptFailedCount"] == 1
+    tasks = db_session.scalars(select(WorkflowTask).where(WorkflowTask.batch_job_id == created["id"])).all()
+    assert [task.prompt_draft_id for task in tasks] == [drafts[0].id]
+    assert db_session.scalars(select(RunpodRequestBatch)).all() == []
+    assert db_session.scalars(select(RunpodRequestItem)).all() == []
+
+
 def test_promote_ignores_completed_batch_jobs(db_session, monkeypatch):
     """COMPLETE로 닫힌 배치의 뒤늦은 READY 초안은 다시 요청되지 않는다."""
     created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)

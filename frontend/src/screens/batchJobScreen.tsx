@@ -45,6 +45,20 @@ function statusLabel(status: string) {
   return normalized || "-";
 }
 
+function batchResultLabel(job: BatchJobResponse) {
+  if (String(job.status || "").toUpperCase() !== "COMPLETE") return statusLabel(job.status);
+  if (job.failedCount <= 0) return "완료";
+  const successCount = (job.promptCompletedCount || 0) + (job.videoCompletedCount || 0);
+  return successCount > 0 ? "부분 실패" : "실패";
+}
+
+function batchResultTone(job: BatchJobResponse) {
+  if (String(job.status || "").toUpperCase() !== "COMPLETE") return String(job.status || "").toLowerCase();
+  if (job.failedCount <= 0) return "complete";
+  const successCount = (job.promptCompletedCount || 0) + (job.videoCompletedCount || 0);
+  return successCount > 0 ? "partial-failed" : "failed";
+}
+
 function metricPill(value: number, tone: "gray" | "blue" | "green" | "yellow" | "red" = "gray") {
   return <span className={`v3-batch-metric-pill is-${tone}`}>{value}</span>;
 }
@@ -510,7 +524,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <td>{job.id}</td>
                   <td>{formatDateTime(job.createdAt)}</td>
                   <td>{job.createdByName || job.createdBy || "-"}</td>
-                  <td><span className={`v3-batch-status-chip is-${job.status.toLowerCase()}`}>{statusLabel(job.status)}</span></td>
+                  <td><span className={`v3-batch-status-chip is-${batchResultTone(job)}`}>{batchResultLabel(job)}</span></td>
                   <td>{formatFrameDuration(job.requestedFrames)}</td>
                   <td>{job.promptCompletedCount} / {job.totalImages}</td>
                   <td>{job.videoCompletedCount} / {job.totalImages}</td>

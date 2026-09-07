@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ECS Batch 처리 분석 대시보드</title>
+  <style>
+    :root {
+      --bg: #f6f8f7;
+      --panel: #ffffff;
+      --line: #dfe5e2;
+      --text: #141a18;
+      --muted: #6f7b76;
+      --soft: #eef5f2;
+      --green: #078252;
+      --green-2: #20a46d;
+      --amber: #b77905;
+      --amber-soft: #fff4d8;
+      --red: #c7362f;
+      --red-soft: #fdecea;
+      --blue: #2d6cdf;
+      --blue-soft: #eaf1ff;
+      --shadow: 0 18px 50px rgba(20, 26, 24, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1480px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 20px;
+      align-items: stretch;
+      margin-bottom: 22px;
+    }
+
+    .hero-main,
+    .verdict {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero-main {
+      padding: 28px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 36px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .batch-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .tag {
+      border: 1px solid #cfe3db;
+      background: #f8fbfa;
+      color: var(--green);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      font-weight: 800;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    .verdict {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 220px;
+    }
+
+    .verdict strong {
+      display: block;
+      color: var(--green);
+      font-size: 30px;
+      line-height: 1.1;
+      margin-top: 10px;
+    }
+
+    .verdict p {
+      margin: 16px 0 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .kpi,
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .kpi {
+      min-height: 118px;
+      padding: 18px 18px 16px;
+    }
+
+    .kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .kpi b {
+      display: block;
+      margin-top: 12px;
+      font-size: 32px;
+      line-height: 1;
+    }
+
+    .kpi small {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .kpi.primary {
+      background: #eaf7f1;
+      border-color: #bfe4d4;
+    }
+
+    .kpi.warning {
+      background: var(--amber-soft);
+      border-color: #f1d28c;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    section {
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 14px 12px;
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      background: #fbfcfb;
+    }
+
+    td.num,
+    th.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-weight: 800;
+      color: #27302c;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 12px;
+      border-radius: 8px;
+      background: #e5f5ee;
+      color: var(--green);
+      font-weight: 900;
+    }
+
+    .status.warn {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .status.bad {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .bars {
+      display: grid;
+      gap: 16px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr) 86px;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .bar-label {
+      color: #28322e;
+      font-size: 13px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bar-track {
+      height: 18px;
+      border-radius: 8px;
+      background: #eef2f0;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 8px;
+      background: linear-gradient(90deg, var(--green), var(--green-2));
+    }
+
+    .bar-fill.amber {
+      background: linear-gradient(90deg, #d18b08, #f0ba42);
+    }
+
+    .bar-value {
+      text-align: right;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #fbfcfb;
+    }
+
+    .mini-card strong {
+      display: block;
+      font-size: 28px;
+      line-height: 1;
+      margin: 8px 0 10px;
+    }
+
+    .mini-card span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 16px;
+      align-items: start;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .timeline-item:last-child {
+      border-bottom: 0;
+    }
+
+    .timeline-item b {
+      color: var(--green);
+    }
+
+    .timeline-item p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .callout {
+      border: 1px solid #f1d28c;
+      border-radius: 8px;
+      background: #fff9ec;
+      padding: 16px;
+      color: #654706;
+      line-height: 1.55;
+      margin-top: 14px;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 1180px) {
+      main {
+        width: min(100vw - 28px, 980px);
+      }
+
+      .hero,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .kpis {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: calc(100vw - 20px);
+        padding-top: 18px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .kpis,
+      .cards,
+      .bar-row,
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+
+      section {
+        overflow-x: auto;
+      }
+
+      table {
+        min-width: 760px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="hero">
+      <div class="hero-main">
+        <div class="eyebrow">ECS Batch Analysis · 2026-09-07 KST</div>
+        <h1>ECS Batch 처리 분석 대시보드</h1>
+        <p class="subtitle">
+          운영 ECS 앱에서 처리된 두 개 Batch 작업의 성공률, 실패 원인, 단계별 처리시간,
+          그리고 하루 5,000개 이미지 처리 가능성을 발표용으로 요약했습니다.
+        </p>
+        <div class="batch-tags">
+          <span class="tag">송승화_2권_08-10화_260906</span>
+          <span class="tag">송승화_2권_01-07화_260906</span>
+        </div>
+      </div>
+      <aside class="verdict">
+        <div>
+          <div class="eyebrow">운영 판단</div>
+          <strong>대량 처리 가능</strong>
+          <p>단, 프롬프트 실패 사유 기록과 output asset 중복 방어가 필요합니다.</p>
+        </div>
+        <span class="status">RunPod 실패 0건</span>
+      </aside>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi primary">
+        <span>총 이미지</span>
+        <b>571</b>
+        <small>Batch 2건 합산</small>
+      </div>
+      <div class="kpi">
+        <span>영상 생성 완료</span>
+        <b>546</b>
+        <small>RunPod completed</small>
+      </div>
+      <div class="kpi warning">
+        <span>전체 실패</span>
+        <b>25</b>
+        <small>모두 MANUAL_REQUIRED</small>
+      </div>
+      <div class="kpi primary">
+        <span>성공률</span>
+        <b>95.62%</b>
+        <small>546 / 571</small>
+      </div>
+      <div class="kpi">
+        <span>환산 처리량</span>
+        <b>267/h</b>
+        <small>실측 관찰 구간 기준</small>
+      </div>
+      <div class="kpi">
+        <span>5,000건 예상</span>
+        <b>18.8h</b>
+        <small>재처리 제외 단순 환산</small>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section>
+        <div class="section-head">
+          <h2>Batch별 결과 비교</h2>
+          <span class="note">프롬프트 성공 건은 모두 RunPod 완료 task로 연결됨</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Batch ID</th>
+              <th>ZIP 파일명</th>
+              <th class="num">총 이미지</th>
+              <th class="num">성공</th>
+              <th class="num">실패</th>
+              <th class="num">성공률</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mono">송승화_2권_08-10화_260906</td>
+              <td>2권 08-10화.zip</td>
+              <td class="num">170</td>
+              <td class="num">164</td>
+              <td class="num">6</td>
+              <td class="num"><span class="status">96.47%</span></td>
+            </tr>
+            <tr>
+              <td class="mono">송승화_2권_01-07화_260906</td>
+              <td>2권 01-07화.zip</td>
+              <td class="num">401</td>
+              <td class="num">382</td>
+              <td class="num">19</td>
+              <td class="num"><span class="status">95.26%</span></td>
+            </tr>
+            <tr>
+              <td><b>합계</b></td>
+              <td>-</td>
+              <td class="num"><b>571</b></td>
+              <td class="num"><b>546</b></td>
+              <td class="num"><b>25</b></td>
+              <td class="num"><b>95.62%</b></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>실패 원인 요약</h2>
+        </div>
+        <div class="cards">
+          <div class="mini-card">
+            <span>Grok 수동확인</span>
+            <strong>25</strong>
+            <span class="status warn">4.38%</span>
+          </div>
+          <div class="mini-card">
+            <span>RunPod 실패</span>
+            <strong>0</strong>
+            <span class="status">0.00%</span>
+          </div>
+          <div class="mini-card">
+            <span>결과 저장 실패</span>
+            <strong>0</strong>
+            <span class="status">0.00%</span>
+          </div>
+        </div>
+        <div class="callout">
+          실패 25건은 모두 프롬프트 단계의 <b>MANUAL_REQUIRED</b>입니다.
+          현재 운영 데이터에는 세부 실패 사유가 비어 있어, 재처리 우선순위 판단을 위해 사유 저장 보강이 필요합니다.
+        </div>
+      </section>
+    </div>
+
+    <section>
+      <div class="section-head">
+        <h2>단계별 처리 시간</h2>
+        <span class="note">Grok/RunPod 내부 측정값 기준. timestamp 기준 혼재로 단계 간 gap은 참고값입니다.</span>
+      </div>
+      <div class="bars">
+        <div class="bar-row">
+          <span class="bar-label">08-10화 · Grok 처리 구간</span>
+          <div class="bar-track"><div class="bar-fill" style="width: 9.5%"></div></div>
+          <span class="bar-value">11m 04s</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">01-07화 · Grok 처리 구간</span>
+          <div class="bar-track"><div class="bar-fill" style="width: 23.6%"></div></div>
+          <span class="bar-value">27m 28s</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">08-10화 · RunPod 처리 구간</span>
+          <div class="bar-track"><div class="bar-fill amber" style="width: 41.2%"></div></div>
+          <span class="bar-value">48m 04s</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">01-07화 · RunPod 처리 구간</span>
+          <div class="bar-track"><div class="bar-fill amber" style="width: 100%"></div></div>
+          <span class="bar-value">1h 56m</span>
+        </div>
+      </div>
+      <div class="callout">
+        Grok 평균 응답은 8초대입니다. RunPod 평균 elapsed는 08-10화 19분 27초/task,
+        01-07화 61분 43초/task로 차이가 커서 queue 대기 영향이 큰 것으로 판단됩니다.
+      </div>
+    </section>
+
+    <div class="grid">
+      <section>
+        <div class="section-head">
+          <h2>일 5,000개 이미지 처리 시뮬레이션</h2>
+          <span class="note">실측 571건, 환산 처리량 267건/시간 기준</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>기준</th>
+              <th class="num">값</th>
+              <th>판단</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>목표 처리량</td>
+              <td class="num">208.3건/시간</td>
+              <td>5,000건/일 최소 기준</td>
+            </tr>
+            <tr>
+              <td>운영 실측 환산</td>
+              <td class="num">267건/시간</td>
+              <td><span class="status">목표 초과</span></td>
+            </tr>
+            <tr>
+              <td>5,000건 예상 소요</td>
+              <td class="num">18.8시간</td>
+              <td>재처리 제외 단순 환산</td>
+            </tr>
+            <tr>
+              <td>실패율 반영 재처리 대상</td>
+              <td class="num">약 219건</td>
+              <td><span class="status warn">운영 여유 필요</span></td>
+            </tr>
+            <tr>
+              <td>재처리 여유 포함</td>
+              <td class="num">19.6~20.6시간</td>
+              <td>24시간 내 가능 범위</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>처리량 민감도</h2>
+        </div>
+        <div class="bars">
+          <div class="bar-row">
+            <span class="bar-label">180건/시간</span>
+            <div class="bar-track"><div class="bar-fill amber" style="width: 100%"></div></div>
+            <span class="bar-value">27.8h</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">208건/시간</span>
+            <div class="bar-track"><div class="bar-fill amber" style="width: 86%"></div></div>
+            <span class="bar-value">24.0h</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">250건/시간</span>
+            <div class="bar-track"><div class="bar-fill" style="width: 72%"></div></div>
+            <span class="bar-value">20.0h</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">267건/시간</span>
+            <div class="bar-track"><div class="bar-fill" style="width: 68%"></div></div>
+            <span class="bar-value">18.8h</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">300건/시간</span>
+            <div class="bar-track"><div class="bar-fill" style="width: 60%"></div></div>
+            <span class="bar-value">16.7h</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section>
+      <div class="section-head">
+        <h2>데이터 정합성 및 운영 리스크</h2>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>점검 항목</th>
+            <th>결과</th>
+            <th>운영 영향</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Batch 총 이미지 = 프롬프트 성공 + 실패</td>
+            <td><span class="status">일치</span></td>
+            <td>Batch 카운터 신뢰 가능</td>
+          </tr>
+          <tr>
+            <td>프롬프트 성공 건 = RunPod 완료 task</td>
+            <td><span class="status">일치</span></td>
+            <td>성공 건 흐름 정상</td>
+          </tr>
+          <tr>
+            <td>프롬프트 실패 건 RunPod 유입</td>
+            <td><span class="status">없음</span></td>
+            <td>GPU 비용 낭비 없음</td>
+          </tr>
+          <tr>
+            <td>완료 task 대비 final output link</td>
+            <td><span class="status warn">13건 초과</span></td>
+            <td>다운로드/이력 표시는 task당 대표 결과 1개 기준 방어 필요</td>
+          </tr>
+          <tr>
+            <td>timestamp 저장 기준</td>
+            <td><span class="status warn">혼재</span></td>
+            <td>단계 간 대기시간 분석 왜곡 가능</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>결론</h2>
+      </div>
+      <div class="timeline">
+        <div class="timeline-item">
+          <b>결과</b>
+          <p>총 571건 중 546건 완료, 25건 실패로 성공률 95.62%를 기록했습니다.</p>
+        </div>
+        <div class="timeline-item">
+          <b>실패 위치</b>
+          <p>실패는 모두 Grok 프롬프트 수동확인 단계이며, RunPod 영상 생성 실패는 없습니다.</p>
+        </div>
+        <div class="timeline-item">
+          <b>5,000건/일</b>
+          <p>현재 실측 처리량 기준으로 가능 범위이나, queue 변동과 재처리 여유를 감안한 모니터링이 필요합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">Source: ECS one-off read-only RDS query · dobedub-app task definition 94</div>
+  </main>
+</body>
+</html>

@@ -623,6 +623,8 @@ def _unpromoted_ready_drafts(limit: int, cutoff: datetime):
         .where(
             BatchJob.status == BATCH_JOB_INCOMPLETE,
             ImagePromptDraft.status == "READY",
+            ImagePromptDraft.positive_prompt.is_not(None),
+            func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
             or_(ImagePromptDraft.promotion_claimed_at.is_(None), ImagePromptDraft.promotion_claimed_at <= cutoff),
             ~already_promoted,
         )
@@ -737,12 +739,25 @@ def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
     ).all()
     drafts = {str(status or "").upper(): int(total or 0) for status, total in draft_rows}
     tasks = {str(status or "").upper(): int(total or 0) for status, total in task_rows}
+    blank_ready = int(db.scalar(
+        select(func.count())
+        .select_from(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.batch_job_id == batch_job_id,
+            ImagePromptDraft.status == "READY",
+            or_(
+                ImagePromptDraft.positive_prompt.is_(None),
+                func.length(func.trim(ImagePromptDraft.positive_prompt)) == 0,
+            ),
+        )
+    ) or 0)
+    valid_ready = max(0, drafts.get("READY", 0) - blank_ready)
     video_failed = sum(tasks.get(state, 0) for state in TERMINAL_TASK_STATES - SUCCESS_TASK_STATES)
     return {
         "promptWaiting": drafts.get("PENDING", 0),
         "promptGenerating": drafts.get("GENERATING", 0),
-        "promptReady": drafts.get("READY", 0),
-        "promptFailed": sum(drafts.get(state, 0) for state in FAILED_DRAFT_STATES),
+        "promptReady": valid_ready,
+        "promptFailed": sum(drafts.get(state, 0) for state in FAILED_DRAFT_STATES) + blank_ready,
         "promptTerminal": sum(drafts.get(state, 0) for state in TERMINAL_DRAFT_STATES),
         "videoRequested": sum(tasks.values()),
         "videoPendingSubmit": tasks.get("PENDING_SUBMIT", 0) + tasks.get("DISPATCHING", 0),
@@ -767,6 +782,8 @@ def _batch_is_settled(db: Session, batch: BatchJob) -> bool:
         .where(
             ImagePromptDraft.batch_job_id == batch.id,
             ImagePromptDraft.status == "READY",
+            ImagePromptDraft.positive_prompt.is_not(None),
+            func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
             ~select(WorkflowTask.id)
             .where(
                 WorkflowTask.prompt_draft_id == ImagePromptDraft.id,

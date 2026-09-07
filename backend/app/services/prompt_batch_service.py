@@ -496,11 +496,11 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
             image_height=asset.get("imageHeight"),
             instruction_text=instruction_text,
         )
-        draft.status = "MANUAL_REQUIRED" if not result.positive_prompt else DRAFT_READY
+        draft.status = DRAFT_MANUAL_REQUIRED if not result.positive_prompt else DRAFT_READY
         draft.positive_prompt = result.positive_prompt
         draft.warnings_json = result.warnings
         draft.raw_json = {**source_metadata, "imageType": result.image_type, "response": result.raw_response}
-        attempt.status = DRAFT_READY
+        attempt.status = draft.status
         attempt.response_json = result.raw_response
         attempt.input_tokens, attempt.output_tokens = _usage_tokens(result.raw_response)
     except (GrokPromptError, GrokPromptInputError, ValueError, KeyError, FileNotFoundError) as exc:
@@ -536,8 +536,8 @@ def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
 
 def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str]) -> None:
     total = len(draft_statuses) if draft_statuses else int(batch.total_count or 0)
-    batch.completed_count = sum(status in {DRAFT_READY, "MANUAL_REQUIRED"} for status in draft_statuses)
-    batch.failed_count = sum(status == DRAFT_FAILED for status in draft_statuses)
+    batch.completed_count = sum(status == DRAFT_READY for status in draft_statuses)
+    batch.failed_count = sum(status in PROMPT_FAILURE_STATES for status in draft_statuses)
     if total <= 0:
         batch.status = BATCH_COMPLETED
     elif batch.completed_count + batch.failed_count >= total:
@@ -550,8 +550,8 @@ def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str])
 
 def _batch_counts_from_drafts(batch: PromptGenerationBatch, drafts: list[ImagePromptDraft]) -> dict[str, Any]:
     total = len(drafts) if drafts else int(batch.total_count or 0)
-    completed = sum(draft.status in {DRAFT_READY, "MANUAL_REQUIRED"} for draft in drafts)
-    failed = sum(draft.status == DRAFT_FAILED for draft in drafts)
+    completed = sum(draft.status == DRAFT_READY for draft in drafts)
+    failed = sum(draft.status in PROMPT_FAILURE_STATES for draft in drafts)
     pending = sum(draft.status == DRAFT_PENDING for draft in drafts)
     if completed + failed >= total and total:
         status = BATCH_COMPLETED_WITH_ERRORS if failed else BATCH_COMPLETED

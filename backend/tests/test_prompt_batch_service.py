@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import event, inspect
+from sqlalchemy import event, inspect, select
 
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
@@ -68,6 +68,44 @@ def test_batch_persists_items_and_grok_attempt_metadata(db_session, monkeypatch,
     assert result["items"][0]["grokResponse"]["inputTokens"] == 12
     assert result["items"][1]["positivePrompt"] is None
     assert db_session.query(PromptGenerationAttempt).count() == 2
+
+
+def test_empty_grok_prompt_counts_as_failed_not_completed(db_session, monkeypatch, tmp_path):
+    db_session.add(_asset("asset_manual"))
+    db_session.commit()
+    monkeypatch.setattr(service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    image_path = Path(tmp_path) / "asset_manual.png"
+    image_path.write_bytes(b"x")
+    monkeypatch.setattr(service.studio_api_service, "get_asset", lambda _asset_id: (
+        {"fileName": "asset_manual.png", "mimeType": "image/png", "imageWidth": 900, "imageHeight": 1200},
+        image_path,
+    ))
+    monkeypatch.setattr(
+        service,
+        "generate_image_prompt",
+        lambda *_args, **_kwargs: GrokImagePromptResult(
+            "",
+            "indoor_background",
+            ["manual_input_required"],
+            {"positivePrompt": "", "imageType": "indoor_background"},
+        ),
+    )
+    batch = service.create_prompt_generation_batch(
+        db_session,
+        {"workflowId": "1-images.json", "items": [{"assetId": "asset_manual", "slotIndex": 1}]},
+        created_by="dobedub",
+    )
+
+    result = service.process_prompt_generation_batch(db_session, batch["id"])
+    attempt = db_session.scalar(
+        select(PromptGenerationAttempt).where(PromptGenerationAttempt.draft_id == result["items"][0]["draftId"])
+    )
+
+    assert result["status"] == service.BATCH_COMPLETED_WITH_ERRORS
+    assert result["completedCount"] == 0
+    assert result["failedCount"] == 1
+    assert result["items"][0]["status"] == service.DRAFT_MANUAL_REQUIRED
+    assert attempt.status == service.DRAFT_MANUAL_REQUIRED
 
 
 def test_batch_uses_workflow_default_negative_prompt_when_request_is_blank(db_session, monkeypatch):
