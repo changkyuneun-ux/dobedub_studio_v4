@@ -29,10 +29,12 @@ DRAFT_FAILED = "FAILED"
 DRAFT_MANUAL_REQUIRED = "MANUAL_REQUIRED"
 PROMPT_FAILURE_STATES = {DRAFT_FAILED, DRAFT_MANUAL_REQUIRED}
 RUNPOD_WAITING_STATES = {"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"}
+RUNPOD_PRE_SUBMIT_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
 RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
 RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
 RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
 STALE_GENERATING_FAILURE_MESSAGE = "Grok 프롬프트 생성이 중단되어 실패 처리되었습니다."
+INVALID_PROMPT_TASK_FAILURE_MESSAGE = "프롬프트 생성 실패로 RunPod 요청을 취소했습니다."
 LOGGER = logging.getLogger(__name__)
 _BATCH_BLOCKING_GROK_STATUS_CODES = {401, 403}
 _BATCH_BLOCKING_GROK_MESSAGE_MARKERS = (
@@ -248,6 +250,47 @@ def _naive_timestamp_for_age(value: datetime, now: datetime) -> datetime:
     if value > now + timedelta(hours=1):
         return value - timedelta(hours=9)
     return value
+
+
+def _mark_draft_failed(db: Session, draft: ImagePromptDraft, failure_message: str, now: datetime | None = None) -> None:
+    timestamp = now or _utc_naive_now()
+    draft.status = DRAFT_FAILED
+    draft.positive_prompt = None
+    draft.failure_message = failure_message
+    draft.updated_at = timestamp
+    if draft.batch_job_id:
+        draft.promotion_status = "FAILED"
+        draft.promotion_last_error = failure_message
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = timestamp
+        _fail_pre_submit_tasks_for_failed_draft(db, draft, failure_message, timestamp)
+
+
+def _fail_pre_submit_tasks_for_failed_draft(
+    db: Session,
+    draft: ImagePromptDraft,
+    failure_message: str,
+    now: datetime,
+) -> int:
+    tasks = db.scalars(
+        select(WorkflowTask).where(
+            WorkflowTask.prompt_draft_id == draft.id,
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.status.in_(RUNPOD_PRE_SUBMIT_STATES),
+        )
+    ).all()
+    if not tasks:
+        return 0
+    error = f"{INVALID_PROMPT_TASK_FAILURE_MESSAGE}: {failure_message}" if failure_message else INVALID_PROMPT_TASK_FAILURE_MESSAGE
+    for task in tasks:
+        task.status = "FAILED"
+        task.progress = 100
+        task.completed_at = now
+        task.last_dispatch_error = error
+        task.runpod_status_json = {"status": "FAILED", "error": error}
+        task.updated_at = now
+    return len(tasks)
 
 
 def prompt_generation_batch_payload(db: Session, batch_id: str) -> dict[str, Any]:
@@ -523,8 +566,7 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
         attempt.response_json = result.raw_response
         attempt.input_tokens, attempt.output_tokens = _usage_tokens(result.raw_response)
     except (GrokPromptError, GrokPromptInputError, ValueError, KeyError, FileNotFoundError) as exc:
-        draft.status = DRAFT_FAILED
-        draft.failure_message = str(exc)
+        _mark_draft_failed(db, draft, str(exc))
         attempt.status = DRAFT_FAILED
         attempt.failure_message = str(exc)
         if _is_batch_blocking_grok_error(exc):
@@ -543,8 +585,7 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
                     getattr(exc, "status_code", None),
                 )
     except Exception as exc:  # Preserve the batch and allow other images to continue.
-        draft.status = DRAFT_FAILED
-        draft.failure_message = "Grok image prompt generation failed."
+        _mark_draft_failed(db, draft, "Grok image prompt generation failed.")
         attempt.status = DRAFT_FAILED
         attempt.failure_message = str(exc)
     finally:
@@ -587,8 +628,16 @@ def _fail_remaining_pending_drafts_for_batch(
     now = _utc_naive_now()
     for pending_draft in pending_drafts:
         pending_draft.status = DRAFT_FAILED
+        pending_draft.positive_prompt = None
         pending_draft.failure_message = failure_message
         pending_draft.updated_at = now
+        if pending_draft.batch_job_id:
+            pending_draft.promotion_status = "FAILED"
+            pending_draft.promotion_last_error = failure_message
+            pending_draft.promotion_next_attempt_at = None
+            pending_draft.promotion_claimed_at = None
+            pending_draft.promotion_updated_at = now
+            _fail_pre_submit_tasks_for_failed_draft(db, pending_draft, failure_message, now)
     return len(pending_drafts)
 
 

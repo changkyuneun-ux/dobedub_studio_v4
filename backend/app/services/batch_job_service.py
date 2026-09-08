@@ -43,10 +43,12 @@ TERMINAL_TASK_STATES = frozenset({"COMPLETED", "SUCCESS", "FAILED", "CANCELLED",
 SUCCESS_TASK_STATES = frozenset({"COMPLETED", "SUCCESS"})
 REWORKABLE_TASK_STATES = TERMINAL_TASK_STATES - SUCCESS_TASK_STATES
 ACTIVE_TASK_STATES = frozenset({"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"})
+PRE_RUNPOD_SUBMISSION_STATES = frozenset({"PENDING_SUBMIT", "DISPATCHING"})
 PROMOTION_PENDING = "PENDING"
 PROMOTION_DISPATCHING = "DISPATCHING"
 PROMOTION_TASK_CREATED = "TASK_CREATED"
 PROMOTION_FAILED = "FAILED"
+INVALID_PROMPT_TASK_FAILURE_MESSAGE = "프롬프트 생성 실패로 RunPod 요청을 취소했습니다."
 
 # Kept as a short-lived monitor diagnostic for existing callers. The durable
 # per-draft promotion error is stored on ImagePromptDraft.
@@ -437,16 +439,16 @@ def _batch_detail_item(
     error = ""
     if duplicate:
         error = "동일 프롬프트에 연결된 RunPod 작업이 2개 이상입니다."
+    elif prompt_failed:
+        retry_kind = "prompt"
+        retryable = True
+        action_label = "재처리"
+        error = str(draft.failure_message or "")
     elif promotion_failed:
         retry_kind = "promotion"
         retryable = True
         action_label = "RunPod 요청 재처리"
         error = str(draft.promotion_last_error or "RunPod 작업 연결에 실패했습니다.")
-    elif prompt_failed and latest_task is None:
-        retry_kind = "prompt"
-        retryable = True
-        action_label = "재처리"
-        error = str(draft.failure_message or "")
     elif runpod_failed:
         retry_kind = "runpod"
         retryable = True
@@ -701,6 +703,10 @@ def claim_batch_drafts_for_promotion(
             ImagePromptDraft.__table__.update()
             .where(
                 ImagePromptDraft.id == draft_id,
+                ImagePromptDraft.batch_job_id == batch_id,
+                ImagePromptDraft.status == "READY",
+                ImagePromptDraft.positive_prompt.is_not(None),
+                func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
                 or_(ImagePromptDraft.promotion_claimed_at.is_(None), ImagePromptDraft.promotion_claimed_at <= cutoff),
             )
             .values(
@@ -738,6 +744,9 @@ def still_owns_claim(db: Session, claims: dict[str, datetime]) -> list[str]:
                 ImagePromptDraft.id == draft_id,
                 ImagePromptDraft.promotion_claimed_at == claimed_at,
                 ImagePromptDraft.promotion_status == PROMOTION_DISPATCHING,
+                ImagePromptDraft.status == "READY",
+                ImagePromptDraft.positive_prompt.is_not(None),
+                func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
             )
         )
         if row is not None:
@@ -772,6 +781,9 @@ def _reconcile_existing_batch_task_promotions(db: Session, now: datetime) -> Non
         select(ImagePromptDraft).where(
             ImagePromptDraft.batch_job_id.is_not(None),
             ImagePromptDraft.promotion_status != PROMOTION_TASK_CREATED,
+            ImagePromptDraft.status == "READY",
+            ImagePromptDraft.positive_prompt.is_not(None),
+            func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
             task_exists,
         )
     ).all()
@@ -848,6 +860,7 @@ def refresh_batch_job_counters() -> dict[str, Any]:
 
 
 def _refresh_batch_row(db: Session, batch: BatchJob) -> bool:
+    _reconcile_failed_prompt_submission_tasks(db, batch.id)
     counts = _counts_for(db, batch.id)
     batch.prompt_completed_count = counts["promptReady"]
     batch.prompt_failed_count = counts["promptFailed"]
@@ -860,6 +873,42 @@ def _refresh_batch_row(db: Session, batch: BatchJob) -> bool:
     batch.runpod_queued_count = counts["videoQueued"]
     batch.runpod_in_progress_count = counts["videoInProgress"]
     return _batch_is_settled(db, batch)
+
+
+def _reconcile_failed_prompt_submission_tasks(db: Session, batch_job_id: str) -> int:
+    rows = db.execute(
+        select(ImagePromptDraft, WorkflowTask)
+        .join(WorkflowTask, WorkflowTask.prompt_draft_id == ImagePromptDraft.id)
+        .where(
+            ImagePromptDraft.batch_job_id == batch_job_id,
+            ImagePromptDraft.status.in_(FAILED_DRAFT_STATES),
+            WorkflowTask.batch_job_id == batch_job_id,
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.status.in_(PRE_RUNPOD_SUBMISSION_STATES),
+        )
+        .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+    ).all()
+    if not rows:
+        return 0
+    now = now_seoul_naive()
+    for draft, task in rows:
+        failure = str(draft.failure_message or "").strip()
+        error = f"{INVALID_PROMPT_TASK_FAILURE_MESSAGE}: {failure}" if failure else INVALID_PROMPT_TASK_FAILURE_MESSAGE
+        task.status = "FAILED"
+        task.progress = 100
+        task.completed_at = now
+        task.last_dispatch_error = error
+        task.runpod_status_json = {"status": "FAILED", "error": error}
+        task.updated_at = now
+        draft.positive_prompt = None
+        draft.promotion_status = PROMOTION_FAILED
+        draft.promotion_last_error = error
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = now
+        draft.updated_at = now
+    db.flush()
+    return len(rows)
 
 
 def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:

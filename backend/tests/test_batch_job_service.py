@@ -848,6 +848,112 @@ def test_failed_drafts_are_never_promoted(db_session, monkeypatch):
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
+def test_promotion_claim_rechecks_draft_is_still_ready(db_session, monkeypatch):
+    db_session.add(_user())
+    db_session.add(_asset("asset_claim_race"))
+    batch = BatchJob(
+        id="batch_claim_race",
+        workflow_id="1-images.json",
+        status="INCOMPLETE",
+        total_images=1,
+        created_by="operator_1",
+    )
+    draft = ImagePromptDraft(
+        id="draft_claim_race",
+        asset_id="asset_claim_race",
+        workflow_id="1-images.json",
+        slot_index=1,
+        status="FAILED",
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="stale prompt from an earlier state",
+        failure_message="Grok response did not contain a JSON object.",
+        batch_job_id=batch.id,
+        promotion_status=batch_job_service.PROMOTION_PENDING,
+        created_by="operator_1",
+    )
+    db_session.add_all([batch, draft])
+    db_session.commit()
+
+    def stale_candidate_query(_limit, _cutoff, _now):
+        return (
+            select(ImagePromptDraft.id, ImagePromptDraft.batch_job_id, BatchJob.created_by)
+            .join(BatchJob, BatchJob.id == ImagePromptDraft.batch_job_id)
+            .where(ImagePromptDraft.id == draft.id)
+        )
+
+    monkeypatch.setattr(batch_job_service, "_unpromoted_ready_drafts", stale_candidate_query)
+
+    claimed, stamps = batch_job_service.claim_batch_drafts_for_promotion(db_session, limit=1)
+
+    assert claimed == []
+    assert stamps == {}
+    db_session.refresh(draft)
+    assert draft.promotion_status == batch_job_service.PROMOTION_PENDING
+    assert draft.promotion_claimed_at is None
+
+
+def test_batch_detail_fails_pending_runpod_task_when_prompt_draft_failed(db_session):
+    db_session.add(_user())
+    db_session.add(_asset("asset_failed_prompt_task"))
+    batch = BatchJob(
+        id="batch_failed_prompt_task",
+        workflow_id="1-images.json",
+        status="INCOMPLETE",
+        total_images=1,
+        created_by="operator_1",
+    )
+    draft = ImagePromptDraft(
+        id="draft_failed_prompt_task",
+        asset_id="asset_failed_prompt_task",
+        workflow_id="1-images.json",
+        slot_index=1,
+        status="FAILED",
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="stale prompt that must not be submitted",
+        failure_message="Grok response did not contain positivePrompt.",
+        batch_job_id=batch.id,
+        promotion_status=batch_job_service.PROMOTION_TASK_CREATED,
+        created_by="operator_1",
+    )
+    task = WorkflowTask(
+        id="task_failed_prompt_pending",
+        workflow_id="1-images.json",
+        status="PENDING_SUBMIT",
+        positive_prompts=[],
+        negative_prompts=[],
+        config_json={},
+        wan_node_config={},
+        patch_summary={},
+        payload_json={"promptDraftId": draft.id, "batchJobId": batch.id},
+        runpod_submit_json={},
+        runpod_status_json={},
+        prompt_draft_id=draft.id,
+        batch_job_id=batch.id,
+        user_id="operator_1",
+    )
+    db_session.add_all([batch, draft, task])
+    db_session.commit()
+
+    detail = batch_job_service.batch_job_detail(db_session, batch.id)
+
+    db_session.refresh(task)
+    db_session.refresh(draft)
+    assert task.status == "FAILED"
+    assert "프롬프트 생성 실패" in (task.last_dispatch_error or "")
+    assert draft.promotion_status == batch_job_service.PROMOTION_FAILED
+    assert draft.positive_prompt is None
+    assert detail["batch"]["runpodPendingSubmit"] == 0
+    assert detail["batch"]["videoFailedCount"] == 1
+    assert detail["items"][0]["promptStatus"] == "FAILED"
+    assert detail["items"][0]["runpodStatus"] == "FAILED"
+    assert detail["items"][0]["retryKind"] == "prompt"
+    assert detail["items"][0]["error"] == "Grok response did not contain positivePrompt."
+
+
 def test_blank_ready_drafts_are_counted_failed_and_not_promoted(db_session, monkeypatch):
     created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
     drafts = _drafts_of(db_session, created["id"])
