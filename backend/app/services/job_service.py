@@ -239,9 +239,15 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
     if not job:
         raise KeyError(task_id)
     elapsed = max(0, time.time() - job["createdAt"])
-    if str(job.get("status") or "").upper() in {"PENDING_SUBMIT", "DISPATCHING"}:
+    status = str(job.get("status") or "").upper()
+    if status in {"PENDING_SUBMIT", "DISPATCHING"}:
         progress = 0
         terminal = False
+    elif job.get("executionMode") == "runpod" and status in TERMINAL_RUNPOD_STATES:
+        progress = 100
+        job["progress"] = progress
+        runpod_status = job.get("runpodStatus") or {"status": status}
+        terminal = True
     elif job.get("executionMode") == "runpod":
         runpod_status, elapsed, progress = poll_runpod_job(runtime, job)
         terminal = runpod_status.get("status") in TERMINAL_RUNPOD_STATES
