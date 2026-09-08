@@ -245,18 +245,42 @@ def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
 def test_runpod_history_replay_actions_stay_on_runpod_history() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
-    right_panel = source.split('rightPanel={', 1)[1].split("{/* Assets */}", 1)[0]
     toolbar = source.split('v3-runpod-history-actions', 1)[1].split('<div className="v3-card v3-runpod-history-table">', 1)[0]
 
     assert "reworkRunpodHistoryItems" in client
     assert "전체 재실행" not in source
-    assert ">재실행</button>" in right_panel
-    assert "onClick={() => reworkRunpodHistoryItem(selectedItem)}" in right_panel
-    assert "onClick={() => onRework(selectedItem)}" not in right_panel
     assert "선택 재실행" in toolbar
     assert "조회 오류 재실행" in toolbar
     assert "reworkSelectedRunpodItems" in source
     assert "reworkFilteredRunpodItems" in source
+    assert "void reworkRunpodHistoryItem(item)" in source
+    assert "onClick={() => onRework(selectedItem)}" not in source
+
+
+def test_runpod_history_right_panel_shows_filtered_statistics_dashboard() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "runpodHistoryStats" in source
+    assert "runpodAppliedFilters" in source
+    assert "runpodStatSegments" in source
+    assert "filteredHistory.reduce" in source
+    assert "RunPod 조회 통계" in source
+    assert "현재 필터 기준" in source
+    assert "총건" in source
+    assert "완료" in source
+    assert "실패" in source
+    assert "취소" in source
+    assert "제출대기" in source
+    assert "진행" in source
+    assert "결과 구성" in source
+    assert "적용된 필터" in source
+    assert "재실행 기준" in source
+    assert "조회 오류 재실행 대상" in source
+    assert "진행/제출대기 자동 제외" in source
+    assert "RUN #" not in source.split('rightPanel={', 1)[1].split('<div className="v3-scope-tabs"', 1)[0]
+    assert ".v3-runpod-stat-bar" in css
+    assert ".v3-filter-chip-list" in css
 
 
 def test_batch_job_creation_uses_zip_upload_studio_confirm_modal_and_five_second_default() -> None:
