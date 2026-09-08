@@ -258,13 +258,16 @@ def test_runpod_history_replay_actions_stay_on_runpod_history() -> None:
 
 
 def test_runpod_history_right_panel_shows_filtered_statistics_dashboard() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
 
     assert "runpodHistoryStats" in source
     assert "runpodAppliedFilters" in source
     assert "runpodStatSegments" in source
-    assert "filteredHistory.reduce" in source
+    assert "stats?: RunpodHistoryStats" in client
+    assert "response.stats || EMPTY_RUNPOD_HISTORY_STATS" in source
+    assert "filteredHistory.reduce" not in source
     assert "RunPod 조회 통계" in source
     assert "현재 필터 기준" in source
     assert "총건" in source

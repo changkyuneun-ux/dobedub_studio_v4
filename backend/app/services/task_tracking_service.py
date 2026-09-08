@@ -171,6 +171,61 @@ def task_history_total(
         session.close()
 
 
+def _history_status_stat_key(status: str | None) -> str:
+    normalized = str(status or "").upper()
+    if normalized in {"COMPLETED", "SUCCESS"}:
+        return "completed"
+    if normalized in {"FAILED", "TIMED_OUT"}:
+        return "failed"
+    if normalized == "CANCELLED":
+        return "cancelled"
+    if normalized in PENDING_SUBMISSION_STATES:
+        return "pendingSubmit"
+    return "active"
+
+
+def task_history_stats(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    batch_job_id: str = "",
+) -> dict[str, int]:
+    session = SessionLocal()
+    try:
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+            batch_job_id=batch_job_id,
+        )
+        rows = session.execute(
+            select(WorkflowTask.status, func.count())
+            .select_from(WorkflowTask)
+            .where(*conditions)
+            .group_by(WorkflowTask.status)
+        ).all()
+        stats = {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "pendingSubmit": 0,
+            "active": 0,
+        }
+        for status, count in rows:
+            value = int(count or 0)
+            stats["total"] += value
+            stats[_history_status_stat_key(status)] += value
+        return stats
+    finally:
+        session.close()
+
+
 def _history_filter_conditions(
     *,
     workflow_id: str = "",

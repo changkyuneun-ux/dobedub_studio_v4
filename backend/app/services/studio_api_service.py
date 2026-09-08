@@ -25,6 +25,7 @@ from backend.app.services.task_tracking_service import (
     restore_job_from_task,
     reusable_task_prompts,
     task_history_items,
+    task_history_stats,
     task_history_total,
     task_prompts,
     update_task_prompt_quality,
@@ -159,7 +160,7 @@ def paginated_runpod_history(
 ) -> dict:
     """Return the dedicated RunPod-history contract with its fixed 10-row page."""
     run_date = str(run_date or "").strip()
-    return paginated_history(
+    response = paginated_history(
         page,
         10,
         workflow_id=workflow_id,
@@ -169,6 +170,15 @@ def paginated_runpod_history(
         date_to=run_date,
         batch_job_id=batch_job_id,
     )
+    response["stats"] = task_history_stats(
+        workflow_id=workflow_id,
+        result_status=result_status,
+        worker_id=worker_id,
+        date_from=run_date,
+        date_to=run_date,
+        batch_job_id=batch_job_id,
+    )
+    return response
 
 
 def append_history(item: dict) -> list[dict]:

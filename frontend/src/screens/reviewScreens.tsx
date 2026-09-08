@@ -4,6 +4,7 @@ import {
   BatchJobResponse,
   HealthResponse,
   HistoryItem,
+  RunpodHistoryStats,
   AssetItem,
   CollectionSummary,
   TaskPromptReviewFlags,
@@ -70,21 +71,21 @@ function runpodResultStatusTone(status?: string) {
   return "is-pending";
 }
 
-function runpodHistoryStatKey(status?: string): "completed" | "failed" | "cancelled" | "pendingSubmit" | "active" {
-  const normalized = String(status || "").toUpperCase();
-  if (isSuccessStatus(normalized)) return "completed";
-  if (isFailedRunpodStatus(normalized)) return "failed";
-  if (isCancelledStatus(normalized)) return "cancelled";
-  if (normalized === "PENDING_SUBMIT" || normalized === "DISPATCHING") return "pendingSubmit";
-  return "active";
-}
-
 const RUNPOD_RESULT_FILTER_LABELS: Record<"all" | "active" | "completed" | "failed" | "cancelled", string> = {
   all: "전체 결과",
   active: "진행 중",
   completed: "완료",
   failed: "실패",
   cancelled: "취소"
+};
+
+const EMPTY_RUNPOD_HISTORY_STATS: RunpodHistoryStats = {
+  total: 0,
+  completed: 0,
+  failed: 0,
+  cancelled: 0,
+  pendingSubmit: 0,
+  active: 0
 };
 
 function formatRunpodHistoryTime(totalSeconds?: number | string | null) {
@@ -199,6 +200,7 @@ export function Create3aScreen({
   const [runpodPage, setRunpodPage] = useState(1);
   const [runpodHistoryItems, setRunpodHistoryItems] = useState<HistoryItem[]>([]);
   const [runpodHistoryTotal, setRunpodHistoryTotal] = useState(0);
+  const [runpodHistoryStats, setRunpodHistoryStats] = useState<RunpodHistoryStats>(EMPTY_RUNPOD_HISTORY_STATS);
   const [runpodHistoryLoading, setRunpodHistoryLoading] = useState(false);
   const [runpodHistoryNotice, setRunpodHistoryNotice] = useState("");
   const [runpodHistoryNoticeKind, setRunpodHistoryNoticeKind] = useState<"error" | "success">("error");
@@ -230,11 +232,13 @@ export function Create3aScreen({
         if (!active) return;
         setRunpodHistoryItems(response.items);
         setRunpodHistoryTotal(response.total);
+        setRunpodHistoryStats(response.stats || EMPTY_RUNPOD_HISTORY_STATS);
       })
       .catch((error: Error) => {
         if (!active) return;
         setRunpodHistoryItems([]);
         setRunpodHistoryTotal(0);
+        setRunpodHistoryStats(EMPTY_RUNPOD_HISTORY_STATS);
         setRunpodHistoryNoticeKind("error");
         setRunpodHistoryNotice(error.message || "RunPod 이력을 불러오지 못했습니다.");
       })
@@ -288,6 +292,7 @@ export function Create3aScreen({
       if (!active) return;
       setRunpodHistoryItems(response.items);
       setRunpodHistoryTotal(response.total);
+      setRunpodHistoryStats(response.stats || EMPTY_RUNPOD_HISTORY_STATS);
       const visibleById = new Map(response.items.map((item) => [item.taskId, item]));
       setReworkingRunpodTaskIds((current) => current.filter((taskId) => {
         const refreshed = visibleById.get(taskId);
@@ -304,14 +309,7 @@ export function Create3aScreen({
     };
   }, [historyTab, reworkingRunpodTaskIds, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId]);
 
-  const filteredHistory = runpodHistoryItems.filter((item) => {
-    if (runpodResultFilter === "all") return true;
-    if (runpodResultFilter === "active") return !isTerminalHistoryStatus(item.status);
-    if (runpodResultFilter === "completed") return isSuccessStatus(item.status);
-    if (runpodResultFilter === "failed") return isFailedRunpodStatus(item.status);
-    if (runpodResultFilter === "cancelled") return isCancelledStatus(item.status);
-    return true;
-  });
+  const filteredHistory = runpodHistoryItems;
   const runpodPageSize = 10;
   const runpodPageCount = Math.max(1, Math.ceil(runpodHistoryTotal / runpodPageSize));
   const pageStart = runpodHistoryTotal ? (runpodPage - 1) * runpodPageSize + 1 : 0;
@@ -326,19 +324,6 @@ export function Create3aScreen({
   const canReworkFilteredRunpodItems = Boolean(selectedBatchJobId)
     && runpodResultFilter !== "active"
     && runpodResultFilter !== "completed";
-  const runpodHistoryStats = filteredHistory.reduce((stats, item) => {
-    const key = runpodHistoryStatKey(item.status);
-    stats.total += 1;
-    stats[key] += 1;
-    return stats;
-  }, {
-    total: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
-    pendingSubmit: 0,
-    active: 0
-  });
   const selectedWorkflow = workflows.find((workflow) => workflow.id === runpodWorkflowFilter);
   const runpodAppliedFilters = [
     { label: "Batch ID", value: selectedBatchJobId || "전체 Batch" },
@@ -347,7 +332,7 @@ export function Create3aScreen({
     { label: "작업자", value: runpodWorkerFilter.trim() || "전체 작업자" },
     { label: "실행일", value: runpodRunDate || "전체 실행일" }
   ];
-  const runpodReplayCandidateCount = filteredHistory.filter((item) => isFailedRunpodStatus(item.status) || isCancelledStatus(item.status)).length;
+  const runpodReplayCandidateCount = runpodHistoryStats.failed + runpodHistoryStats.cancelled;
   const runpodStatSegments = [
     { key: "completed", label: "완료", value: runpodHistoryStats.completed, tone: "is-ready" },
     { key: "failed", label: "실패", value: runpodHistoryStats.failed, tone: "is-failed" },
@@ -394,6 +379,7 @@ export function Create3aScreen({
       const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
       setRunpodHistoryItems(response.items.map((historyItem) => historyItem.taskId === item.taskId ? { ...historyItem, status: job.status, runpodJobId: job.runpodJobId || historyItem.runpodJobId, lastDispatchError: job.lastDispatchError || undefined } : historyItem));
       setRunpodHistoryTotal(response.total);
+      setRunpodHistoryStats(response.stats || EMPTY_RUNPOD_HISTORY_STATS);
       setRunpodHistoryNoticeKind("success");
       setRunpodHistoryNotice("재작업 요청이 등록되었습니다. 기존 작업 상태가 갱신됩니다.");
     } catch (error) {
@@ -414,6 +400,7 @@ export function Create3aScreen({
       const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
       setRunpodHistoryItems(response.items);
       setRunpodHistoryTotal(response.total);
+      setRunpodHistoryStats(response.stats || EMPTY_RUNPOD_HISTORY_STATS);
       setSelectedRunpodTaskIds((current) => current.filter((taskId) => !result.taskIds.includes(taskId)));
       setRunpodHistoryNoticeKind("success");
       setRunpodHistoryNotice(`${result.reworked}건의 재실행 요청이 등록되었습니다.${result.skipped.length ? ` 제외 ${result.skipped.length}건` : ""}`);
@@ -442,6 +429,7 @@ export function Create3aScreen({
       const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
       setRunpodHistoryItems(response.items);
       setRunpodHistoryTotal(response.total);
+      setRunpodHistoryStats(response.stats || EMPTY_RUNPOD_HISTORY_STATS);
       setSelectedRunpodTaskIds((current) => current.filter((taskId) => !result.taskIds.includes(taskId)));
       setReworkingRunpodTaskIds((current) => Array.from(new Set([...current, ...result.taskIds])));
       setRunpodHistoryNoticeKind("success");
@@ -477,7 +465,6 @@ export function Create3aScreen({
 
             <div className="v3-summary-card">
               <div className="v3-summary-row"><span>총건</span><strong>{runpodHistoryStats.total}</strong></div>
-              <div className="v3-summary-row"><span>조회 전체</span><strong>{runpodHistoryTotal}</strong></div>
               {runpodStatSegments.map((segment) => (
                 <div className="v3-summary-row" key={segment.key}>
                   <span>{segment.label}</span>

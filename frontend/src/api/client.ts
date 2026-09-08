@@ -794,11 +794,21 @@ export type HistoryItem = {
   inputImages?: InputImage[];
 };
 
+export type RunpodHistoryStats = {
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  pendingSubmit: number;
+  active: number;
+};
+
 export type HistoryResponse = {
   items: HistoryItem[];
   page: number;
   pageSize: number;
   total: number;
+  stats?: RunpodHistoryStats;
 };
 
 // A-04: `GET /api/admin/audit-logs` 응답. `beforeJson`/`afterJson`은 스키마가

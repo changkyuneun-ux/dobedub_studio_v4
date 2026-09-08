@@ -531,6 +531,76 @@ def test_runpod_history_filters_by_result_status_and_workflow(api_client):
     assert [(item["taskId"], item["status"]) for item in cancelled_body["items"]] == [("task_history_cancelled_a", "Cancelled")]
 
 
+def test_runpod_history_stats_cover_entire_filtered_result_not_current_page(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        statuses = [
+            "COMPLETED",
+            "COMPLETED",
+            "SUCCESS",
+            "FAILED",
+            "FAILED",
+            "TIMED_OUT",
+            "CANCELLED",
+            "CANCELLED",
+            "PENDING_SUBMIT",
+            "DISPATCHING",
+            "IN_PROGRESS",
+            "COMPLETED",
+        ]
+        for index, status in enumerate(statuses, start=1):
+            session.add(WorkflowTask(
+                id=f"task_history_stats_page_{index:02d}",
+                workflow_id="1-images.json",
+                status=status,
+                worker_name="History User",
+                user_id="history-user",
+                batch_job_id="batch_stats_all_pages",
+                payload_json={},
+                created_at=datetime(2026, 9, 8, 9, index, 0),
+            ))
+        session.add(WorkflowTask(
+            id="task_history_stats_other_batch",
+            workflow_id="1-images.json",
+            status="FAILED",
+            worker_name="History User",
+            user_id="history-user",
+            batch_job_id="batch_stats_other",
+            payload_json={},
+            created_at=datetime(2026, 9, 8, 10, 0, 0),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get(
+        "/api/history/runpod?page=1&batchId=batch_stats_all_pages",
+        headers=_authorized_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pageSize"] == 10
+    assert len(body["items"]) == 10
+    assert body["total"] == 12
+    assert body["stats"] == {
+        "total": 12,
+        "completed": 4,
+        "failed": 3,
+        "cancelled": 2,
+        "pendingSubmit": 2,
+        "active": 1,
+    }
+
+
 def test_runpod_history_filters_by_worker_and_execution_date(api_client):
     session = SessionLocal()
     try:
