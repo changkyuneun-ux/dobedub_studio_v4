@@ -310,6 +310,8 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
             user_id="history-user",
             prompt_draft_id="grok_draft_history_1",
             payload_json={},
+            config_json={"durationSeconds": 5, "frames": 81, "fps": 16},
+            elapsed_seconds=65,
             runpod_submit_json={"id": "runpod-job-1", "delayTime": 7.5},
             runpod_status_json={"status": "COMPLETED", "executionTime": 42.25, "output": {"filename": "result.mp4"}},
         ))
@@ -333,6 +335,8 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
         "executionSeconds": 42.25,
         "jobId": "runpod-job-1",
     }
+    assert item["durationSeconds"] == 5
+    assert item["elapsedSeconds"] == 65
     assert item["negativePrompts"]
     assert "photorealistic" in item["negativePrompts"][0]["text"]
 

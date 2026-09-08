@@ -201,6 +201,18 @@ def test_runpod_history_preview_columns_show_assets_instead_of_generic_view_text
     assert ".v3-runpod-output-link" in css
 
 
+def test_runpod_history_shows_video_and_generation_times_before_download() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    table = source.split('<div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>', 1)[1].split("{selectedRunpodPromptItem ?", 1)[0]
+
+    assert "durationSeconds?: number" in client
+    assert "function formatRunpodHistoryTime" in source
+    assert 'return `${minutes}.${seconds}`;' in source
+    assert "<span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span>" in table
+    assert "{formatRunpodHistoryTime(item.durationSeconds)}</span>\n              <span>{formatRunpodHistoryTime(item.runpodResponse?.executionSeconds ?? item.elapsedSeconds)}</span>\n              <span>" in table
+
+
 def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")

@@ -1388,6 +1388,7 @@ def _task_to_history_item(
             for entry in default_negative_prompts
         )
     item.setdefault("configJson", task.config_json or {})
+    item.setdefault("durationSeconds", _history_duration_seconds(task, item))
     item.setdefault("wanNodeConfig", task.wan_node_config or {})
     item.setdefault("patchSummary", task.patch_summary or {})
     # Keeps application and provider time origins inspectable in Task History.
@@ -1422,6 +1423,52 @@ def _task_to_history_item(
     item.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
     item.setdefault("elapsedSeconds", task.elapsed_seconds)
     return item
+
+
+def _history_duration_seconds(task: WorkflowTask, item: dict) -> int | None:
+    for source in _history_duration_sources(task, item):
+        seconds = _positive_int(
+            source.get("durationSeconds")
+            or source.get("duration_seconds")
+            or source.get("duration")
+        )
+        if seconds is not None:
+            return seconds
+        frames = _positive_int(source.get("frames") or source.get("length") or source.get("frame_count"))
+        if frames is None:
+            continue
+        fps = _positive_int(source.get("outputFps") or source.get("output_fps") or source.get("fps")) or 16
+        return max(1, round(frames / fps))
+    return None
+
+
+def _history_duration_sources(task: WorkflowTask, item: dict) -> list[dict]:
+    sources: list[dict] = []
+    for source in (item.get("configJson"), item.get("config"), task.config_json):
+        if isinstance(source, dict):
+            sources.append(source)
+    payload = task.payload_json or {}
+    if isinstance(payload, dict):
+        for segment in payload.get("segments") or []:
+            config = segment.get("config") if isinstance(segment, dict) else None
+            if isinstance(config, dict):
+                sources.append(config)
+    patch_summary = task.patch_summary or {}
+    if isinstance(patch_summary, dict):
+        for setting in patch_summary.get("videoSettings") or []:
+            if isinstance(setting, dict):
+                sources.append(setting)
+    return sources
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> dict:

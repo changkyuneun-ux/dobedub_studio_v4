@@ -72,13 +72,23 @@ function runpodResultStatusTone(status?: string) {
   return "is-pending";
 }
 
+function formatRunpodHistoryTime(totalSeconds?: number | string | null) {
+  if (totalSeconds === undefined || totalSeconds === null) return "-";
+  const value = Number(totalSeconds);
+  if (!Number.isFinite(value) || value < 0) return "-";
+  const total = Math.round(value);
+  const minutes = String(Math.floor(total / 60)).padStart(2, "0");
+  const seconds = String(total % 60).padStart(2, "0");
+  return `${minutes}.${seconds}`;
+}
+
 function batchZipDownloadName(batch: BatchJobResponse) {
   const source = String(batch.sourceZipFileName || batch.sourceDirName || batch.id || "batch").trim();
   const base = source.replace(/\.zip$/i, "") || "batch";
   return `${base}_output.zip`;
 }
 
-const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(88px, .55fr) 52px";
+const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(62px, .45fr) minmax(62px, .45fr) minmax(88px, .55fr) 52px";
 
 // E-03 · 3a "작업 이력" — design_handoff_dobedub_v3/3 Review.dc.html의 첫 화면.
 // 목록·페이지네이션·삭제는 B-01/C-03에서 이미 완성된 로직(loadHistoryPage,
@@ -647,7 +657,7 @@ export function Create3aScreen({
       </div>
       <div className="v3-card v3-runpod-history-table">
         <div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
-          <span><input type="checkbox" aria-label="종료된 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
+          <span><input type="checkbox" aria-label="종료된 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
         {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {runpodHistoryNotice ? <p className={runpodHistoryNoticeKind === "success" ? "v3-inline-success" : "v3-inline-error"} style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
@@ -715,6 +725,8 @@ export function Create3aScreen({
               <span>
                 {resultUrl ? <button className="v3-text-link-button v3-runpod-output-link" type="button" title={`${inputFileName} -> ${outputFileName}`} onClick={(event) => { event.stopPropagation(); setAssetPreview({ src: resultUrl, isVideo: true, alt: outputFileName }); }}>{`${inputFileName} -> ${outputFileName}`}</button> : "-"}
               </span>
+              <span>{formatRunpodHistoryTime(item.durationSeconds)}</span>
+              <span>{formatRunpodHistoryTime(item.runpodResponse?.executionSeconds ?? item.elapsedSeconds)}</span>
               <span>
                 {canReworkTask ? (
                   <button

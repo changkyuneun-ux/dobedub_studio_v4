@@ -761,6 +761,7 @@ export type HistoryItem = {
   lastDispatchError?: string | null;
   progress?: number;
   elapsedSeconds?: number;
+  durationSeconds?: number;
   prompt?: string;
   positivePrompt?: string;
   negativePrompt?: string;
