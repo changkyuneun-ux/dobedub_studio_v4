@@ -359,6 +359,9 @@ def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
 
 def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
     promotion_failed_count = _promotion_failed_count(db, batch.id)
+    video_status_counts = _video_terminal_issue_counts(db, [batch.id]).get(batch.id, {})
+    video_failed_count = video_status_counts.get("failed", 0)
+    cancelled_count = video_status_counts.get("cancelled", 0)
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
@@ -372,14 +375,16 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "promptFailedCount": batch.prompt_failed_count,
         "videoRequestedCount": batch.video_requested_count,
         "videoCompletedCount": batch.video_completed_count,
-        "videoFailedCount": batch.video_failed_count,
+        "videoFailedCount": video_failed_count,
+        "videoCancelledCount": cancelled_count,
         "promptWaiting": batch.prompt_waiting_count,
         "promptGenerating": batch.prompt_generating_count,
         "runpodPendingSubmit": batch.runpod_pending_submit_count,
         "runpodQueued": batch.runpod_queued_count,
         "runpodInProgress": batch.runpod_in_progress_count,
         "promotionFailedCount": promotion_failed_count,
-        "failedCount": batch.prompt_failed_count + batch.video_failed_count + promotion_failed_count,
+        "failedCount": batch.prompt_failed_count + video_failed_count + promotion_failed_count,
+        "cancelledCount": cancelled_count,
         "lastDownloadedAt": batch.last_downloaded_at.isoformat() if batch.last_downloaded_at else None,
         "createdBy": batch.created_by,
         "createdByName": _user_name(db, batch.created_by),
@@ -528,7 +533,13 @@ def _normalized_search_text(value: str | None) -> str:
     return unicodedata.normalize("NFC", str(value or "")).casefold()
 
 
-def _batch_candidate_payload(batch: BatchJob, worker_name: str | None) -> dict[str, Any]:
+def _batch_candidate_payload(
+    batch: BatchJob,
+    worker_name: str | None,
+    *,
+    video_failed_count: int = 0,
+    cancelled_count: int = 0,
+) -> dict[str, Any]:
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
@@ -542,13 +553,15 @@ def _batch_candidate_payload(batch: BatchJob, worker_name: str | None) -> dict[s
         "promptFailedCount": batch.prompt_failed_count,
         "videoRequestedCount": batch.video_requested_count,
         "videoCompletedCount": batch.video_completed_count,
-        "videoFailedCount": batch.video_failed_count,
+        "videoFailedCount": video_failed_count,
+        "videoCancelledCount": cancelled_count,
         "promptWaiting": batch.prompt_waiting_count,
         "promptGenerating": batch.prompt_generating_count,
         "runpodPendingSubmit": batch.runpod_pending_submit_count,
         "runpodQueued": batch.runpod_queued_count,
         "runpodInProgress": batch.runpod_in_progress_count,
-        "failedCount": batch.prompt_failed_count + batch.video_failed_count,
+        "failedCount": batch.prompt_failed_count + video_failed_count,
+        "cancelledCount": cancelled_count,
         "lastDownloadedAt": batch.last_downloaded_at.isoformat() if batch.last_downloaded_at else None,
         "createdBy": batch.created_by,
         "createdByName": worker_name or batch.created_by,
@@ -578,7 +591,7 @@ def list_batch_job_candidates(
     if created_by:
         statement = statement.where(BatchJob.created_by == created_by)
 
-    items: list[dict[str, Any]] = []
+    matches: list[tuple[BatchJob, str | None]] = []
     for batch, worker_name in db.execute(statement).all():
         haystacks = (
             batch.id,
@@ -588,10 +601,41 @@ def list_batch_job_candidates(
             worker_name,
         )
         if any(needle in _normalized_search_text(value) for value in haystacks):
-            items.append(_batch_candidate_payload(batch, worker_name))
-            if len(items) >= safe_limit:
+            matches.append((batch, worker_name))
+            if len(matches) >= safe_limit:
                 break
+    video_status_counts = _video_terminal_issue_counts(db, [batch.id for batch, _ in matches])
+    items = [
+        _batch_candidate_payload(
+            batch,
+            worker_name,
+            video_failed_count=video_status_counts.get(batch.id, {}).get("failed", 0),
+            cancelled_count=video_status_counts.get(batch.id, {}).get("cancelled", 0),
+        )
+        for batch, worker_name in matches
+    ]
     return {"items": items}
+
+
+def _video_terminal_issue_counts(db: Session, batch_job_ids: list[str]) -> dict[str, dict[str, int]]:
+    if not batch_job_ids:
+        return {}
+    rows = db.execute(
+        select(WorkflowTask.batch_job_id, WorkflowTask.status, func.count())
+        .where(
+            WorkflowTask.batch_job_id.in_(batch_job_ids),
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.status.in_(("FAILED", "TIMED_OUT", "CANCELLED")),
+        )
+        .group_by(WorkflowTask.batch_job_id, WorkflowTask.status)
+    ).all()
+    counts: dict[str, dict[str, int]] = {}
+    for batch_id, status, total in rows:
+        if not batch_id:
+            continue
+        key = "cancelled" if str(status or "").upper() == "CANCELLED" else "failed"
+        counts.setdefault(str(batch_id), {"failed": 0, "cancelled": 0})[key] += int(total or 0)
+    return counts
 
 
 def promote_ready_batch_drafts() -> dict[str, Any]:
@@ -937,7 +981,8 @@ def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
         )
     ) or 0)
     valid_ready = max(0, drafts.get("READY", 0) - blank_ready)
-    video_failed = sum(tasks.get(state, 0) for state in TERMINAL_TASK_STATES - SUCCESS_TASK_STATES)
+    video_cancelled = tasks.get("CANCELLED", 0)
+    video_failed = tasks.get("FAILED", 0) + tasks.get("TIMED_OUT", 0)
     return {
         "promptWaiting": drafts.get("PENDING", 0),
         "promptGenerating": drafts.get("GENERATING", 0),
@@ -950,6 +995,7 @@ def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
         "videoInProgress": tasks.get("IN_PROGRESS", 0) + tasks.get("RUNNING", 0),
         "videoCompleted": sum(tasks.get(state, 0) for state in SUCCESS_TASK_STATES),
         "videoFailed": video_failed,
+        "videoCancelled": video_cancelled,
     }
 
 

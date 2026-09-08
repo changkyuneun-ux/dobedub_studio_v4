@@ -41,12 +41,17 @@ function statusLabel(status: string) {
   const normalized = String(status || "").toUpperCase();
   if (normalized === "COMPLETE" || normalized === "COMPLETED" || normalized === "SUCCESS") return "완료";
   if (normalized === "INCOMPLETE" || normalized === "IN_PROGRESS" || normalized === "QUEUED") return "진행 중";
+  if (normalized === "CANCELLED") return "취소됨";
   if (normalized === "FAILED" || normalized === "PARTIAL_FAILED") return "실패";
   return normalized || "-";
 }
 
 function batchResultLabel(job: BatchJobResponse) {
   if (String(job.status || "").toUpperCase() !== "COMPLETE") return statusLabel(job.status);
+  if (job.failedCount <= 0 && job.cancelledCount > 0) {
+    const successCount = job.videoCompletedCount || 0;
+    return successCount > 0 ? "부분 취소" : "취소됨";
+  }
   if (job.failedCount <= 0) return "완료";
   const successCount = (job.promptCompletedCount || 0) + (job.videoCompletedCount || 0);
   return successCount > 0 ? "부분 실패" : "실패";
@@ -54,8 +59,9 @@ function batchResultLabel(job: BatchJobResponse) {
 
 function batchResultTone(job: BatchJobResponse) {
   if (String(job.status || "").toUpperCase() !== "COMPLETE") return String(job.status || "").toLowerCase();
+  if (job.failedCount <= 0 && job.cancelledCount > 0) return "cancelled";
   if (job.failedCount <= 0) return "complete";
-  const successCount = (job.promptCompletedCount || 0) + (job.videoCompletedCount || 0);
+  const successCount = job.videoCompletedCount || 0;
   return successCount > 0 ? "partial-failed" : "failed";
 }
 
@@ -66,7 +72,8 @@ function metricPill(value: number, tone: "gray" | "blue" | "green" | "yellow" | 
 function retryStatusTone(status: string) {
   const normalized = String(status || "").toUpperCase();
   if (normalized === "READY" || normalized === "COMPLETED" || normalized === "SUCCESS") return "is-ready";
-  if (normalized === "FAILED" || normalized === "CANCELLED" || normalized === "TIMED_OUT") return "is-failed";
+  if (normalized === "CANCELLED") return "is-muted";
+  if (normalized === "FAILED" || normalized === "TIMED_OUT") return "is-failed";
   if (normalized === "PENDING_SUBMIT" || normalized === "DISPATCHING" || normalized === "QUEUED" || normalized === "IN_QUEUE") return "is-pending";
   if (normalized === "IN_PROGRESS" || normalized === "RUNNING" || normalized === "GENERATING") return "is-running";
   return "is-muted";
@@ -473,7 +480,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
 
           <div className="v3-batch-mini-table">
             <h3>RunPod 영상 생성</h3>
-            <div className="v3-batch-mini-head is-runpod"><span>Batch ID</span><span>Pending Submit</span><span>Queue</span><span>진행</span><span>완료</span><span>실패</span></div>
+            <div className="v3-batch-mini-head is-runpod"><span>Batch ID</span><span>Pending Submit</span><span>Queue</span><span>진행</span><span>완료</span><span>실패</span><span>취소</span></div>
             {activeJobs.map((job) => (
               <div className="v3-batch-mini-row is-runpod" key={`runpod-${job.id}`}>
                 <span>{job.id}</span>
@@ -482,6 +489,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 {metricPill(job.runpodInProgress, "blue")}
                 {metricPill(job.videoCompletedCount, "green")}
                 {metricPill(job.videoFailedCount, "red")}
+                {metricPill(job.videoCancelledCount)}
               </div>
             ))}
             {!activeJobs.length ? <div className="v3-empty-panel">진행 중인 RunPod 배치가 없습니다.</div> : null}
@@ -518,6 +526,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 <th>zip 파일명</th>
                 <th>다운로드</th>
                 <th>실패</th>
+                <th>취소</th>
               </tr>
             </thead>
             <tbody>
@@ -541,6 +550,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                       <span className="v3-batch-failure-static">0</span>
                     )}
                   </td>
+                  <td>{job.cancelledCount || 0}</td>
                 </tr>
               ))}
             </tbody>

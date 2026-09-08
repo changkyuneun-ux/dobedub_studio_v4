@@ -38,16 +38,38 @@ function workflowLabel(workflow: WorkflowItem) {
   return workflow.label || workflow.name || workflow.id;
 }
 
-function runpodResultStatusLabel(item: HistoryItem) {
-  if (item.lastDispatchError?.includes("동시 활성 Task 한도")) return "한도 대기";
-  const normalized = String(item.status || "").toUpperCase();
+function runpodStatusDisplay(status?: string | null, fallback?: string | null) {
+  const normalized = String(status || "").toUpperCase();
   if (normalized === "PENDING_SUBMIT") return "제출 대기";
   if (normalized === "DISPATCHING") return "제출 중";
   if (normalized === "QUEUED" || normalized === "IN_QUEUE") return "RunPod Queue";
   if (normalized === "IN_PROGRESS" || normalized === "RUNNING") return "진행 중";
   if (normalized === "COMPLETED" || normalized === "SUCCESS") return "Completed";
-  if (normalized === "FAILED" || normalized === "CANCELLED" || normalized === "TIMED_OUT") return "Failed";
-  return item.statusLabel || item.status || "-";
+  if (normalized === "CANCELLED") return "취소됨";
+  if (normalized === "TIMED_OUT") return "시간 초과";
+  if (normalized === "FAILED") return "Failed";
+  return fallback || status || "-";
+}
+
+function runpodResultStatusLabel(item: HistoryItem) {
+  if (item.lastDispatchError?.includes("동시 활성 Task 한도")) return "한도 대기";
+  return runpodStatusDisplay(item.status, item.statusLabel);
+}
+
+function isCancelledStatus(status?: string) {
+  return String(status || "").toUpperCase() === "CANCELLED";
+}
+
+function isFailedRunpodStatus(status?: string) {
+  const normalized = String(status || "").toUpperCase();
+  return normalized === "FAILED" || normalized === "TIMED_OUT";
+}
+
+function runpodResultStatusTone(status?: string) {
+  if (isSuccessStatus(status)) return "is-ready";
+  if (isCancelledStatus(status)) return "is-muted";
+  if (isFailedRunpodStatus(status)) return "is-failed";
+  return "is-pending";
 }
 
 function batchZipDownloadName(batch: BatchJobResponse) {
@@ -160,7 +182,7 @@ export function Create3aScreen({
   const [selectedRunpodPromptItem, setSelectedRunpodPromptItem] = useState<HistoryItem | null>(null);
   const [reworkingRunpodTaskIds, setReworkingRunpodTaskIds] = useState<string[]>([]);
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
-  const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed">("all");
+  const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed" | "cancelled">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
   const [batchSearchText, setBatchSearchText] = useState("");
   const [selectedBatchJob, setSelectedBatchJob] = useState<BatchJobResponse | null>(null);
@@ -271,7 +293,8 @@ export function Create3aScreen({
     if (runpodResultFilter === "all") return true;
     if (runpodResultFilter === "active") return !isTerminalHistoryStatus(item.status);
     if (runpodResultFilter === "completed") return isSuccessStatus(item.status);
-    if (runpodResultFilter === "failed") return isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
+    if (runpodResultFilter === "failed") return isFailedRunpodStatus(item.status);
+    if (runpodResultFilter === "cancelled") return isCancelledStatus(item.status);
     return true;
   });
   const selectedItem = historyTab === "runpod"
@@ -591,7 +614,7 @@ export function Create3aScreen({
             ) : null}
           </label>
           <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
-          <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option></select></label>
+          <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed" | "cancelled"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option><option value="cancelled">취소</option></select></label>
         </div>
         <div className="v3-inline-actions v3-runpod-history-actions">
           <button
@@ -639,7 +662,7 @@ export function Create3aScreen({
           const outputFileName = result?.fileName || item.outputFile || item.runpodResponse?.filename || "생성 영상";
           const canReworkTask = canRework && isTerminalHistoryStatus(item.status) && !isSuccessStatus(item.status);
           const resultStatusLabel = runpodResultStatusLabel(item);
-          const resultStatusTone = isSuccessStatus(item.status) ? "is-ready" : "is-pending";
+          const resultStatusTone = runpodResultStatusTone(item.status);
           const reworkInFlight = reworkingRunpodTaskIds.includes(item.taskId);
           const displayBatchId = item.batchJobId || item.promptBatchId || "";
           return (
@@ -950,7 +973,7 @@ function PromptGenerationHistory({
       </div>
       <div className="v3-runpod-filter-bar">
         <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패/수동 필요</option></select></label>
-        <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option></select></label>
+        <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option><option value="CANCELLED">취소</option></select></label>
         <label className="v3-batch-search-field">Batch ID
           <input
             value={promptBatchSearchText}
@@ -1023,7 +1046,7 @@ function PromptGenerationHistory({
             </div>
             <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : item.error || "-"}</div>
             <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
-            <span className={`v3-status-badge ${isSuccessStatus(item.runpodStatus ?? undefined) ? "is-ready" : "is-pending"}`}>{item.runpodStatus || "미요청"}</span>
+            <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
           </div>
         );

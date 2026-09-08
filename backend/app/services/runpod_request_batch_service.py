@@ -489,8 +489,12 @@ def _matches_queue_status_filter(item: dict, status_filter: str) -> bool:
         return state in {"QUEUED", "IN_QUEUE"}
     if normalized in {"inprogress", "running"}:
         return state in {"IN_PROGRESS", "RUNNING"}
-    if normalized in {"failed", "cancelled", "timedout"}:
-        return state in {"FAILED", "CANCELLED", "TIMED_OUT"}
+    if normalized == "failed":
+        return state in {"FAILED", "TIMED_OUT"}
+    if normalized == "cancelled":
+        return state == "CANCELLED"
+    if normalized == "timedout":
+        return state == "TIMED_OUT"
     if normalized in {"completed", "complete", "success"}:
         return state in {"COMPLETED", "SUCCESS"}
     return True

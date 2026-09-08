@@ -321,7 +321,11 @@ def display_job_status(job: dict) -> str:
     status = str(job.get("status", "")).upper()
     if status in {"COMPLETED", "SUCCESS"}:
         return "Completed"
-    if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+    if status == "CANCELLED":
+        return "Cancelled"
+    if status == "TIMED_OUT":
+        return "Timed Out"
+    if status == "FAILED":
         return "Failed"
     return job.get("status", "running")
 

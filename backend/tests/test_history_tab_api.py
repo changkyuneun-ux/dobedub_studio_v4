@@ -162,6 +162,7 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
             Asset(id="asset_prompt_failed", asset_type="input_image", file_name="failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/failed.png"),
             Asset(id="asset_prompt_manual_required", asset_type="input_image", file_name="manual.png", mime_type="image/png", size_bytes=1, storage_key="uploads/manual.png"),
             Asset(id="asset_prompt_runpod_failed", asset_type="input_image", file_name="runpod-failed.png", mime_type="image/png", size_bytes=1, storage_key="uploads/runpod-failed.png"),
+            Asset(id="asset_prompt_runpod_cancelled", asset_type="input_image", file_name="runpod-cancelled.png", mime_type="image/png", size_bytes=1, storage_key="uploads/runpod-cancelled.png"),
             BatchJob(
                 id="history-user_zip_260906",
                 workflow_id="1-images.json",
@@ -187,11 +188,21 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
                 id="grok_draft_runpod_failed", asset_id="asset_prompt_runpod_failed", workflow_id="1-images.json",
                 slot_index=1, status="READY", model="grok", positive_prompt="ready but runpod failed", created_by="history-user",
             ),
+            ImagePromptDraft(
+                id="grok_draft_runpod_cancelled", asset_id="asset_prompt_runpod_cancelled", workflow_id="1-images.json",
+                slot_index=1, status="READY", model="grok", positive_prompt="ready but runpod cancelled", created_by="history-user",
+            ),
             WorkflowTask(
                 id="task_prompt_runpod_failed",
                 workflow_id="1-images.json",
                 status="FAILED",
                 prompt_draft_id="grok_draft_runpod_failed",
+            ),
+            WorkflowTask(
+                id="task_prompt_runpod_cancelled",
+                workflow_id="1-images.json",
+                status="CANCELLED",
+                prompt_draft_id="grok_draft_runpod_cancelled",
             ),
         ])
         session.commit()
@@ -210,6 +221,10 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
         "/api/history/prompts?page=1&runpodStatus=FAILED",
         headers=_authorized_headers(),
     )
+    cancelled_runpod = api_client.get(
+        "/api/history/prompts?page=1&runpodStatus=CANCELLED",
+        headers=_authorized_headers(),
+    )
 
     assert failed_generation.status_code == 200
     failed_items = failed_generation.json()["items"]
@@ -219,6 +234,8 @@ def test_prompt_history_filters_generation_result_and_runpod_status(api_client):
     assert [item["draftId"] for item in unrequested_success.json()["items"]] == ["grok_draft_ready_unrequested"]
     assert failed_runpod.status_code == 200
     assert [item["draftId"] for item in failed_runpod.json()["items"]] == ["grok_draft_runpod_failed"]
+    assert cancelled_runpod.status_code == 200
+    assert [item["draftId"] for item in cancelled_runpod.json()["items"]] == ["grok_draft_runpod_cancelled"]
 
 
 def test_prompt_failed_batch_drafts_do_not_appear_in_runpod_history(api_client):
@@ -475,6 +492,7 @@ def test_runpod_history_filters_by_result_status_and_workflow(api_client):
         session.add_all([
             WorkflowTask(id="task_history_completed_a", workflow_id="1-images.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
             WorkflowTask(id="task_history_failed_a", workflow_id="1-images.json", status="FAILED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_history_cancelled_a", workflow_id="1-images.json", status="CANCELLED", worker_name="History User", user_id="history-user", payload_json={}),
             WorkflowTask(id="task_history_active_a", workflow_id="1-images.json", status="QUEUED", worker_name="History User", user_id="history-user", payload_json={}),
             WorkflowTask(id="task_history_failed_b", workflow_id="Pickme_Workflow.json", status="FAILED", worker_name="History User", user_id="history-user", payload_json={}),
         ])
@@ -490,6 +508,10 @@ def test_runpod_history_filters_by_result_status_and_workflow(api_client):
         "/api/history/runpod?page=1&workflowId=1-images.json&resultStatus=ACTIVE",
         headers=_authorized_headers(),
     )
+    cancelled = api_client.get(
+        "/api/history/runpod?page=1&workflowId=1-images.json&resultStatus=CANCELLED",
+        headers=_authorized_headers(),
+    )
 
     assert failed.status_code == 200
     failed_body = failed.json()
@@ -499,6 +521,10 @@ def test_runpod_history_filters_by_result_status_and_workflow(api_client):
     active_body = active.json()
     assert active_body["total"] == 1
     assert [item["taskId"] for item in active_body["items"]] == ["task_history_active_a"]
+    assert cancelled.status_code == 200
+    cancelled_body = cancelled.json()
+    assert cancelled_body["total"] == 1
+    assert [(item["taskId"], item["status"]) for item in cancelled_body["items"]] == [("task_history_cancelled_a", "Cancelled")]
 
 
 def test_runpod_history_filters_by_worker_and_execution_date(api_client):

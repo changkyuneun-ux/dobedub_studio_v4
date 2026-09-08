@@ -370,6 +370,7 @@ export type BatchJobResponse = {
   videoRequestedCount: number;
   videoCompletedCount: number;
   videoFailedCount: number;
+  videoCancelledCount: number;
   promptWaiting: number;
   promptGenerating: number;
   runpodPendingSubmit: number;
@@ -377,6 +378,7 @@ export type BatchJobResponse = {
   runpodInProgress: number;
   promotionFailedCount: number;
   failedCount: number;
+  cancelledCount: number;
   lastDownloadedAt?: string | null;
   createdBy?: string | null;
   createdByName?: string | null;

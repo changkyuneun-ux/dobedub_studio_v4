@@ -856,6 +856,8 @@ def test_promotion_claim_rechecks_draft_is_still_ready(db_session, monkeypatch):
         workflow_id="1-images.json",
         status="INCOMPLETE",
         total_images=1,
+        video_requested_count=1,
+        video_failed_count=1,
         created_by="operator_1",
     )
     draft = ImagePromptDraft(
@@ -1188,6 +1190,108 @@ def test_batch_job_detail_separates_prompt_and_runpod_failures(db_session, monke
     assert detail["items"][1]["error"] == "RunPod 404"
     assert detail["items"][0]["assetId"] == asset_ids[0]
     assert detail["items"][1]["assetId"] == asset_ids[1]
+
+
+def test_batch_payload_counts_cancelled_runpod_tasks_separately(db_session):
+    db_session.add(_user())
+    db_session.add(_asset("asset_cancelled_runpod"))
+    batch = BatchJob(
+        id="batch_cancelled_runpod",
+        workflow_id="1-images.json",
+        status="INCOMPLETE",
+        total_images=1,
+        created_by="operator_1",
+    )
+    draft = ImagePromptDraft(
+        id="draft_cancelled_runpod",
+        asset_id="asset_cancelled_runpod",
+        workflow_id="1-images.json",
+        slot_index=1,
+        status="READY",
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="ready prompt",
+        batch_job_id=batch.id,
+        promotion_status=batch_job_service.PROMOTION_TASK_CREATED,
+        created_by="operator_1",
+    )
+    task = WorkflowTask(
+        id="task_cancelled_runpod",
+        workflow_id="1-images.json",
+        status="CANCELLED",
+        positive_prompts=[],
+        negative_prompts=[],
+        config_json={},
+        wan_node_config={},
+        patch_summary={},
+        payload_json={"promptDraftId": draft.id, "batchJobId": batch.id},
+        runpod_submit_json={},
+        runpod_status_json={"status": "CANCELLED"},
+        prompt_draft_id=draft.id,
+        batch_job_id=batch.id,
+        user_id="operator_1",
+    )
+    db_session.add_all([batch, draft, task])
+    db_session.commit()
+
+    summary = batch_job_service.batch_job_payload(db_session, batch.id)
+    detail = batch_job_service.batch_job_detail(db_session, batch.id)
+
+    assert summary["videoFailedCount"] == 0
+    assert summary["failedCount"] == 0
+    assert summary["videoCancelledCount"] == 1
+    assert summary["cancelledCount"] == 1
+    assert detail["batch"]["videoRequestedCount"] == 1
+    assert detail["batch"]["videoCompletedCount"] == 0
+    assert detail["batch"]["videoFailedCount"] == 0
+    assert detail["batch"]["videoCancelledCount"] == 1
+    assert detail["batch"]["failedCount"] == 0
+    assert detail["batch"]["cancelledCount"] == 1
+    assert detail["items"][0]["runpodStatus"] == "CANCELLED"
+    assert detail["items"][0]["retryKind"] == "runpod"
+
+
+def test_batch_candidate_payload_counts_cancelled_runpod_tasks(db_session):
+    db_session.add(_user())
+    batch = BatchJob(
+        id="batch_cancelled_candidate",
+        workflow_id="1-images.json",
+        total_images=1,
+        video_requested_count=1,
+        video_failed_count=1,
+        created_by="operator_1",
+    )
+    db_session.add(batch)
+    db_session.add(
+        WorkflowTask(
+            id="task_cancelled_candidate",
+            workflow_id="1-images.json",
+            status="CANCELLED",
+            positive_prompts=[],
+            negative_prompts=[],
+            config_json={},
+            wan_node_config={},
+            patch_summary={},
+            payload_json={},
+            runpod_submit_json={},
+            runpod_status_json={},
+            batch_job_id=batch.id,
+        )
+    )
+    db_session.commit()
+
+    result = batch_job_service.list_batch_job_candidates(
+        db_session,
+        created_by=None,
+        query="cancelled_candidate",
+    )
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["videoFailedCount"] == 0
+    assert result["items"][0]["videoCancelledCount"] == 1
+    assert result["items"][0]["cancelledCount"] == 1
+    assert result["items"][0]["failedCount"] == 0
 
 
 def test_batch_job_detail_normalizes_legacy_mojibake_source_paths(db_session, monkeypatch):

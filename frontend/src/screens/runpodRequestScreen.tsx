@@ -20,7 +20,8 @@ const REQUEST_STATUS_FILTERS = [
   { value: "pendingSubmit", label: "Pending Submit" },
   { value: "runpodQueued", label: "RunPod 큐" },
   { value: "inProgress", label: "실행 중" },
-  { value: "failed", label: "실패" }
+  { value: "failed", label: "실패" },
+  { value: "cancelled", label: "취소" }
 ];
 
 function workflowName(workflow: WorkflowItem | undefined, fallback: string) {
@@ -32,7 +33,8 @@ function requestState(item: RunpodRequestQueueItemResponse) {
   const state = String(item.status || "").toUpperCase();
   if (ACTIVE_RUNPOD_STATES.has(state)) return "실행 중";
   if (QUEUED_RUNPOD_STATES.has(state)) return state === "PENDING_SUBMIT" ? "요청 대기" : "RunPod Queued";
-  if (state === "FAILED" || state === "CANCELLED" || state === "TIMED_OUT") return "실패";
+  if (state === "CANCELLED") return "취소됨";
+  if (state === "FAILED" || state === "TIMED_OUT") return "실패";
   return state || "등록됨";
 }
 

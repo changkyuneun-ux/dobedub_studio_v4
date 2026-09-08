@@ -226,7 +226,11 @@ def _history_result_status_condition(value: str):
     if normalized in {"COMPLETED", "SUCCESS"}:
         return WorkflowTask.status.in_({"COMPLETED", "SUCCESS"})
     if normalized == "FAILED":
-        return WorkflowTask.status.in_({"FAILED", "CANCELLED", "TIMED_OUT"})
+        return WorkflowTask.status.in_({"FAILED", "TIMED_OUT"})
+    if normalized == "CANCELLED":
+        return WorkflowTask.status == "CANCELLED"
+    if normalized == "TIMED_OUT":
+        return WorkflowTask.status == "TIMED_OUT"
     if normalized in {"ACTIVE", "RUNNING", "IN_PROGRESS"}:
         return or_(WorkflowTask.status.is_(None), WorkflowTask.status.not_in(TERMINAL_STATES))
     return None
@@ -1592,7 +1596,11 @@ def _history_status_label(status: Any) -> str:
     text = str(status or "").upper()
     if text in {"COMPLETED", "SUCCESS"}:
         return "Completed"
-    if text in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+    if text == "CANCELLED":
+        return "Cancelled"
+    if text == "TIMED_OUT":
+        return "Timed Out"
+    if text == "FAILED":
         return "Failed"
     return status or "queued"
 

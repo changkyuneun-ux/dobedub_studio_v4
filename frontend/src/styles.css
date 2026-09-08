@@ -6768,7 +6768,7 @@ button {
 .v3-batch-mini-row { background: var(--v3-bg-panel); border-left: 0; border-right: 0; border-top: 0; color: var(--v3-text-body); font: inherit; text-align: left; width: 100%; }
 .v3-batch-mini-row:last-child { border-bottom: 0; }
 .v3-batch-mini-head.is-prompt, .v3-batch-mini-row.is-prompt { grid-template-columns: minmax(160px, 1.4fr) minmax(90px, .8fr) 52px 62px 52px 52px; }
-.v3-batch-mini-head.is-runpod, .v3-batch-mini-row.is-runpod { grid-template-columns: minmax(160px, 1.4fr) 92px 62px 52px 52px 52px; }
+.v3-batch-mini-head.is-runpod, .v3-batch-mini-row.is-runpod { grid-template-columns: minmax(160px, 1.4fr) 92px 62px 52px 52px 52px 52px; }
 .v3-batch-metric-pill { border-radius: 7px; display: inline-grid; font-size: 13px; font-weight: 800; justify-self: start; min-height: 24px; min-width: 36px; padding: 3px 9px; place-items: center; }
 .v3-batch-metric-pill.is-gray { background: var(--v3-bg-muted); color: var(--v3-text-body); }
 .v3-batch-metric-pill.is-blue { background: #e7f0ff; color: #2368bd; }
@@ -6778,11 +6778,12 @@ button {
 .v3-batch-history-toolbar { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; }
 .v3-batch-history-toolbar label { display: grid; gap: 5px; min-width: 150px; }
 .v3-batch-history-toolbar .v3-secondary-button { min-height: 42px; }
-.v3-batch-history-table { min-width: 1120px; }
+.v3-batch-history-table { min-width: 1180px; }
 .v3-batch-status-chip { border-radius: 7px; display: inline-grid; font-size: 12px; font-weight: 800; min-height: 24px; min-width: 48px; padding: 3px 9px; place-items: center; }
 .v3-batch-status-chip.is-complete { background: var(--v3-accent-bg); color: var(--v3-accent-text); }
 .v3-batch-status-chip.is-incomplete { background: #e7f0ff; color: #2368bd; }
 .v3-batch-status-chip.is-failed, .v3-batch-status-chip.is-partial_failed, .v3-batch-status-chip.is-partial-failed { background: #ffe5e5; color: var(--v3-danger); }
+.v3-batch-status-chip.is-cancelled { background: var(--v3-bg-muted); color: var(--v3-text-secondary); }
 .v3-batch-history-pagination { align-items: center; border-top: 1px solid var(--v3-border-inner); display: flex; gap: 18px; justify-content: center; min-height: 54px; padding: 8px 16px; }
 .v3-batch-history-pagination > span { color: var(--v3-text-secondary); font-size: 12px; margin-right: auto; }
 .v3-batch-history-pagination div { align-items: center; display: flex; gap: 8px; }
@@ -6870,7 +6871,7 @@ button {
 .v3-batch-length { display: grid; gap: 6px; }.v3-batch-length select { font-size: 11px; width: 100%; }.v3-error-text { color: var(--v3-danger); font-size: 10px; }
 .v3-runpod-dashboard { padding: 16px; }.v3-runpod-dashboard .v3-primary-button { margin-left: auto; }
 .v3-runpod-request-list { display: grid; overflow-x: auto; }.v3-runpod-request-head, .v3-runpod-request-row { align-items: center; display: grid; gap: 12px; grid-template-columns: 28px 72px minmax(280px, 1fr) minmax(170px, .5fr) 130px; min-width: 820px; padding: 10px 16px; }.v3-runpod-request-head { background: var(--v3-bg-canvas); color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 10px; font-weight: 700; }.v3-runpod-request-row { border-top: 1px solid var(--v3-border-inner); cursor: pointer; }.v3-runpod-request-row.is-disabled { cursor: not-allowed; opacity: .55; }.v3-runpod-request-row > img { border-radius: 5px; height: 48px; object-fit: cover; width: 72px; }.v3-runpod-request-row > span { color: var(--v3-text-body); font-size: 12px; line-height: 1.45; max-height: 54px; overflow: hidden; }.v3-runpod-request-row span small { color: var(--v3-text-secondary); display: block; font-size: 10px; margin-top: 4px; }.v3-runpod-request-row span:last-child { color: var(--v3-accent-text); font-family: var(--v3-font-mono); font-size: 10px; font-weight: 700; }
-@media (max-width: 1000px) { .v3-batch-draft-row { grid-template-columns: 72px minmax(0, 1fr); }.v3-batch-prompt, .v3-batch-length { grid-column: 1 / -1; }.v3-batch-toolbar select { min-width: min(300px, 100%); }.v3-runpod-dashboard .v3-primary-button { margin-left: 0; width: 100%; }.v3-batch-layout-grid, .v3-batch-running-grid { grid-template-columns: 1fr; }.v3-batch-mini-table { overflow-x: auto; }.v3-batch-mini-head, .v3-batch-mini-row { min-width: 680px; }.v3-batch-history-pagination { align-items: stretch; flex-direction: column; }.v3-batch-history-pagination > span { margin-right: 0; } }
+@media (max-width: 1000px) { .v3-batch-draft-row { grid-template-columns: 72px minmax(0, 1fr); }.v3-batch-prompt, .v3-batch-length { grid-column: 1 / -1; }.v3-batch-toolbar select { min-width: min(300px, 100%); }.v3-runpod-dashboard .v3-primary-button { margin-left: 0; width: 100%; }.v3-batch-layout-grid, .v3-batch-running-grid { grid-template-columns: 1fr; }.v3-batch-mini-table { overflow-x: auto; }.v3-batch-mini-head, .v3-batch-mini-row { min-width: 740px; }.v3-batch-history-pagination { align-items: stretch; flex-direction: column; }.v3-batch-history-pagination > span { margin-right: 0; } }
 
 /* Batch Grok and RunPod surfaces: operational management uses the same quiet
    desktop language as v4's Task History, without a second side workspace. */

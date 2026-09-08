@@ -32,7 +32,8 @@ RUNPOD_WAITING_STATES = {"PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE"}
 RUNPOD_PRE_SUBMIT_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
 RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
 RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
-RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
+RUNPOD_FAILED_STATES = {"FAILED", "TIMED_OUT"}
+RUNPOD_CANCELLED_STATES = {"CANCELLED"}
 STALE_GENERATING_FAILURE_MESSAGE = "Grok 프롬프트 생성이 중단되어 실패 처리되었습니다."
 INVALID_PROMPT_TASK_FAILURE_MESSAGE = "프롬프트 생성 실패로 RunPod 요청을 취소했습니다."
 LOGGER = logging.getLogger(__name__)
@@ -460,6 +461,8 @@ def _runpod_status_filter_condition(value: str):
         return latest_status.in_(RUNPOD_SUCCESS_STATES)
     if normalized == "FAILED":
         return latest_status.in_(RUNPOD_FAILED_STATES)
+    if normalized == "CANCELLED":
+        return latest_status.in_(RUNPOD_CANCELLED_STATES)
     return None
 
 
