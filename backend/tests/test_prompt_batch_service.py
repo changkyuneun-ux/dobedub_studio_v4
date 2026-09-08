@@ -70,6 +70,46 @@ def test_batch_persists_items_and_grok_attempt_metadata(db_session, monkeypatch,
     assert db_session.query(PromptGenerationAttempt).count() == 2
 
 
+def test_batch_stops_grok_calls_after_provider_auth_failure(db_session, monkeypatch, tmp_path):
+    db_session.add_all([_asset("asset_auth_1"), _asset("asset_auth_2"), _asset("asset_auth_3")])
+    db_session.commit()
+    monkeypatch.setattr(service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    for asset_id in ("asset_auth_1", "asset_auth_2", "asset_auth_3"):
+        (Path(tmp_path) / f"{asset_id}.png").write_bytes(b"x")
+    monkeypatch.setattr(service.studio_api_service, "get_asset", lambda asset_id: (
+        {"fileName": f"{asset_id}.png", "mimeType": "image/png", "imageWidth": 900, "imageHeight": 1200},
+        Path(tmp_path) / f"{asset_id}.png",
+    ))
+    calls = []
+
+    def fake_generate(*_args, **_kwargs):
+        calls.append(1)
+        raise GrokPromptError("Grok API HTTP 403: permission-denied", status_code=403)
+
+    monkeypatch.setattr(service, "generate_image_prompt", fake_generate)
+    batch = service.create_prompt_generation_batch(
+        db_session,
+        {
+            "workflowId": "1-images.json",
+            "items": [
+                {"assetId": "asset_auth_1", "slotIndex": 1},
+                {"assetId": "asset_auth_2", "slotIndex": 2},
+                {"assetId": "asset_auth_3", "slotIndex": 3},
+            ],
+        },
+        created_by="dobedub",
+    )
+
+    result = service.process_prompt_generation_batch(db_session, batch["id"])
+
+    assert len(calls) == 1
+    assert result["status"] == service.BATCH_COMPLETED_WITH_ERRORS
+    assert result["completedCount"] == 0
+    assert result["failedCount"] == 3
+    assert {item["status"] for item in result["items"]} == {service.DRAFT_FAILED}
+    assert all(item["error"] == "Grok API HTTP 403: permission-denied" for item in result["items"])
+
+
 def test_empty_grok_prompt_counts_as_failed_not_completed(db_session, monkeypatch, tmp_path):
     db_session.add(_asset("asset_manual"))
     db_session.commit()

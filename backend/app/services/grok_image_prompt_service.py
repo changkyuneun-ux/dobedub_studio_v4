@@ -24,6 +24,28 @@ from backend.app.core.config import Settings
 INSTRUCTION_VERSION = "wan-i2v-grok-v1"
 LOGGER = logging.getLogger(__name__)
 _SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png"}
+_SUPPORTED_IMAGE_TYPES = {"background", "indoor_background", "static_character", "dynamic_image"}
+GROK_PROMPT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["positivePrompt", "imageType", "warnings"],
+    "properties": {
+        "positivePrompt": {
+            "type": "string",
+            "description": "Concise English WAN image-to-video positive prompt. Empty only for indoor_background.",
+            "maxLength": 2048,
+        },
+        "imageType": {
+            "type": "string",
+            "enum": ["background", "indoor_background", "static_character", "dynamic_image"],
+        },
+        "warnings": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 256},
+            "maxItems": 8,
+        },
+    },
+}
 
 SYSTEM_PROMPT = """You convert one uploaded webtoon or illustration image into a WAN2.2 image-to-video positive prompt.
 
@@ -113,6 +135,14 @@ def generate_image_prompt(
         ],
         "temperature": settings.grok_temperature,
         "max_output_tokens": settings.grok_max_output_tokens,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "wan_i2v_prompt_draft",
+                "strict": True,
+                "schema": GROK_PROMPT_RESPONSE_SCHEMA,
+            },
+        },
     }
     response = _json_request_with_retry(
         f"{settings.grok_base_url.rstrip('/')}/responses",
@@ -124,13 +154,7 @@ def generate_image_prompt(
     )
     parsed = _parse_output(response)
     image_type = str(parsed.get("imageType") or "").strip().lower()
-    if image_type not in {"background", "indoor_background", "static_character", "dynamic_image"}:
-        image_type = "static_character"
-    if "positivePrompt" not in parsed:
-        raise GrokPromptError("Grok response did not contain positivePrompt.")
     positive_prompt = str(parsed.get("positivePrompt") or "").strip()
-    if not positive_prompt and image_type != "indoor_background":
-        raise GrokPromptError("Grok response did not contain positivePrompt.")
     warnings = [str(item).strip() for item in parsed.get("warnings") or [] if str(item).strip()]
     return GrokImagePromptResult(
         positive_prompt=positive_prompt,
@@ -151,7 +175,9 @@ def _json_request_with_retry(
 ) -> dict[str, Any]:
     for attempt in range(max_retries + 1):
         try:
-            return _json_request(url, api_key, payload, timeout)
+            response = _json_request(url, api_key, payload, timeout)
+            _parse_output(response)
+            return response
         except GrokPromptError as exc:
             if not exc.retryable or attempt >= max_retries:
                 raise
@@ -222,17 +248,27 @@ def _parse_output(response: dict[str, Any]) -> dict[str, Any]:
                     text_parts.append(str(content.get("text") or ""))
         text = "\n".join(part for part in text_parts if part).strip()
     if not text:
-        raise GrokPromptError("Grok response did not contain text output.")
+        raise GrokPromptError("Grok response did not contain text output.", retryable=True)
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
         matched = re.search(r"\{[\s\S]*\}", text)
         if not matched:
-            raise GrokPromptError("Grok response did not contain a JSON object.")
+            raise GrokPromptError("Grok response did not contain a JSON object.", retryable=True)
         try:
             value = json.loads(matched.group(0))
         except json.JSONDecodeError as exc:
-            raise GrokPromptError("Grok response JSON could not be parsed.") from exc
+            raise GrokPromptError("Grok response JSON could not be parsed.", retryable=True) from exc
     if not isinstance(value, dict):
-        raise GrokPromptError("Grok response JSON must be an object.")
+        raise GrokPromptError("Grok response JSON must be an object.", retryable=True)
+    for key in ("positivePrompt", "imageType", "warnings"):
+        if key not in value:
+            raise GrokPromptError(f"Grok response did not contain {key}.", retryable=True)
+    image_type = str(value.get("imageType") or "").strip().lower()
+    if image_type not in _SUPPORTED_IMAGE_TYPES:
+        raise GrokPromptError("Grok response did not contain a supported imageType.", retryable=True)
+    if not isinstance(value.get("warnings"), list):
+        raise GrokPromptError("Grok response warnings must be an array.", retryable=True)
+    if not str(value.get("positivePrompt") or "").strip() and image_type != "indoor_background":
+        raise GrokPromptError("Grok response did not contain positivePrompt.", retryable=True)
     return value

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 import time
 import uuid
 from typing import Any, NamedTuple
@@ -32,6 +33,17 @@ RUNPOD_ACTIVE_STATES = {"IN_PROGRESS", "RUNNING"}
 RUNPOD_SUCCESS_STATES = {"COMPLETED", "SUCCESS"}
 RUNPOD_FAILED_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
 STALE_GENERATING_FAILURE_MESSAGE = "Grok 프롬프트 생성이 중단되어 실패 처리되었습니다."
+LOGGER = logging.getLogger(__name__)
+_BATCH_BLOCKING_GROK_STATUS_CODES = {401, 403}
+_BATCH_BLOCKING_GROK_MESSAGE_MARKERS = (
+    "grok image prompt generation is disabled",
+    "grok_api_key is not configured",
+    "api key",
+    "permission-denied",
+    "disabled and cannot be used",
+    "unauthorized",
+    "forbidden",
+)
 
 
 def create_prompt_generation_batch(
@@ -515,6 +527,21 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
         draft.failure_message = str(exc)
         attempt.status = DRAFT_FAILED
         attempt.failure_message = str(exc)
+        if _is_batch_blocking_grok_error(exc):
+            failed_count = _fail_remaining_pending_drafts_for_batch(
+                db,
+                draft.prompt_batch_id,
+                str(exc),
+                exclude_draft_id=draft.id,
+            )
+            if failed_count:
+                LOGGER.warning(
+                    "Stopped Grok prompt batch after provider configuration/auth failure: batch_id=%s draft_id=%s failed_pending=%s status=%s",
+                    draft.prompt_batch_id,
+                    draft.id,
+                    failed_count,
+                    getattr(exc, "status_code", None),
+                )
     except Exception as exc:  # Preserve the batch and allow other images to continue.
         draft.status = DRAFT_FAILED
         draft.failure_message = "Grok image prompt generation failed."
@@ -526,6 +553,43 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
         _refresh_batch_counts(db, draft.prompt_batch_id)
         db.commit()
     return _draft_payload(db, draft)
+
+
+def _is_batch_blocking_grok_error(exc: Exception) -> bool:
+    if isinstance(exc, GrokPromptInputError):
+        return False
+    if not isinstance(exc, GrokPromptError):
+        return False
+    if exc.status_code in _BATCH_BLOCKING_GROK_STATUS_CODES:
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _BATCH_BLOCKING_GROK_MESSAGE_MARKERS)
+
+
+def _fail_remaining_pending_drafts_for_batch(
+    db: Session,
+    batch_id: str | None,
+    failure_message: str,
+    *,
+    exclude_draft_id: str,
+) -> int:
+    if not batch_id:
+        return 0
+    pending_drafts = db.scalars(
+        select(ImagePromptDraft)
+        .where(
+            ImagePromptDraft.prompt_batch_id == batch_id,
+            ImagePromptDraft.status == DRAFT_PENDING,
+            ImagePromptDraft.id != exclude_draft_id,
+        )
+        .order_by(ImagePromptDraft.created_at.asc(), ImagePromptDraft.id.asc())
+    ).all()
+    now = _utc_naive_now()
+    for pending_draft in pending_drafts:
+        pending_draft.status = DRAFT_FAILED
+        pending_draft.failure_message = failure_message
+        pending_draft.updated_at = now
+    return len(pending_drafts)
 
 
 def _refresh_batch_counts(db: Session, batch_id: str | None) -> None:
