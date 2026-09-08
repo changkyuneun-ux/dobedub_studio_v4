@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import select
 
 from backend.app.core.security import create_access_token
@@ -80,7 +81,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         db_session,
         created_by="operator",
         items=[
-            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 161},
+            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 81},
             {"promptDraftId": "draft_request_2", "requestedFrames": 49},
         ],
     )
@@ -96,7 +97,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     snapshot = request_batch_payload(db_session, batch["id"], created_by="operator")
     assert snapshot["requestedCount"] == 2
     assert [(item["workflowId"], item["positivePrompt"], item["requestedFrames"]) for item in snapshot["items"]] == [
-        ("Pickme_Workflow.json", "first prompt", 161),
+        ("Pickme_Workflow.json", "first prompt", 81),
         ("1-images.json", "second prompt", 49),
     ]
 
@@ -106,11 +107,26 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     assert request_item is not None
     job_payload = studio_api_service.job_payload_from_request_item(request_item.id, user={"id": "operator"})
     config = job_payload["segments"][0]["config"]
-    assert config["frames"] == 161
-    assert config["duration_seconds"] == 10
-    assert config["duration"] == 10
+    assert config["frames"] == 81
+    assert config["duration_seconds"] == 5
+    assert config["duration"] == 5
     assert config["fps"] == 16
     assert config["output_fps"] == 16
+
+
+def test_request_batch_rejects_removed_ten_second_length(db_session):
+    db_session.add_all([
+        _asset("asset_request_unsupported_length"),
+        _draft("asset_request_unsupported_length", draft_id="draft_request_unsupported_length", positive="prompt", frames=81),
+    ])
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="영상 Length"):
+        create_request_batch(
+            db_session,
+            created_by="operator",
+            items=[{"promptDraftId": "draft_request_unsupported_length", "requestedFrames": 161}],
+        )
 
 
 def test_request_batch_uses_workflow_default_negative_when_draft_is_blank(db_session):

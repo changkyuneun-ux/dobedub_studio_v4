@@ -12,6 +12,9 @@ from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, R
 from backend.app.services import workflow_service
 
 
+ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
+
+
 def create_request_batch(
     db: Session,
     *,
@@ -702,6 +705,9 @@ def _normalize_requested_items(items: list[dict]) -> list[dict]:
             frames = max(1, int(frames_raw)) if frames_raw is not None else None
         except (TypeError, ValueError) as exc:
             raise ValueError("영상 Length 값이 올바르지 않습니다.") from exc
+        if frames is not None and frames not in ALLOWED_FRAMES:
+            allowed = ", ".join(str(item) for item in sorted(ALLOWED_FRAMES))
+            raise ValueError(f"영상 Length는 {allowed} 중 하나여야 합니다.")
         normalized.append({
             "promptDraftId": draft_id,
             "workflowId": str(raw_item.get("workflowId") or "").strip(),

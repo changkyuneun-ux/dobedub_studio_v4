@@ -8,11 +8,11 @@ import { StudioRoute } from "../router";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; workflows: WorkflowItem[] };
 
-const FRAME_OPTIONS = [49, 81, 161];
+const FRAME_OPTIONS = [49, 81];
 const PAGE_SIZE = 5;
 const RECOVERY_PAGE_SIZE = 10;
-const DEFAULT_REQUESTED_FRAMES = 161;
-const DEFAULT_FRAME_DURATION_LABEL = "161f · 10초";
+const DEFAULT_REQUESTED_FRAMES = 81;
+const DEFAULT_FRAME_DURATION_LABEL = "81f · 5초";
 const PAGE_COUNT_FORMAT_LABEL = "1 / 4 페이지";
 
 const workflowName = (workflow: WorkflowItem | undefined, fallback = "") => workflow?.label || workflow?.name || workflow?.id || fallback;

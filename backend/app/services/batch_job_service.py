@@ -30,7 +30,7 @@ from backend.app.db.session import SessionLocal
 from backend.app.services import prompt_batch_service, workflow_service
 from backend.app.services.zip_encoding_service import normalize_zip_path
 
-ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81, 161})
+ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
 DEFAULT_FRAMES = 81
 DEFAULT_FPS = 16
 PROMOTION_LIMIT_PER_CYCLE = 20

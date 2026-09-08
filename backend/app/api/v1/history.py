@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
 from backend.app.db.session import get_db
-from backend.app.services import job_service, prompt_batch_service, studio_api_service
+from backend.app.services import job_service, prompt_batch_service, studio_api_service, task_tracking_service
 from backend.app.services.task_policy_service import TaskSubmissionLimitError
 
 router = APIRouter(prefix="/history", tags=["history"])
@@ -75,6 +75,31 @@ def runpod_history(
         run_date=runDate,
         batch_job_id=batchId,
     )
+
+
+@router.post("/runpod/rework")
+def rework_runpod_history_items(
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return task_tracking_service.requeue_runpod_history_items(
+            db,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+            scope=str(payload.get("scope") or "selected"),
+            task_ids=[str(task_id) for task_id in payload.get("taskIds") or []],
+            workflow_id=str(payload.get("workflowId") or ""),
+            result_status=str(payload.get("resultStatus") or ""),
+            worker_id=str(payload.get("workerId") or ""),
+            run_date=str(payload.get("runDate") or ""),
+            batch_job_id=str(payload.get("batchId") or ""),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _rework_history_item_response(task_id: str, current_user: CurrentUser) -> dict:

@@ -431,6 +431,14 @@ export type BatchJobRetryResponse = {
   batch: BatchJobResponse;
 };
 
+export type RunpodHistoryReworkResponse = {
+  scope: string;
+  requested: number;
+  reworked: number;
+  taskIds: string[];
+  skipped: Array<{ id: string; reason: string }>;
+};
+
 export type BatchJobCandidateListResponse = {
   items: BatchJobResponse[];
 };
@@ -1359,6 +1367,19 @@ export const apiClient = {
       `/api/history/${encodeURIComponent(taskId)}/rework`,
       { method: "POST" }
     ),
+  reworkRunpodHistoryItems: (payload: {
+    scope: "selected" | "query";
+    taskIds?: string[];
+    batchId?: string;
+    workflowId?: string;
+    resultStatus?: string;
+    workerId?: string;
+    runDate?: string;
+  }) =>
+    requestJson<RunpodHistoryReworkResponse>("/api/history/runpod/rework", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   upload: (payload: { fileName: string; mimeType: string; dataUrl: string }) =>
     requestJson<UploadResponse>("/api/uploads", {
       method: "POST",

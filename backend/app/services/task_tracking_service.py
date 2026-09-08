@@ -31,6 +31,7 @@ TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 PENDING_SUBMISSION_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
 REWORKABLE_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
+REPLAYABLE_STATES = TERMINAL_STATES
 STALE_DISPATCH_CLAIM_SECONDS = 300
 RUNPOD_TIMESTAMP_KEYS = {
     "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
@@ -550,8 +551,46 @@ def restore_existing_job_for_prompt_draft(prompt_draft_id: str, *, batch_job_id:
     return restore_job_from_task(task_id)
 
 
+def _reset_task_for_rework(session: Session, task: WorkflowTask, *, actor_id: str, reset_created_at: bool = True) -> None:
+    now = now_seoul_naive()
+    payload = dict(task.payload_json or {})
+    for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
+        payload.pop(key, None)
+    if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
+        payload["user"] = {
+            "id": task.user_id or actor_id,
+            "name": task.worker_name or (task.user.name if task.user else None) or task.user_id or actor_id,
+            "role": task.user.role if task.user else "",
+            "permissions": task.user.permissions_json if task.user else [],
+        }
+
+    task.status = "PENDING_SUBMIT"
+    task.progress = 0
+    task.runpod_job_id = None
+    task.completed_at = None
+    task.elapsed_seconds = None
+    task.runpod_submit_json = {}
+    task.runpod_status_json = {}
+    task.payload_json = payload
+    task.wan_node_config = {}
+    task.dispatch_claimed_at = None
+    task.dispatch_attempts = 0
+    task.next_dispatch_at = None
+    task.last_dispatch_error = None
+    task.started_at = now
+    task.updated_at = now
+    if reset_created_at:
+        task.created_at = now
+    for link in list(task.output_assets):
+        session.delete(link)
+    for prompt in list(task.prompts):
+        prompt.output_asset_ids = []
+        prompt.updated_at = now
+    _sync_request_batch(session, task)
+
+
 def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = False) -> dict:
-    """Reset an existing failed task so the dispatcher resubmits the same row."""
+    """Reset an existing terminal task so the dispatcher resubmits the same row."""
     session = SessionLocal()
     try:
         task = session.scalar(
@@ -569,43 +608,10 @@ def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = F
         if not can_manage and str(task.user_id or "") != str(actor_id or ""):
             raise PermissionError("다른 작업자의 RunPod 작업은 재작업할 수 없습니다.")
         status = str(task.status or "").upper()
-        if status not in REWORKABLE_STATES:
-            raise ValueError("실패한 RunPod 작업만 재작업할 수 있습니다.")
+        if status not in REPLAYABLE_STATES:
+            raise ValueError("종료된 RunPod 작업만 재실행할 수 있습니다.")
 
-        now = now_seoul_naive()
-        payload = dict(task.payload_json or {})
-        for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
-            payload.pop(key, None)
-        if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
-            payload["user"] = {
-                "id": task.user_id or actor_id,
-                "name": task.worker_name or (task.user.name if task.user else None) or task.user_id or actor_id,
-                "role": task.user.role if task.user else "",
-                "permissions": task.user.permissions_json if task.user else [],
-            }
-
-        task.status = "PENDING_SUBMIT"
-        task.progress = 0
-        task.runpod_job_id = None
-        task.completed_at = None
-        task.elapsed_seconds = None
-        task.runpod_submit_json = {}
-        task.runpod_status_json = {}
-        task.payload_json = payload
-        task.wan_node_config = {}
-        task.dispatch_claimed_at = None
-        task.dispatch_attempts = 0
-        task.next_dispatch_at = None
-        task.last_dispatch_error = None
-        task.started_at = now
-        task.updated_at = now
-        task.created_at = now
-        for link in list(task.output_assets):
-            session.delete(link)
-        for prompt in list(task.prompts):
-            prompt.output_asset_ids = []
-            prompt.updated_at = now
-        _sync_request_batch(session, task)
+        _reset_task_for_rework(session, task, actor_id=actor_id)
         session.commit()
     except Exception:
         session.rollback()
@@ -617,6 +623,101 @@ def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = F
     if restored is None:
         raise KeyError(task_id)
     return restored
+
+
+def requeue_runpod_history_items(
+    session: Session,
+    *,
+    actor_id: str,
+    can_manage: bool = False,
+    scope: str = "selected",
+    task_ids: list[str] | None = None,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    run_date: str = "",
+    batch_job_id: str = "",
+) -> dict:
+    """Reset RunPod history rows using either explicit selection or current query filters."""
+    normalized_scope = str(scope or "selected").strip().lower()
+    skipped: list[dict[str, str]] = []
+    selected_ids = [str(task_id).strip() for task_id in (task_ids or []) if str(task_id).strip()]
+
+    if normalized_scope == "selected":
+        if not selected_ids:
+            raise ValueError("재실행할 RunPod 작업을 선택해주세요.")
+        statement = (
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(
+                WorkflowTask.id.in_(selected_ids),
+                WorkflowTask.deleted_at.is_(None),
+            )
+        )
+        if not can_manage:
+            statement = statement.where(WorkflowTask.user_id == actor_id)
+        tasks = list(session.scalars(statement))
+        task_by_id = {task.id: task for task in tasks}
+        ordered_tasks = []
+        for task_id in selected_ids:
+            task = task_by_id.get(task_id)
+            if task is None:
+                skipped.append({"id": task_id, "reason": "not_found_or_forbidden"})
+                continue
+            ordered_tasks.append(task)
+    elif normalized_scope == "query":
+        if not batch_job_id:
+            raise ValueError("조회 조건 재실행에는 Batch ID가 필요합니다.")
+        normalized_result = str(result_status or "").strip().upper()
+        if normalized_result in {"COMPLETED", "SUCCESS", "ACTIVE", "RUNNING", "IN_PROGRESS"}:
+            raise ValueError("조회 결과 재실행은 실패 또는 취소 RunPod 작업에만 사용할 수 있습니다.")
+        effective_result = result_status if normalized_result in {"FAILED", "CANCELLED", "TIMED_OUT"} else ""
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=effective_result,
+            worker_id=worker_id,
+            date_from=run_date,
+            date_to=run_date,
+            batch_job_id=batch_job_id,
+        )
+        if not effective_result:
+            conditions.append(WorkflowTask.status.in_(REWORKABLE_STATES))
+        if not can_manage:
+            conditions.append(WorkflowTask.user_id == actor_id)
+        ordered_tasks = list(session.scalars(
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(*conditions)
+            .order_by(WorkflowTask.created_at.desc())
+        ))
+    else:
+        raise ValueError("지원하지 않는 RunPod 재실행 범위입니다.")
+
+    reworked_ids: list[str] = []
+    for task in ordered_tasks:
+        status = str(task.status or "").upper()
+        if status not in REPLAYABLE_STATES:
+            skipped.append({"id": task.id, "reason": "not_terminal"})
+            continue
+        _reset_task_for_rework(session, task, actor_id=actor_id)
+        reworked_ids.append(task.id)
+
+    session.commit()
+    return {
+        "scope": normalized_scope,
+        "requested": len(selected_ids) if normalized_scope == "selected" else len(ordered_tasks),
+        "reworked": len(reworked_ids),
+        "taskIds": reworked_ids,
+        "skipped": skipped,
+    }
 
 
 def active_task_ids() -> list[str]:

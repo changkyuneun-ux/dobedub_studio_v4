@@ -191,6 +191,7 @@ export function Create3aScreen({
   const [selectedRunpodTaskIds, setSelectedRunpodTaskIds] = useState<string[]>([]);
   const [selectedRunpodPromptItem, setSelectedRunpodPromptItem] = useState<HistoryItem | null>(null);
   const [reworkingRunpodTaskIds, setReworkingRunpodTaskIds] = useState<string[]>([]);
+  const [runpodBulkReworking, setRunpodBulkReworking] = useState(false);
   const [assetPreview, setAssetPreview] = useState<{ src: string; isVideo: boolean; alt: string } | null>(null);
   const [runpodResultFilter, setRunpodResultFilter] = useState<"all" | "active" | "completed" | "failed" | "cancelled">("all");
   const [runpodWorkflowFilter, setRunpodWorkflowFilter] = useState("");
@@ -321,6 +322,9 @@ export function Create3aScreen({
     const result = historyOutputAsset(item);
     return Boolean(result?.downloadUrl || result?.url || item.outputUrl);
   });
+  const canReworkFilteredRunpodItems = Boolean(selectedBatchJobId)
+    && runpodResultFilter !== "active"
+    && runpodResultFilter !== "completed";
   const allTerminalItemsSelected = terminalRunpodItems.length > 0
     && terminalRunpodItems.every((item) => selectedRunpodTaskIds.includes(item.taskId));
   const toggleRunpodSelection = (taskId: string) => {
@@ -366,6 +370,57 @@ export function Create3aScreen({
       setReworkingRunpodTaskIds((current) => current.filter((taskId) => taskId !== item.taskId));
       setRunpodHistoryNoticeKind("error");
       setRunpodHistoryNotice(error instanceof Error ? error.message : "RunPod 재작업 요청에 실패했습니다.");
+    }
+  }
+  async function reworkSelectedRunpodItems() {
+    if (!selectedRunpodItems.length || runpodBulkReworking) return;
+    const taskIds = selectedRunpodItems.map((item) => item.taskId);
+    setRunpodHistoryNotice("");
+    setRunpodHistoryNoticeKind("error");
+    setRunpodBulkReworking(true);
+    setReworkingRunpodTaskIds((current) => Array.from(new Set([...current, ...taskIds])));
+    try {
+      const result = await apiClient.reworkRunpodHistoryItems({ scope: "selected", taskIds });
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
+      setRunpodHistoryItems(response.items);
+      setRunpodHistoryTotal(response.total);
+      setSelectedRunpodTaskIds((current) => current.filter((taskId) => !result.taskIds.includes(taskId)));
+      setRunpodHistoryNoticeKind("success");
+      setRunpodHistoryNotice(`${result.reworked}건의 재실행 요청이 등록되었습니다.${result.skipped.length ? ` 제외 ${result.skipped.length}건` : ""}`);
+    } catch (error) {
+      setReworkingRunpodTaskIds((current) => current.filter((taskId) => !taskIds.includes(taskId)));
+      setRunpodHistoryNoticeKind("error");
+      setRunpodHistoryNotice(error instanceof Error ? error.message : "선택 RunPod 재실행 요청에 실패했습니다.");
+    } finally {
+      setRunpodBulkReworking(false);
+    }
+  }
+  async function reworkFilteredRunpodItems() {
+    if (!canReworkFilteredRunpodItems || runpodBulkReworking) return;
+    setRunpodHistoryNotice("");
+    setRunpodHistoryNoticeKind("error");
+    setRunpodBulkReworking(true);
+    try {
+      const result = await apiClient.reworkRunpodHistoryItems({
+        scope: "query",
+        batchId: selectedBatchJobId,
+        workflowId: runpodWorkflowFilter,
+        resultStatus: runpodResultFilter,
+        workerId: runpodWorkerFilter,
+        runDate: runpodRunDate
+      });
+      const response = await apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId });
+      setRunpodHistoryItems(response.items);
+      setRunpodHistoryTotal(response.total);
+      setSelectedRunpodTaskIds((current) => current.filter((taskId) => !result.taskIds.includes(taskId)));
+      setReworkingRunpodTaskIds((current) => Array.from(new Set([...current, ...result.taskIds])));
+      setRunpodHistoryNoticeKind("success");
+      setRunpodHistoryNotice(`${result.reworked}건의 조회 결과 재실행 요청이 등록되었습니다.${result.skipped.length ? ` 제외 ${result.skipped.length}건` : ""}`);
+    } catch (error) {
+      setRunpodHistoryNoticeKind("error");
+      setRunpodHistoryNotice(error instanceof Error ? error.message : "조회 결과 RunPod 재실행 요청에 실패했습니다.");
+    } finally {
+      setRunpodBulkReworking(false);
     }
   }
   const isActiveSelected = selectedItem ? !isTerminalHistoryStatus(selectedItem.status) : false;
@@ -414,10 +469,15 @@ export function Create3aScreen({
             <div className="v3-inline-actions">
               {isActiveSelected
                 ? (canCancel ? <button className="v3-danger-button v3-flex-button" type="button" onClick={() => onCancelTask(selectedItem)}>작업 취소</button> : null)
-                : isFailedSelected
-                ? (canRework ? <button className="v3-primary-button v3-flex-button" type="button" onClick={() => onRework(selectedItem)}>전체 재실행</button> : null)
-                : <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onDownload(selectedItem)}>Final 다운로드</button>}
-              {!isActiveSelected && !isFailedSelected && canRework ? <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onRework(selectedItem)}>재작업</button> : null}
+                : outputMediaUrl ? <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => onDownload(selectedItem)}>Final 다운로드</button> : null}
+              {!isActiveSelected && canRework ? (
+                <button
+                  className="v3-primary-button v3-flex-button"
+                  type="button"
+                  disabled={reworkingRunpodTaskIds.includes(selectedItem.taskId)}
+                  onClick={() => reworkRunpodHistoryItem(selectedItem)}
+                >재실행</button>
+              ) : null}
             </div>
 
             {/* Assets */}
@@ -627,6 +687,22 @@ export function Create3aScreen({
           <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed" | "cancelled"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option><option value="cancelled">취소</option></select></label>
         </div>
         <div className="v3-inline-actions v3-runpod-history-actions">
+          <button
+            className="v3-primary-button"
+            type="button"
+            disabled={runpodBulkReworking || !selectedRunpodItems.length}
+            onClick={reworkSelectedRunpodItems}
+          >
+            선택 재실행 ({selectedRunpodItems.length})
+          </button>
+          <button
+            className="v3-secondary-button"
+            type="button"
+            disabled={runpodBulkReworking || !canReworkFilteredRunpodItems}
+            onClick={reworkFilteredRunpodItems}
+          >
+            조회 오류 재실행
+          </button>
           <button
             className="v3-secondary-button"
             type="button"

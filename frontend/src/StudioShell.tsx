@@ -1584,8 +1584,8 @@ export function StudioShell({
   }
 
   function updateGrokVideoLengthFrames(frames: number) {
-    const safeFrames = [49, 81, 161].includes(frames) ? frames : 81;
-    const seconds = safeFrames === 49 ? 3 : safeFrames === 161 ? 10 : 5;
+    const safeFrames = [49, 81].includes(frames) ? frames : 81;
+    const seconds = safeFrames === 49 ? 3 : 5;
     setGrokVideoLengthFrames(safeFrames);
     setSegments((items) => items.map((segment) => ({
       ...segment,

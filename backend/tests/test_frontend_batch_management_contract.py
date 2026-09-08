@@ -242,7 +242,24 @@ def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
     assert "v3-runpod-response-cell" not in runpod_history
 
 
-def test_batch_job_creation_uses_zip_upload_studio_confirm_modal_and_ten_second_default() -> None:
+def test_runpod_history_replay_actions_stay_on_runpod_history() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    right_panel = source.split('rightPanel={', 1)[1].split("{/* Assets */}", 1)[0]
+    toolbar = source.split('v3-runpod-history-actions', 1)[1].split('<div className="v3-card v3-runpod-history-table">', 1)[0]
+
+    assert "reworkRunpodHistoryItems" in client
+    assert "전체 재실행" not in source
+    assert ">재실행</button>" in right_panel
+    assert "onClick={() => reworkRunpodHistoryItem(selectedItem)}" in right_panel
+    assert "onClick={() => onRework(selectedItem)}" not in right_panel
+    assert "선택 재실행" in toolbar
+    assert "조회 오류 재실행" in toolbar
+    assert "reworkSelectedRunpodItems" in source
+    assert "reworkFilteredRunpodItems" in source
+
+
+def test_batch_job_creation_uses_zip_upload_studio_confirm_modal_and_five_second_default() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
@@ -267,8 +284,9 @@ def test_batch_job_creation_uses_zip_upload_studio_confirm_modal_and_ten_second_
     assert "길이" in source
     assert "진행하시겠습니까?" in source
     assert "setRequestedFrames(DEFAULT_REQUESTED_FRAMES)" in source
-    assert "DEFAULT_REQUESTED_FRAMES = 161" in source
-    assert "161f · 10초" in source
+    assert "DEFAULT_REQUESTED_FRAMES = 81" in source
+    assert "81f · 5초" in source
+    assert "161f · 10초" not in source
     assert "개 이미지를 선택했습니다." not in source
     assert "selectedZipFile" in source
     assert "createBatchJobFromZip({" in source
@@ -486,7 +504,13 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "ZIP 파일 선택" in screen
     assert "지시문 연결됨" in screen
     assert "길이 (프레임 수)" in screen
-    assert "161f · 10초" in screen
+    assert "81f · 5초" in screen
+    assert "161f · 10초" not in screen
+    assert "FRAME_OPTIONS = [49, 81]" in screen
+    assert "FRAME_OPTIONS = [49, 81, 161]" not in screen
+    assert "[49, 81, 161]" not in Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
+    assert "[49, 81, 161]" not in Path("frontend/src/screens/grokWorkspaceScreen.tsx").read_text(encoding="utf-8")
+    assert "[49, 81, 161]" not in Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
     assert "작업 요청" in screen
     assert "Pending Submit" in screen
     assert "ZIP 다운로드" in screen

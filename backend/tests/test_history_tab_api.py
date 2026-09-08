@@ -745,6 +745,139 @@ def test_legacy_regenerate_endpoint_uses_same_rework_semantics(api_client, monke
     }
 
 
+def test_runpod_history_rework_accepts_completed_task(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add(WorkflowTask(
+            id="task_history_completed_replay",
+            runpod_job_id="runpod-completed",
+            workflow_id="1-images.json",
+            status="COMPLETED",
+            progress=100,
+            worker_name="History User",
+            user_id="history-user",
+            prompt_draft_id="grok_draft_completed_replay",
+            payload_json={
+                "workflowId": "1-images.json",
+                "workflowName": "1-images",
+                "promptDraftId": "grok_draft_completed_replay",
+                "segments": [{"index": 1, "positivePrompt": "replay completed", "negativePrompt": ""}],
+            },
+            runpod_submit_json={"id": "runpod-completed"},
+            runpod_status_json={"status": "COMPLETED", "output": {"filename": "done.mp4"}},
+            completed_at=datetime(2026, 9, 8, 11, 0, 0),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.post("/api/history/task_history_completed_replay/rework", headers=_authorized_headers())
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "PENDING_SUBMIT"
+    session = SessionLocal()
+    try:
+        task = session.get(WorkflowTask, "task_history_completed_replay")
+        assert task is not None
+        assert task.status == "PENDING_SUBMIT"
+        assert task.runpod_job_id is None
+        assert task.runpod_submit_json == {}
+        assert task.runpod_status_json == {}
+    finally:
+        session.close()
+
+
+def test_runpod_history_bulk_rework_selected_and_query_scopes(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        for task_id, status, batch_id, created_at in [
+            ("task_bulk_failed", "FAILED", "batch_bulk_rework", datetime(2026, 9, 8, 9, 0, 0)),
+            ("task_bulk_cancelled", "CANCELLED", "batch_bulk_rework", datetime(2026, 9, 8, 9, 1, 0)),
+            ("task_bulk_completed", "COMPLETED", "batch_bulk_rework", datetime(2026, 9, 8, 9, 2, 0)),
+            ("task_bulk_active", "IN_PROGRESS", "batch_bulk_rework", datetime(2026, 9, 8, 9, 3, 0)),
+            ("task_bulk_other_batch", "FAILED", "batch_other", datetime(2026, 9, 8, 9, 4, 0)),
+        ]:
+            session.add(WorkflowTask(
+                id=task_id,
+                runpod_job_id=f"runpod-{task_id}",
+                workflow_id="1-images.json",
+                status=status,
+                progress=100 if status != "IN_PROGRESS" else 50,
+                worker_name="History User",
+                user_id="history-user",
+                batch_job_id=batch_id,
+                prompt_draft_id=f"draft_{task_id}",
+                payload_json={
+                    "workflowId": "1-images.json",
+                    "batchJobId": batch_id,
+                    "promptDraftId": f"draft_{task_id}",
+                    "segments": [{"index": 1, "positivePrompt": task_id, "negativePrompt": ""}],
+                },
+                runpod_submit_json={"id": f"runpod-{task_id}"},
+                runpod_status_json={"status": status},
+                created_at=created_at,
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+    selected = api_client.post(
+        "/api/history/runpod/rework",
+        headers=_authorized_headers(),
+        json={"scope": "selected", "taskIds": ["task_bulk_completed", "task_bulk_active"]},
+    )
+    query = api_client.post(
+        "/api/history/runpod/rework",
+        headers=_authorized_headers(),
+        json={"scope": "query", "batchId": "batch_bulk_rework", "resultStatus": "failed"},
+    )
+
+    assert selected.status_code == 200
+    assert selected.json()["reworked"] == 1
+    assert selected.json()["taskIds"] == ["task_bulk_completed"]
+    assert selected.json()["skipped"] == [{"id": "task_bulk_active", "reason": "not_terminal"}]
+    assert query.status_code == 200
+    assert query.json()["reworked"] == 1
+    assert query.json()["taskIds"] == ["task_bulk_failed"]
+    session = SessionLocal()
+    try:
+        statuses = {
+            task.id: task.status
+            for task in session.scalars(select(WorkflowTask).where(WorkflowTask.id.in_([
+                "task_bulk_failed",
+                "task_bulk_cancelled",
+                "task_bulk_completed",
+                "task_bulk_active",
+                "task_bulk_other_batch",
+            ]))).all()
+        }
+        assert statuses == {
+            "task_bulk_failed": "PENDING_SUBMIT",
+            "task_bulk_cancelled": "CANCELLED",
+            "task_bulk_completed": "PENDING_SUBMIT",
+            "task_bulk_active": "IN_PROGRESS",
+            "task_bulk_other_batch": "FAILED",
+        }
+    finally:
+        session.close()
+
+
 def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
     from backend.app.services import studio_api_service
 

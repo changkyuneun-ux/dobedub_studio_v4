@@ -428,7 +428,7 @@ def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, mon
     response = api_client.post(
         "/api/batch-jobs/zip",
         headers=_headers("zip_operator", name="장균은"),
-        data={"workflowId": "Blowbang1.json", "requestedFrames": "161"},
+        data={"workflowId": "Blowbang1.json", "requestedFrames": "81"},
         files={"file": ("픽미툰_씬.zip", _zip_bytes({"root/0001.png": b"png", "root/nested/0002.jpg": b"jpg"}), "application/zip")},
     )
 
@@ -437,7 +437,7 @@ def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, mon
     assert payload["id"] == "장균은_픽미툰_씬_260904"
     assert payload["totalImages"] == 2
     assert payload["sourceDirName"] == "root"
-    assert payload["requestedFrames"] == 161
+    assert payload["requestedFrames"] == 81
 
     session = SessionLocal()
     try:
@@ -453,7 +453,7 @@ def test_batch_zip_endpoint_imports_images_and_creates_batch_job(api_client, mon
     duplicate = api_client.post(
         "/api/batch-jobs/zip",
         headers=_headers("zip_operator", name="장균은"),
-        data={"workflowId": "Blowbang1.json", "requestedFrames": "161"},
+        data={"workflowId": "Blowbang1.json", "requestedFrames": "81"},
         files={"file": ("픽미툰_씬.zip", _zip_bytes({"root/0001.png": b"png"}), "application/zip")},
     )
 
@@ -503,7 +503,7 @@ def test_batch_job_search_finds_partial_worker_and_nfc_nfd_batch_ids(api_client)
     assert payload["items"][0]["videoCompletedCount"] == 4
 
 
-@pytest.mark.parametrize("frames, expected_seconds", [(49, 3), (81, 5), (161, 10)])
+@pytest.mark.parametrize("frames, expected_seconds", [(49, 3), (81, 5)])
 def test_duration_seconds_matches_frame_choice(db_session, monkeypatch, frames, expected_seconds):
     user = _user()
     db_session.add(user)
@@ -519,7 +519,7 @@ def test_duration_seconds_matches_frame_choice(db_session, monkeypatch, frames, 
     assert result["durationSeconds"] == expected_seconds
 
 
-@pytest.mark.parametrize("frames", [0, 30, 100, 200, -1])
+@pytest.mark.parametrize("frames", [0, 30, 100, 161, 200, -1])
 def test_create_batch_job_rejects_unsupported_frames(db_session, monkeypatch, frames):
     user = _user()
     db_session.add(user)
@@ -1156,7 +1156,7 @@ def test_batch_job_detail_separates_prompt_and_runpod_failures(db_session, monke
     monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
         created_by="operator_1",
     )
     drafts = _drafts_of(db_session, created["id"])
@@ -1305,7 +1305,7 @@ def test_batch_job_detail_normalizes_legacy_mojibake_source_paths(db_session, mo
         {
             "workflowId": "Blowbang1.json",
             "sourceZipFileName": "2권 08-10화-테스트.zip",
-            "requestedFrames": 161,
+            "requestedFrames": 81,
             "items": [{
                 "assetId": asset_ids[0],
                 "fileName": "0001.jpg",
@@ -1330,7 +1330,7 @@ def test_retry_failed_batch_items_reuses_existing_prompt_and_task_rows(db_sessio
     monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
         created_by="operator_1",
     )
     drafts = _drafts_of(db_session, created["id"])
@@ -1461,7 +1461,7 @@ def test_batch_job_detail_repairs_task_missing_batch_link_when_prompt_link_is_cl
     monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
     created = batch_job_service.create_batch_job(
         db_session,
-        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 161, "items": _asset_items_from_ids(asset_ids)},
+        {"workflowId": "Blowbang1.json", "sourceZipFileName": "source.zip", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
         created_by="operator_1",
     )
     draft = _drafts_of(db_session, created["id"])[0]
