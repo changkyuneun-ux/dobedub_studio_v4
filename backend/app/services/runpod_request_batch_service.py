@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services import workflow_service
+from backend.app.services.workflow_patch_service import normalize_resolution_tier
 
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
@@ -105,6 +106,7 @@ def create_request_batch(
             positive_prompt=str(draft.positive_prompt or "").strip(),
             negative_prompt=negative_prompt,
             requested_frames=requested["requestedFrames"] or max(1, int(draft.requested_frames or 81)),
+            resolution_tier=requested["resolutionTier"],
             status="PENDING_SUBMIT",
         ))
         created_item_ids.append(item_id)
@@ -465,6 +467,7 @@ def _request_queue_entries(
             "positivePrompt": str(draft.positive_prompt or ""),
             "negativePrompt": draft.negative_prompt,
             "requestedFrames": int(draft.requested_frames or 81),
+            "resolutionTier": "sd",
             "status": "READY",
             "taskId": None,
             "runpodJobId": None,
@@ -676,6 +679,7 @@ def _item_payload(
         "positivePrompt": item.positive_prompt,
         "negativePrompt": item.negative_prompt,
         "requestedFrames": item.requested_frames,
+        "resolutionTier": normalize_resolution_tier(getattr(item, "resolution_tier", None)),
         "status": item.status,
         "taskId": item.task_id,
         "runpodJobId": runpod_job_id,
@@ -712,5 +716,6 @@ def _normalize_requested_items(items: list[dict]) -> list[dict]:
             "promptDraftId": draft_id,
             "workflowId": str(raw_item.get("workflowId") or "").strip(),
             "requestedFrames": frames,
+            "resolutionTier": normalize_resolution_tier(raw_item.get("resolutionTier")),
         })
     return normalized

@@ -1,5 +1,5 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from "react";
-import { apiClient, BatchJobDetailItemResponse, BatchJobDetailResponse, BatchJobResponse, HealthResponse, WorkflowItem } from "../api/client";
+import { apiClient, BatchJobDetailItemResponse, BatchJobDetailResponse, BatchJobResponse, HealthResponse, ResolutionTier, WorkflowItem } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
@@ -14,6 +14,10 @@ const RECOVERY_PAGE_SIZE = 10;
 const DEFAULT_REQUESTED_FRAMES = 81;
 const DEFAULT_FRAME_DURATION_LABEL = "81f · 5초";
 const PAGE_COUNT_FORMAT_LABEL = "1 / 4 페이지";
+const RESOLUTION_TIERS: Array<{ value: ResolutionTier; label: string }> = [
+  { value: "sd", label: "SD · 409K px" },
+  { value: "hd", label: "HD · 921K px" }
+];
 
 const workflowName = (workflow: WorkflowItem | undefined, fallback = "") => workflow?.label || workflow?.name || workflow?.id || fallback;
 
@@ -96,6 +100,7 @@ function isRecoveryErrorItem(item: BatchJobDetailItemResponse) {
 export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Props) {
   const [workflowId, setWorkflowId] = useState(workflows[0]?.id || "");
   const [requestedFrames, setRequestedFrames] = useState(DEFAULT_REQUESTED_FRAMES);
+  const [resolutionTier, setResolutionTier] = useState<ResolutionTier>("sd");
   const [workflowDefaultNegativePrompt, setWorkflowDefaultNegativePrompt] = useState("");
   const [batchNegativePrompt, setBatchNegativePrompt] = useState("");
   const [instructionStatus, setInstructionStatus] = useState<{ configured: boolean; count: number } | null>(null);
@@ -293,6 +298,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   function resetBatchCreation() {
     setSelectedZipFile(null);
     setRequestedFrames(DEFAULT_REQUESTED_FRAMES);
+    setResolutionTier("sd");
     setBatchNegativePrompt(workflowDefaultNegativePrompt);
     setNotice("");
     if (zipInput.current) {
@@ -328,6 +334,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       const created = await apiClient.createBatchJobFromZip({
         workflowId,
         requestedFrames,
+        resolutionTier,
         negativePrompt: batchNegativePrompt,
         file: selectedZipFile
       });
@@ -435,11 +442,18 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             </div>
             <small>{formatFrameDuration(requestedFrames)}</small>
           </div>
+          <div className="v3-batch-field-card">
+            <label>Quality</label>
+            <select value={resolutionTier} onChange={(event) => setResolutionTier(event.target.value as ResolutionTier)}>
+              {RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value}>{tier.label}</option>)}
+            </select>
+            <small>{resolutionTier === "hd" ? "최대 921K px" : "기본 409K px"}</small>
+          </div>
           <div className="v3-batch-create-action">
             <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile || !instructionStatus?.configured} onClick={requestBatchConfirmation}>
               작업 요청
             </button>
-            <small>{selectedZipFile ? selectedZipFile.name : formatFrameDuration(requestedFrames)}</small>
+            <small>{selectedZipFile ? selectedZipFile.name : `${formatFrameDuration(requestedFrames)} · ${resolutionTier.toUpperCase()}`}</small>
           </div>
           <label className="v3-batch-negative-card">
             <span>Built-in Negative Prompt</span>
@@ -674,6 +688,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               <div><span>워크플로우</span><strong>{selectedWorkflowLabel}</strong></div>
               <div><span>ZIP 파일명</span><strong>{selectedZipFile?.name || "-"}</strong></div>
               <div><span>길이</span><strong>{formatFrameDuration(requestedFrames)}</strong></div>
+              <div><span>Quality</span><strong>{resolutionTier.toUpperCase()}</strong></div>
               <div><span>Negative Prompt</span><strong>{batchNegativePrompt.trim() || workflowDefaultNegativePrompt || "-"}</strong></div>
             </div>
             <p className="v3-modal-body-text">진행하시겠습니까?</p>

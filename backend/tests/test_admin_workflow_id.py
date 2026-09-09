@@ -76,12 +76,12 @@ class AdminWorkflowIdTests(unittest.TestCase):
             1,
         )
 
-    def test_pick_wan_size_uses_aspect_ratio_presets(self) -> None:
-        self.assertEqual(pick_wan_size(2040, 1090), (832, 480))
-        self.assertEqual(pick_wan_size(1090, 2040), (480, 832))
+    def test_pick_wan_size_uses_sd_pixel_budget_fit(self) -> None:
+        self.assertEqual(pick_wan_size(2040, 1090), (864, 464))
+        self.assertEqual(pick_wan_size(1090, 2040), (464, 864))
         self.assertEqual(pick_wan_size(1024, 1024), (640, 640))
 
-    def test_wan_image_to_video_resolution_uses_aspect_ratio_preset(self) -> None:
+    def test_wan_image_to_video_resolution_uses_sd_pixel_budget_fit(self) -> None:
         workflow = {
             "98": {
                 "class_type": "WanImageToVideo",
@@ -106,11 +106,11 @@ class AdminWorkflowIdTests(unittest.TestCase):
             workflows_dir,
         )
 
-        self.assertEqual(workflow["98"]["inputs"]["width"], 480)
-        self.assertEqual(workflow["98"]["inputs"]["height"], 832)
+        self.assertEqual(workflow["98"]["inputs"]["width"], 464)
+        self.assertEqual(workflow["98"]["inputs"]["height"], 864)
         self.assertEqual(workflow["98"]["inputs"]["length"], 81)
-        self.assertIn({"segment": 1, "param": "width", "node": "98", "field": "width", "value": 480}, applied)
-        self.assertIn({"segment": 1, "param": "height", "node": "98", "field": "height", "value": 832}, applied)
+        self.assertIn({"segment": 1, "param": "width", "node": "98", "field": "width", "value": 464}, applied)
+        self.assertIn({"segment": 1, "param": "height", "node": "98", "field": "height", "value": 864}, applied)
         self.assertIn({"segment": 1, "param": "frames", "node": "98", "field": "length", "value": 81}, applied)
 
     def test_non_wan_resolution_targets_keep_exact_config_values(self) -> None:
@@ -170,6 +170,7 @@ class AdminWorkflowIdTests(unittest.TestCase):
             [{"name": "source.png", "path": "/private/input/source.png"}],
         )
 
+        self.assertEqual(snapshot["resolutionTier"], "sd")
         self.assertEqual(snapshot["inputImages"], [{
             "slotIndex": 1,
             "assetId": "asset_input_1",

@@ -1576,6 +1576,9 @@ def _task_to_history_item(
     item["outputAssets"] = output_assets or item.get("outputAssets", [])
     item.setdefault("outputUrl", _first_output_url(item["outputAssets"]))
     item["runpodResponse"] = _runpod_response_summary(task, item["outputAssets"])
+    item["runpodGeneration"] = _runpod_generation(task.runpod_status_json or {})
+    if item["runpodGeneration"]:
+        item["runpodResponse"]["generation"] = item["runpodGeneration"]
     item.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
     item.setdefault("elapsedSeconds", task.elapsed_seconds)
     return item
@@ -1636,12 +1639,30 @@ def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> d
         or _find_provider_value(submit_payload, ("filename", "fileName"))
         or _first_output_filename(output_assets)
     )
-    return {
+    summary = {
         "filename": filename or None,
         "delaySeconds": _find_provider_value(submit_payload, ("delayTime", "delay_time", "delaySeconds")),
         "executionSeconds": _find_provider_value(provider_payload, ("executionTime", "execution_time", "executionSeconds")),
         "jobId": task.runpod_job_id or _find_provider_value(submit_payload, ("id", "jobId", "job_id")) or None,
     }
+    generation = _runpod_generation(provider_payload)
+    if generation:
+        summary["generation"] = generation
+    return summary
+
+
+def _runpod_generation(provider_payload: dict) -> list:
+    if not isinstance(provider_payload, dict):
+        return []
+    candidates = [
+        provider_payload.get("generation"),
+        (provider_payload.get("output") or {}).get("generation") if isinstance(provider_payload.get("output"), dict) else None,
+        (provider_payload.get("manifest") or {}).get("generation") if isinstance(provider_payload.get("manifest"), dict) else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return candidate
+    return []
 
 
 def _find_provider_value(payload: object, keys: tuple[str, ...]) -> object | None:

@@ -737,7 +737,18 @@ def _s3_job_storage_key(job_scope: dict, leaf: str) -> str:
 
 
 def build_wan_node_config_snapshot(workflow_id: str, segments_payload: list[dict]) -> dict:
-    return workflow_patch_service.build_wan_node_config_snapshot(workflow_id, segments_payload, get_settings().workflows_dir)
+    resolution_tier = "sd"
+    for segment in segments_payload or []:
+        config = segment.get("config") if isinstance(segment, dict) else {}
+        if isinstance(config, dict) and config.get("resolutionTier"):
+            resolution_tier = str(config.get("resolutionTier"))
+            break
+    return workflow_patch_service.build_wan_node_config_snapshot(
+        workflow_id,
+        segments_payload,
+        get_settings().workflows_dir,
+        resolution_tier,
+    )
 
 
 def job_runtime() -> job_service.JobRuntime:
@@ -835,6 +846,7 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
             # stable display name for registered workflows.
             "workflowName": Path(draft.workflow_id).stem,
             "promptDraftId": draft.id,
+            "resolutionTier": "sd",
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
                 "index": 1,
@@ -879,6 +891,7 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
             "requestBatchId": item.request_batch_id,
             "requestItemId": item.id,
             "batchJobId": batch_owner.batch_job_id,
+            "resolutionTier": workflow_patch_service.normalize_resolution_tier(getattr(item, "resolution_tier", None)),
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
                 "index": 1,

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, timestamp_fields
+from backend.app.services.workflow_patch_service import normalize_resolution_tier
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
@@ -45,6 +46,18 @@ def config_without_seed(config: dict | None) -> dict:
     }
 
 
+def normalize_payload_resolution_tier(payload: dict) -> str:
+    tier = normalize_resolution_tier(payload.get("resolutionTier"))
+    payload["resolutionTier"] = tier
+    for segment in payload.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        config = segment.setdefault("config", {})
+        if isinstance(config, dict):
+            config["resolutionTier"] = tier
+    return tier
+
+
 def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     workflow, images, patch_summary = runtime.prepare_workflow_for_job(payload)
     response = runtime.runpod_request("POST", "/run", _build_runpod_payload(runtime, workflow, images, payload))
@@ -70,6 +83,7 @@ def queue_job(runtime: JobRuntime, payload: dict) -> dict:
     # The in-memory task and its DB record must preserve the exact request
     # submitted to RunPod, even if a caller later mutates its original object.
     payload = copy.deepcopy(payload)
+    normalize_payload_resolution_tier(payload)
     now_seoul = now_seoul_naive()
     task_id = f"task_{now_seoul.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     now = time.time()
@@ -141,6 +155,7 @@ def dispatch_queued_job(runtime: JobRuntime, job: dict) -> dict:
     payload = copy.deepcopy(job.get("payload") or {})
     if not payload:
         raise ValueError("Queued task payload is missing")
+    normalize_payload_resolution_tier(payload)
     if job.get("generationSeed") is not None:
         payload["generationSeed"] = job["generationSeed"]
     payload["taskId"] = job["taskId"]

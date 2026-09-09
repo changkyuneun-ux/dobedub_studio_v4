@@ -649,3 +649,19 @@ def test_batch_recovery_modal_uses_defined_light_theme_tokens() -> None:
     assert "color: var(--v3-text-body);" in recovery_title
     assert "color: var(--v3-text-label);" in recovery_metric_label
     assert "color: var(--v3-text-body);" in recovery_metric_value
+
+
+def test_runpod_request_and_batch_zip_payload_include_resolution_tier() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    runpod_screen = Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
+    batch_screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    assert 'export type ResolutionTier = "sd" | "hd";' in client
+    assert "resolutionTier?: ResolutionTier" in client
+    assert 'formData.set("resolutionTier", payload.resolutionTier || "sd");' in client
+    assert "const [resolutionTier, setResolutionTier] = useState<ResolutionTier>(\"sd\");" in runpod_screen
+    assert "resolutionTier" in runpod_screen.split("createRunpodRequestBatch", 1)[1]
+    assert "const [resolutionTier, setResolutionTier] = useState<ResolutionTier>(\"sd\");" in batch_screen
+    assert "resolutionTier," in batch_screen.split("createBatchJobFromZip", 1)[1]
+    assert "Quality" in runpod_screen
+    assert "Quality" in batch_screen

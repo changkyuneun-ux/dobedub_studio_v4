@@ -81,7 +81,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         db_session,
         created_by="operator",
         items=[
-            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 81},
+            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 81, "resolutionTier": "hd"},
             {"promptDraftId": "draft_request_2", "requestedFrames": 49},
         ],
     )
@@ -100,6 +100,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         ("Pickme_Workflow.json", "first prompt", 81),
         ("1-images.json", "second prompt", 49),
     ]
+    assert [item["resolutionTier"] for item in snapshot["items"]] == ["hd", "sd"]
 
     request_item = db_session.scalar(
         select(RunpodRequestItem).where(RunpodRequestItem.prompt_draft_id == "draft_request_1")
@@ -112,6 +113,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     assert config["duration"] == 5
     assert config["fps"] == 16
     assert config["output_fps"] == 16
+    assert job_payload["resolutionTier"] == "hd"
 
 
 def test_request_batch_rejects_removed_ten_second_length(db_session):

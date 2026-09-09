@@ -74,7 +74,7 @@ def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_sessi
     workflow_path = tmp_path / "s3-i2v.json"
     workflow_path.write_text(json.dumps({
         "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
-        "2": {"class_type": "WanImageToVideo", "inputs": {"image": ["1", 0]}},
+        "2": {"class_type": "WanImageToVideo", "inputs": {"image": ["1", 0], "width": 832, "height": 480}},
         "3": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "video/ComfyUI"}},
     }), encoding="utf-8")
     db_session.add(Asset(
@@ -83,6 +83,8 @@ def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_sessi
         file_name="scene.png",
         mime_type="image/png",
         size_bytes=5,
+        image_width=1920,
+        image_height=1080,
         storage_backend="s3",
         storage_key="prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/inputs/asset_s3_input/scene.png",
         public_url="s3://dobedub-studio/prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/inputs/asset_s3_input/scene.png",

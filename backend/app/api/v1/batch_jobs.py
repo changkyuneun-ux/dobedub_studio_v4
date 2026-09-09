@@ -39,6 +39,7 @@ def create_batch_job(
 async def create_batch_job_from_zip(
     workflowId: str = Form(...),
     requestedFrames: int = Form(batch_job_service.DEFAULT_FRAMES),
+    resolutionTier: str = Form("sd"),
     negativePrompt: str = Form(""),
     file: UploadFile = File(...),
     current_user: CurrentUser = Depends(require_permission("prompts:build")),
@@ -62,6 +63,7 @@ async def create_batch_job_from_zip(
             {
                 "workflowId": workflowId,
                 "requestedFrames": requestedFrames,
+                "resolutionTier": resolutionTier,
                 "negativePrompt": negativePrompt,
                 "sourceDirName": imported.source_dir_name,
                 "sourceZipFileName": imported.source_zip_file_name,

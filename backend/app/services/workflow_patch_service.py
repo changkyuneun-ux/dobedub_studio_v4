@@ -13,19 +13,85 @@ from backend.app.services.workflow_parser import PARAM_LABELS, PARAM_UI_KEYS
 I2V_INPUT_IMAGE_REQUIRED_MESSAGE = "입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다."
 MAX_GENERATION_SEED = (1 << 53) - 1
 WAN_IMAGE_TO_VIDEO_CLASS = "WanImageToVideo"
+WAN_PIXEL_BUDGET = {"sd": 409_600, "hd": 921_600}
+WAN_MULTIPLE = 16
+WAN_MAX_FRAMES = 81
+WAN_MAX_TOTAL_FRAMES = 162
 
 
-def pick_wan_size(img_w: int, img_h: int) -> tuple[int, int]:
+def normalize_resolution_tier(tier: str | None) -> str:
+    normalized = str(tier or "sd").strip().lower()
+    if normalized not in WAN_PIXEL_BUDGET:
+        allowed = ", ".join(sorted(WAN_PIXEL_BUDGET))
+        raise ValueError(f"resolutionTier must be one of: {allowed}")
+    return normalized
+
+
+def fit_wan_size(img_w: int, img_h: int, tier: str = "sd") -> tuple[int, int]:
     width = int(img_w)
     height = int(img_h)
     if width <= 0 or height <= 0:
         raise ValueError("Wan source image dimensions must be positive integers.")
-    ratio = width / height
-    if ratio > 1.3:
-        return 832, 480
-    if ratio < 0.77:
-        return 480, 832
-    return 640, 640
+    budget = WAN_PIXEL_BUDGET[normalize_resolution_tier(tier)]
+    scale = min(1.0, (budget / (width * height)) ** 0.5)
+    fitted_width = max(WAN_MULTIPLE, int(width * scale) // WAN_MULTIPLE * WAN_MULTIPLE)
+    fitted_height = max(WAN_MULTIPLE, int(height * scale) // WAN_MULTIPLE * WAN_MULTIPLE)
+    while fitted_width * fitted_height > budget:
+        if fitted_width >= fitted_height:
+            fitted_width -= WAN_MULTIPLE
+        else:
+            fitted_height -= WAN_MULTIPLE
+    return fitted_width, fitted_height
+
+
+def pick_wan_size(img_w: int, img_h: int) -> tuple[int, int]:
+    return fit_wan_size(img_w, img_h, "sd")
+
+
+def wan_image_to_video_nodes(workflow: dict) -> list[tuple[str, dict]]:
+    return [
+        (str(node_id), node)
+        for node_id, node in workflow.items()
+        if isinstance(node, dict) and node.get("class_type") == WAN_IMAGE_TO_VIDEO_CLASS
+    ]
+
+
+def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") -> list[dict]:
+    normalized_tier = normalize_resolution_tier(tier)
+    budget = WAN_PIXEL_BUDGET[normalized_tier]
+    generation: list[dict] = []
+    total_length = 0
+    for node_id, node in wan_image_to_video_nodes(workflow):
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        width = int(inputs.get("width") or 0)
+        height = int(inputs.get("height") or 0)
+        length = int(inputs.get("length") or 0)
+        batch_size = int(inputs.get("batch_size") or inputs.get("batchSize") or 1)
+        pixel_count = width * height
+        if width <= 0 or height <= 0:
+            raise ValueError(f"WanImageToVideo node {node_id} width/height must be positive.")
+        if width % WAN_MULTIPLE or height % WAN_MULTIPLE:
+            raise ValueError(f"WanImageToVideo node {node_id} width/height must be multiples of {WAN_MULTIPLE}.")
+        if pixel_count > budget:
+            raise ValueError(f"WanImageToVideo node {node_id} pixel count {pixel_count} exceeds {normalized_tier} budget {budget}.")
+        if length == 161:
+            raise ValueError(f"WanImageToVideo node {node_id} length=161 is prohibited.")
+        if length > WAN_MAX_FRAMES:
+            raise ValueError(f"WanImageToVideo node {node_id} length must be <= {WAN_MAX_FRAMES}.")
+        total_length += length
+        generation.append({
+            "nodeId": node_id,
+            "width": width,
+            "height": height,
+            "length": length,
+            "batchSize": batch_size,
+            "pixelCount": pixel_count,
+            "tier": normalized_tier,
+            "pixelBudget": budget,
+        })
+    if total_length > WAN_MAX_TOTAL_FRAMES:
+        raise ValueError(f"total WanImageToVideo length must be <= {WAN_MAX_TOTAL_FRAMES}.")
+    return generation
 
 
 def validate_i2v_input_images(payload: dict, workflow: dict, segments: list[dict]) -> None:
@@ -165,6 +231,7 @@ def build_submission_request_snapshot(payload: dict, images: list[dict]) -> dict
         })
     return {
         "workflowId": str(payload.get("workflowId") or ""),
+        "resolutionTier": normalize_resolution_tier(payload.get("resolutionTier")),
         "inputImages": input_images,
         "prompts": prompts,
         "videoSettings": settings,
@@ -188,7 +255,7 @@ def ui_config_to_param_config(node_config: dict) -> dict:
     }
 
 
-def _wan_size_from_config(node_config: dict) -> tuple[int, int] | None:
+def _wan_size_from_config(node_config: dict, tier: str = "sd") -> tuple[int, int] | None:
     width = node_config.get("width")
     height = node_config.get("height")
     if width is None or height is None:
@@ -198,15 +265,15 @@ def _wan_size_from_config(node_config: dict) -> tuple[int, int] | None:
     if isinstance(height, str) and not height.strip():
         return None
     try:
-        return pick_wan_size(int(width), int(height))
+        return fit_wan_size(int(width), int(height), tier)
     except (TypeError, ValueError):
         return None
 
 
-def _wan_resolution_param_value(workflow: dict, param_name: str, param_spec: dict, node_config: dict):
+def _wan_resolution_param_value(workflow: dict, param_name: str, param_spec: dict, node_config: dict, tier: str = "sd"):
     if param_name not in {"width", "height"}:
         return None
-    preset = _wan_size_from_config(node_config)
+    preset = _wan_size_from_config(node_config, tier)
     if not preset:
         return None
     has_wan_target = any(
@@ -281,6 +348,7 @@ def apply_node_config_to_workflow(
     workflow_id: str,
     segments_payload: list[dict],
     workflows_dir: Path,
+    resolution_tier: str = "sd",
 ) -> list[dict]:
     param_config = workflow_parser.load_param_config(workflow_id, workflows_dir)
     if not param_config:
@@ -295,7 +363,7 @@ def apply_node_config_to_workflow(
         for param_name, param_spec in params.items():
             if param_name == "seed":
                 continue
-            value = _wan_resolution_param_value(workflow, param_name, param_spec, node_config)
+            value = _wan_resolution_param_value(workflow, param_name, param_spec, node_config, resolution_tier)
             if value is None:
                 value = node_config.get(param_name, param_spec.get("default"))
             if value is None:
@@ -315,10 +383,50 @@ def apply_node_config_to_workflow(
     return applied
 
 
+def apply_wan_generation_policy(
+    workflow: dict,
+    segments_payload: list[dict],
+    *,
+    resolution_tier: str = "sd",
+) -> list[dict]:
+    nodes = wan_image_to_video_nodes(workflow)
+    if not nodes:
+        return []
+    normalized_tier = normalize_resolution_tier(resolution_tier)
+    first_config = ((segments_payload or [{}])[0].get("config") if segments_payload else {}) or {}
+    size = _wan_size_from_config(first_config, normalized_tier)
+    applied = []
+    for node_id, node in nodes:
+        inputs = node.setdefault("inputs", {})
+        if size:
+            inputs["width"], inputs["height"] = size
+        requested_length = None
+        if len(nodes) == 1:
+            requested_length = first_config.get("length") or first_config.get("frames") or first_config.get("frame_count")
+        try:
+            length = int(requested_length) if requested_length is not None else WAN_MAX_FRAMES
+        except (TypeError, ValueError):
+            length = WAN_MAX_FRAMES
+        length = max(1, min(WAN_MAX_FRAMES, length))
+        inputs["length"] = length
+        inputs["batch_size"] = 1
+        applied.append({
+            "node": node_id,
+            "width": inputs.get("width"),
+            "height": inputs.get("height"),
+            "length": inputs.get("length"),
+            "batch_size": inputs.get("batch_size"),
+            "resolutionTier": normalized_tier,
+        })
+    wan_image_to_video_generation_snapshot(workflow, tier=normalized_tier)
+    return applied
+
+
 def build_wan_node_config_snapshot(
     workflow_id: str,
     segments_payload: list[dict],
     workflows_dir: Path,
+    resolution_tier: str = "sd",
 ) -> dict:
     try:
         workflow = workflow_parser.load_workflow(workflow_id, workflows_dir)
@@ -336,7 +444,7 @@ def build_wan_node_config_snapshot(
             if param_name == "seed":
                 continue
             ui_key = PARAM_UI_KEYS.get(param_name, param_name)
-            value = _wan_resolution_param_value(workflow, param_name, param_spec, ui_values)
+            value = _wan_resolution_param_value(workflow, param_name, param_spec, ui_values, resolution_tier)
             if value is None:
                 value = ui_values.get(param_name, param_spec.get("default"))
             param_items.append({
@@ -365,6 +473,7 @@ def build_wan_node_config_snapshot(
         })
     return {
         "workflowId": workflow_id,
+        "resolutionTier": normalize_resolution_tier(resolution_tier),
         "capturedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
         "segments": snapshot_segments,
     }
@@ -377,6 +486,7 @@ def prepare_workflow_for_job(
     existing_save_video_outputs: Callable[[dict, str, list[dict]], dict],
 ) -> tuple[dict, list[dict], dict]:
     workflow_id = payload.get("workflowId") or "unknown"
+    resolution_tier = normalize_resolution_tier(payload.get("resolutionTier"))
     workflow = workflow_parser.load_workflow(workflow_id, workflows_dir)
     segments = workflow_parser.find_segments(workflow)
     segment_payloads = payload.get("segments") or []
@@ -390,6 +500,7 @@ def prepare_workflow_for_job(
         "nodeConfig": [],
         "finalOutputNodes": output_summary["finalOutputNodes"],
         "segmentOutputs": output_summary["segmentOutputs"],
+        "resolutionTier": resolution_tier,
     }
 
     if image_names:
@@ -411,7 +522,19 @@ def prepare_workflow_for_job(
             first_segment.get("negativePromptAddition", ""),
         )
 
-    patch_summary["nodeConfig"] = apply_node_config_to_workflow(workflow, workflow_id, segment_payloads, workflows_dir)
+    patch_summary["nodeConfig"] = apply_node_config_to_workflow(
+        workflow,
+        workflow_id,
+        segment_payloads,
+        workflows_dir,
+        resolution_tier,
+    )
+    patch_summary["wanGenerationPolicy"] = apply_wan_generation_policy(
+        workflow,
+        segment_payloads,
+        resolution_tier=resolution_tier,
+    )
+    patch_summary["generation"] = wan_image_to_video_generation_snapshot(workflow, tier=resolution_tier)
     queued_seed = payload.get("generationSeed")
     try:
         queued_seed = int(queued_seed) if queued_seed is not None else None

@@ -28,6 +28,7 @@ from backend.app.db.models import (
 )
 from backend.app.db.session import SessionLocal
 from backend.app.services import prompt_batch_service, workflow_service
+from backend.app.services.workflow_patch_service import normalize_resolution_tier
 from backend.app.services.zip_encoding_service import normalize_zip_path
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
@@ -179,6 +180,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     if not isinstance(items, list) or not items:
         raise ValueError("배치로 처리할 이미지를 하나 이상 선택하세요.")
     requested_frames = _validated_frames(payload.get("requestedFrames", DEFAULT_FRAMES))
+    resolution_tier = normalize_resolution_tier(payload.get("resolutionTier"))
     negative_prompt = str(payload.get("negativePrompt") or "").strip()
 
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
@@ -198,6 +200,7 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
         source_dir_name=source_dir_name[:512] or None,
         source_zip_file_name=source_zip_file_name[:512] or None,
         requested_frames=requested_frames,
+        resolution_tier=resolution_tier,
         duration_seconds=resolve_duration_seconds(workflow_id, requested_frames),
         total_images=len(items),
         prompt_waiting_count=len(items),
@@ -369,6 +372,7 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "sourceDirName": batch.source_dir_name,
         "sourceZipFileName": batch.source_zip_file_name,
         "requestedFrames": batch.requested_frames,
+        "resolutionTier": normalize_resolution_tier(getattr(batch, "resolution_tier", None)),
         "durationSeconds": batch.duration_seconds,
         "totalImages": batch.total_images,
         "promptCompletedCount": batch.prompt_completed_count,
@@ -547,6 +551,7 @@ def _batch_candidate_payload(
         "sourceDirName": batch.source_dir_name,
         "sourceZipFileName": batch.source_zip_file_name,
         "requestedFrames": batch.requested_frames,
+        "resolutionTier": normalize_resolution_tier(getattr(batch, "resolution_tier", None)),
         "durationSeconds": batch.duration_seconds,
         "totalImages": batch.total_images,
         "promptCompletedCount": batch.prompt_completed_count,
@@ -674,10 +679,12 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
         promoted_count = 0
         try:
             worker_user = _submitter_user(owner_id)
+            resolution_tier = _batch_resolution_tier(batch_id)
             for draft_id in owned_ids:
                 try:
                     job_payload = studio_api_service.job_payload_from_prompt_draft(draft_id, user=worker_user)
                     job_payload["batchJobId"] = batch_id
+                    job_payload["resolutionTier"] = resolution_tier
                     studio_api_service.create_job(job_payload, user=worker_user)
                     _mark_promotion_task_created(draft_id, claim_stamps[draft_id])
                     promoted_count += 1
@@ -695,6 +702,15 @@ def promote_ready_batch_drafts() -> dict[str, Any]:
         promoted_batches.append(batch_id)
 
     return {"promoted": promoted, "batches": promoted_batches}
+
+
+def _batch_resolution_tier(batch_id: str) -> str:
+    db = SessionLocal()
+    try:
+        batch = db.get(BatchJob, batch_id)
+        return normalize_resolution_tier(getattr(batch, "resolution_tier", None))
+    finally:
+        db.close()
 
 
 def _unpromoted_ready_drafts(limit: int, cutoff: datetime, now: datetime):

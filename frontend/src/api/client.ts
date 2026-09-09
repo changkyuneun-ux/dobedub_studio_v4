@@ -89,6 +89,8 @@ export type WorkflowItem = {
   keyframeCount?: number;
 };
 
+export type ResolutionTier = "sd" | "hd";
+
 export type AdminUser = {
   id: string;
   name: string;
@@ -384,6 +386,7 @@ export type BatchJobResponse = {
   sourceDirName?: string | null;
   sourceZipFileName?: string | null;
   requestedFrames: number;
+  resolutionTier?: ResolutionTier;
   durationSeconds: number;
   totalImages: number;
   promptCompletedCount: number;
@@ -494,6 +497,7 @@ export type RunpodRequestItemResponse = {
   positivePrompt: string;
   negativePrompt?: string | null;
   requestedFrames: number;
+  resolutionTier?: ResolutionTier;
   status: string;
   taskId?: string | null;
   runpodJobId?: string | null;
@@ -1430,15 +1434,16 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
+  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; negativePrompt?: string; file: File }) => {
+  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; file: File }) => {
     const formData = new FormData();
     formData.set("workflowId", payload.workflowId);
     formData.set("requestedFrames", String(payload.requestedFrames || 81));
+    formData.set("resolutionTier", payload.resolutionTier || "sd");
     formData.set("negativePrompt", payload.negativePrompt || "");
     formData.set("file", payload.file);
     return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
@@ -1487,7 +1492,7 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ promptDraftId })
     }),
-  createRunpodRequestBatch: (payload: { workerId?: string; items: Array<{ promptDraftId: string; workflowId?: string; requestedFrames?: number }> }) =>
+  createRunpodRequestBatch: (payload: { workerId?: string; items: Array<{ promptDraftId: string; workflowId?: string; requestedFrames?: number; resolutionTier?: ResolutionTier }> }) =>
     requestJson<RunpodRequestBatchResponse>("/api/jobs/request-batches", {
       method: "POST",
       body: JSON.stringify(payload)
