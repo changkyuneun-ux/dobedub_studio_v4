@@ -140,7 +140,7 @@ def _prune_inactive_runtime_workflows(runtime_dir: Path, data_dir: Path, result:
         removed = False
         for path in (workflow_path, param_path):
             if path.exists() and path.is_file():
-                path.unlink()
+                path.unlink(missing_ok=True)
                 removed = True
         items.pop(workflow_id, None)
         if removed:

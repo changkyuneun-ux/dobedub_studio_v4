@@ -82,3 +82,35 @@ def test_bootstrap_does_not_reseed_pruned_inactive_workflow(tmp_path):
     assert result["pruned"] == ["inactive.json"]
     assert result["created"] == []
     assert not (runtime_dir / "inactive.json").exists()
+
+
+def test_bootstrap_prune_tolerates_concurrent_file_deletion(tmp_path, monkeypatch):
+    seed_dir = tmp_path / "seed"
+    runtime_dir = tmp_path / "runtime"
+    data_dir = tmp_path / "data"
+    seed_dir.mkdir()
+    runtime_dir.mkdir()
+    data_dir.mkdir()
+    (runtime_dir / "inactive.json").write_text('{"1":{"class_type":"LoadImage","inputs":{}}}', encoding="utf-8")
+    (runtime_dir / "inactive.paramconfig.json").write_text('{"workflow":"inactive.json"}', encoding="utf-8")
+    (data_dir / "workflow-registry.json").write_text(
+        json.dumps({"items": {"inactive.json": {"active": False, "status": "INACTIVE"}}}),
+        encoding="utf-8",
+    )
+    original_unlink = Path.unlink
+    raced = False
+
+    def racing_unlink(self, *args, **kwargs):
+        nonlocal raced
+        if self.name == "inactive.json" and not raced:
+            raced = True
+            original_unlink(self)
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", racing_unlink)
+
+    result = service.bootstrap_workflow_store(seed_dir, runtime_dir, data_dir)
+
+    assert result["pruned"] == ["inactive.json"]
+    assert not (runtime_dir / "inactive.json").exists()
+    assert not (runtime_dir / "inactive.paramconfig.json").exists()
