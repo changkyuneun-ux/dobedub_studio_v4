@@ -51,6 +51,18 @@ class AdminWorkflowIdTests(unittest.TestCase):
             {"image_1": "image-1", "image_2": "image-2", "image_3": "image-3"},
         )
 
+    def test_detects_wan_variant_image_slots(self) -> None:
+        workflow = {
+            "image-unrelated": {"class_type": "LoadImage", "inputs": {"image": "ignore.png"}},
+            "video": {
+                "class_type": "WanFunControlToVideo",
+                "inputs": {"image": ["image-1", 0]},
+            },
+            "image-1": {"class_type": "LoadImage", "inputs": {"image": "one.png"}},
+        }
+
+        self.assertEqual(find_image_slots(workflow), {"image": "image-1"})
+
     def test_applies_minimax_prompt_to_primitive_string_input(self) -> None:
         workflow = {
             "video": {

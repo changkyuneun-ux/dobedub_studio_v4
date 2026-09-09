@@ -1,6 +1,8 @@
 import pytest
 
 from backend.app.services.workflow_patch_service import (
+    apply_node_config_to_workflow,
+    apply_wan_generation_policy,
     fit_wan_size,
     wan_image_to_video_generation_snapshot,
 )
@@ -64,7 +66,7 @@ def test_wan_generation_snapshot_rejects_total_length_over_worker_limit():
         },
     }
 
-    with pytest.raises(ValueError, match="total WanImageToVideo length"):
+    with pytest.raises(ValueError, match="total Wan video length"):
         wan_image_to_video_generation_snapshot(workflow, tier="sd")
 
 
@@ -83,6 +85,7 @@ def test_wan_generation_snapshot_includes_budget_and_pixel_count():
     assert wan_image_to_video_generation_snapshot(workflow, tier="sd") == [
         {
             "nodeId": "98",
+            "classType": "WanImageToVideo",
             "width": 848,
             "height": 480,
             "length": 81,
@@ -93,6 +96,7 @@ def test_wan_generation_snapshot_includes_budget_and_pixel_count():
         },
         {
             "nodeId": "201",
+            "classType": "WanImageToVideo",
             "width": 848,
             "height": 480,
             "length": 81,
@@ -102,3 +106,96 @@ def test_wan_generation_snapshot_includes_budget_and_pixel_count():
             "pixelBudget": 409600,
         },
     ]
+
+
+def test_wan_first_last_frame_resolution_uses_pixel_budget_fit(tmp_path):
+    workflow = {
+        "81": {
+            "class_type": "WanFirstLastFrameToVideo",
+            "inputs": {"width": 640, "height": 640, "length": 161, "batch_size": 1},
+        },
+    }
+    (tmp_path / "wan-flf.paramconfig.json").write_text(
+        """
+        {
+          "segments": [{
+            "params": {
+              "width": {"default": 640, "targets": [{"node": "81", "field": "width"}]},
+              "height": {"default": 640, "targets": [{"node": "81", "field": "height"}]},
+              "frames": {"default": 81, "targets": [{"node": "81", "field": "length"}]}
+            }
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    applied = apply_node_config_to_workflow(
+        workflow,
+        "wan-flf.json",
+        [{"config": {"width": 1090, "height": 2040, "frames": 81}}],
+        tmp_path,
+    )
+
+    assert workflow["81"]["inputs"]["width"] == 464
+    assert workflow["81"]["inputs"]["height"] == 864
+    assert workflow["81"]["inputs"]["length"] == 81
+    assert {"segment": 1, "param": "width", "node": "81", "field": "width", "value": 464} in applied
+
+
+def test_wan_generation_policy_patches_first_last_frame_nodes():
+    workflow = {
+        "81": {
+            "class_type": "WanFirstLastFrameToVideo",
+            "inputs": {"width": 640, "height": 640, "length": 161, "batch_size": 4},
+        },
+    }
+
+    applied = apply_wan_generation_policy(
+        workflow,
+        [{"config": {"width": 1920, "height": 1080, "frames": 49}}],
+        resolution_tier="sd",
+    )
+
+    assert applied == [{
+        "node": "81",
+        "classType": "WanFirstLastFrameToVideo",
+        "width": 848,
+        "height": 480,
+        "length": 49,
+        "batch_size": 1,
+        "resolutionTier": "sd",
+    }]
+    assert workflow["81"]["inputs"] == {"width": 848, "height": 480, "length": 49, "batch_size": 1}
+
+
+def test_wan_generation_snapshot_rejects_non_unit_batch_size():
+    workflow = {
+        "81": {
+            "class_type": "WanFirstLastFrameToVideo",
+            "inputs": {"width": 848, "height": 480, "length": 81, "batch_size": 2},
+        },
+    }
+
+    with pytest.raises(ValueError, match="batch_size must be 1"):
+        wan_image_to_video_generation_snapshot(workflow, tier="sd")
+
+
+def test_wan_generation_snapshot_rejects_linked_or_zero_generation_values():
+    linked_dimension_workflow = {
+        "98": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": ["primitive", 0], "height": 480, "length": 81, "batch_size": 1},
+        },
+    }
+    zero_length_workflow = {
+        "98": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": 848, "height": 480, "length": 0, "batch_size": 1},
+        },
+    }
+
+    with pytest.raises(ValueError, match="width must be a literal integer"):
+        wan_image_to_video_generation_snapshot(linked_dimension_workflow, tier="sd")
+    with pytest.raises(ValueError, match="length must be positive"):
+        wan_image_to_video_generation_snapshot(zero_length_workflow, tier="sd")

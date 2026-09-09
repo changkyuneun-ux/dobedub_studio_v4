@@ -13,6 +13,12 @@ from backend.app.services.workflow_parser import PARAM_LABELS, PARAM_UI_KEYS
 I2V_INPUT_IMAGE_REQUIRED_MESSAGE = "입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다."
 MAX_GENERATION_SEED = (1 << 53) - 1
 WAN_IMAGE_TO_VIDEO_CLASS = "WanImageToVideo"
+WAN_VIDEO_NODE_CLASSES = frozenset({
+    "WanImageToVideo",
+    "WanFirstLastFrameToVideo",
+    "WanFunControlToVideo",
+    "WanVaceToVideo",
+})
 WAN_PIXEL_BUDGET = {"sd": 409_600, "hd": 921_600}
 WAN_MULTIPLE = 16
 WAN_MAX_FRAMES = 81
@@ -49,11 +55,24 @@ def pick_wan_size(img_w: int, img_h: int) -> tuple[int, int]:
 
 
 def wan_image_to_video_nodes(workflow: dict) -> list[tuple[str, dict]]:
+    return wan_video_nodes(workflow)
+
+
+def wan_video_nodes(workflow: dict) -> list[tuple[str, dict]]:
     return [
         (str(node_id), node)
         for node_id, node in workflow.items()
-        if isinstance(node, dict) and node.get("class_type") == WAN_IMAGE_TO_VIDEO_CLASS
+        if isinstance(node, dict) and node.get("class_type") in WAN_VIDEO_NODE_CLASSES
     ]
+
+
+def _literal_int(value: object, *, class_type: str, node_id: str, field: str) -> int:
+    if isinstance(value, bool) or isinstance(value, list) or value is None:
+        raise ValueError(f"{class_type} node {node_id} {field} must be a literal integer.")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{class_type} node {node_id} {field} must be a literal integer.") from exc
 
 
 def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") -> list[dict]:
@@ -61,26 +80,32 @@ def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") 
     budget = WAN_PIXEL_BUDGET[normalized_tier]
     generation: list[dict] = []
     total_length = 0
-    for node_id, node in wan_image_to_video_nodes(workflow):
+    for node_id, node in wan_video_nodes(workflow):
+        class_type = str(node.get("class_type") or "WanVideo")
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
-        width = int(inputs.get("width") or 0)
-        height = int(inputs.get("height") or 0)
-        length = int(inputs.get("length") or 0)
-        batch_size = int(inputs.get("batch_size") or inputs.get("batchSize") or 1)
+        width = _literal_int(inputs.get("width"), class_type=class_type, node_id=node_id, field="width")
+        height = _literal_int(inputs.get("height"), class_type=class_type, node_id=node_id, field="height")
+        length = _literal_int(inputs.get("length"), class_type=class_type, node_id=node_id, field="length")
+        batch_size = _literal_int(inputs.get("batch_size", inputs.get("batchSize", 1)), class_type=class_type, node_id=node_id, field="batch_size")
         pixel_count = width * height
         if width <= 0 or height <= 0:
-            raise ValueError(f"WanImageToVideo node {node_id} width/height must be positive.")
+            raise ValueError(f"{class_type} node {node_id} width/height must be positive.")
+        if length <= 0:
+            raise ValueError(f"{class_type} node {node_id} length must be positive.")
         if width % WAN_MULTIPLE or height % WAN_MULTIPLE:
-            raise ValueError(f"WanImageToVideo node {node_id} width/height must be multiples of {WAN_MULTIPLE}.")
+            raise ValueError(f"{class_type} node {node_id} width/height must be multiples of {WAN_MULTIPLE}.")
         if pixel_count > budget:
-            raise ValueError(f"WanImageToVideo node {node_id} pixel count {pixel_count} exceeds {normalized_tier} budget {budget}.")
+            raise ValueError(f"{class_type} node {node_id} pixel count {pixel_count} exceeds {normalized_tier} budget {budget}.")
         if length == 161:
-            raise ValueError(f"WanImageToVideo node {node_id} length=161 is prohibited.")
+            raise ValueError(f"{class_type} node {node_id} length=161 is prohibited.")
         if length > WAN_MAX_FRAMES:
-            raise ValueError(f"WanImageToVideo node {node_id} length must be <= {WAN_MAX_FRAMES}.")
+            raise ValueError(f"{class_type} node {node_id} length must be <= {WAN_MAX_FRAMES}.")
+        if batch_size != 1:
+            raise ValueError(f"{class_type} node {node_id} batch_size must be 1.")
         total_length += length
         generation.append({
             "nodeId": node_id,
+            "classType": class_type,
             "width": width,
             "height": height,
             "length": length,
@@ -90,7 +115,7 @@ def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") 
             "pixelBudget": budget,
         })
     if total_length > WAN_MAX_TOTAL_FRAMES:
-        raise ValueError(f"total WanImageToVideo length must be <= {WAN_MAX_TOTAL_FRAMES}.")
+        raise ValueError(f"total Wan video length must be <= {WAN_MAX_TOTAL_FRAMES}.")
     return generation
 
 
@@ -277,7 +302,7 @@ def _wan_resolution_param_value(workflow: dict, param_name: str, param_spec: dic
     if not preset:
         return None
     has_wan_target = any(
-        workflow.get(str(target.get("node")), {}).get("class_type") == WAN_IMAGE_TO_VIDEO_CLASS
+        workflow.get(str(target.get("node")), {}).get("class_type") in WAN_VIDEO_NODE_CLASSES
         for target in param_spec.get("targets") or []
     )
     if not has_wan_target:
@@ -389,7 +414,7 @@ def apply_wan_generation_policy(
     *,
     resolution_tier: str = "sd",
 ) -> list[dict]:
-    nodes = wan_image_to_video_nodes(workflow)
+    nodes = wan_video_nodes(workflow)
     if not nodes:
         return []
     normalized_tier = normalize_resolution_tier(resolution_tier)
@@ -412,6 +437,7 @@ def apply_wan_generation_policy(
         inputs["batch_size"] = 1
         applied.append({
             "node": node_id,
+            "classType": node.get("class_type"),
             "width": inputs.get("width"),
             "height": inputs.get("height"),
             "length": inputs.get("length"),

@@ -73,10 +73,11 @@ async def _lifecycle(_: FastAPI):
         settings.data_dir,
     )
     LOGGER.info(
-        "Workflow store initialized: created=%s updated=%s preserved=%s",
+        "Workflow store initialized: created=%s updated=%s preserved=%s pruned=%s",
         len(workflow_store["created"]),
         len(workflow_store["updated"]),
         len(workflow_store["preserved"]),
+        len(workflow_store.get("pruned") or []),
     )
     _ensure_database_schema()
     # Grok 지시문은 DB가 아닌 JSON 런타임 세트가 유일한 기준이다. 파일이 없을
