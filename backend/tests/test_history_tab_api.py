@@ -948,7 +948,7 @@ def test_runpod_history_bulk_rework_selected_and_query_scopes(api_client):
         session.close()
 
 
-def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
+def test_monitor_keeps_runpod_job_not_found_retryable(db_session, monkeypatch):
     from backend.app.services import studio_api_service
 
     studio_api_service.JOBS.clear()
@@ -993,16 +993,16 @@ def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
 
     result = studio_api_service.monitor_active_jobs()
 
-    assert result["failures"] == []
-    assert "task_missing_runpod_job" not in active_task_ids()
+    assert result["failures"] == ["task_missing_runpod_job"]
+    assert "task_missing_runpod_job" in active_task_ids()
 
     session = SessionLocal()
     try:
         task = session.get(WorkflowTask, "task_missing_runpod_job")
         assert task is not None
-        assert task.status == "FAILED"
-        assert task.progress == 100
-        assert "job not found" in str(task.runpod_status_json.get("error"))
+        assert task.status == "IN_PROGRESS"
+        assert task.progress == 45
+        assert task.runpod_status_json == {"status": "IN_PROGRESS"}
     finally:
         session.close()
 
