@@ -5,6 +5,7 @@
 !.env.example
 .preview
 workflows_backup*
+workflow-json-downloads/
 workflow2
 src/
 __pycache__

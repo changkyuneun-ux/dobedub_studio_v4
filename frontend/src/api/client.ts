@@ -304,6 +304,27 @@ export type UploadResponse = {
   downloadUrl: string;
 };
 
+export type S3UploadScope =
+  | { requestBatchId: string; requestItemId: string; jobId: string; promptBatchId?: string | null }
+  | { batchJobId: string; requestItemId: string; jobId: string; promptBatchId?: string | null };
+
+export type S3UploadPresignResponse = {
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  storageBackend: "s3";
+  storageKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+  expiresAt: string;
+};
+
+export type S3UploadCompleteResponse = UploadResponse & {
+  storageBackend: "s3";
+  storageKey: string;
+  publicUrl?: string | null;
+};
+
 export type GrokImagePromptDraftResponse = {
   draftId: string;
   assetId: string;
@@ -1392,6 +1413,16 @@ export const apiClient = {
     }),
   upload: (payload: { fileName: string; mimeType: string; dataUrl: string }) =>
     requestJson<UploadResponse>("/api/uploads", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  presignUpload: (payload: S3UploadScope & { fileName: string; mimeType: string }) =>
+    requestJson<S3UploadPresignResponse>("/api/uploads/presign", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  completeUpload: (payload: S3UploadScope & { assetId: string; fileName: string; mimeType: string; storageKey: string; sizeBytes: number }) =>
+    requestJson<S3UploadCompleteResponse>("/api/uploads/complete", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from threading import RLock
 
@@ -15,6 +16,7 @@ from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, R
 from backend.app.services.asset_storage import encode_file_base64, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
+from backend.app.services.storage_backends import S3AssetStorage
 from backend.app.services.task_tracking_service import (
     active_task_ids,
     assets_total,
@@ -305,9 +307,171 @@ def create_upload(payload: dict) -> dict:
         return repository.create_upload(payload)
 
 
+def s3_asset_storage() -> S3AssetStorage:
+    settings = get_settings()
+    return S3AssetStorage(
+        bucket=settings.s3_bucket,
+        prefix=settings.s3_prefix,
+        endpoint_url=settings.s3_endpoint_url,
+        force_path_style=settings.s3_force_path_style,
+    )
+
+
+def create_s3_upload_presign(payload: dict, *, created_by: str) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        raise ValueError("STORAGE_BACKEND=s3 is required for S3 upload presign")
+    file_name = safe_filename(str(payload.get("fileName") or "upload.bin"))
+    mime_type = str(payload.get("mimeType") or "application/octet-stream").strip() or "application/octet-stream"
+    asset_id = str(payload.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+    key = _s3_input_key(payload, asset_id=asset_id, file_name=file_name)
+    storage = s3_asset_storage()
+    storage_key = storage._key(key)
+    expires_in = 900
+    return {
+        "assetId": asset_id,
+        "fileName": file_name,
+        "mimeType": mime_type,
+        "storageBackend": "s3",
+        "storageKey": storage_key,
+        "uploadUrl": storage.presigned_put(key, content_type=mime_type, expires_in=expires_in),
+        "headers": {"Content-Type": mime_type},
+        "expiresAt": (utc_now() + timedelta(seconds=expires_in)).isoformat(),
+    }
+
+
+def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        raise ValueError("STORAGE_BACKEND=s3 is required for S3 upload completion")
+    asset_id = str(payload.get("assetId") or "").strip()
+    storage_key = str(payload.get("storageKey") or "").strip().lstrip("/")
+    if not asset_id or not storage_key:
+        raise ValueError("assetId and storageKey are required")
+    expected_key = s3_asset_storage()._key(_s3_input_key(payload, asset_id=asset_id, file_name=safe_filename(str(payload.get("fileName") or "upload.bin"))))
+    if storage_key != expected_key:
+        raise ValueError("storageKey does not match the request item scope")
+    stored = s3_asset_storage().stat(storage_key)
+    requested_size = payload.get("sizeBytes")
+    if requested_size is not None and int(requested_size) != stored.size_bytes:
+        raise ValueError("uploaded object size does not match sizeBytes")
+    file_name = safe_filename(str(payload.get("fileName") or stored.file_name))
+    mime_type = str(payload.get("mimeType") or stored.mime_type or "application/octet-stream")
+    metadata = _s3_scope_metadata(payload)
+    metadata["createdBy"] = created_by
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+            session.add(asset)
+        asset.asset_type = "input_image"
+        asset.file_name = file_name
+        asset.mime_type = mime_type
+        asset.size_bytes = stored.size_bytes
+        asset.storage_backend = "s3"
+        asset.storage_key = storage_key
+        asset.public_url = f"s3://{settings.s3_bucket}/{storage_key}"
+        asset.metadata_json = metadata
+        session.commit()
+        return {
+            "assetId": asset.id,
+            "type": asset.asset_type,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageBackend": asset.storage_backend,
+            "storageKey": asset.storage_key,
+            "publicUrl": asset.public_url,
+            "downloadUrl": f"/api/files/{asset.id}",
+        }
+    finally:
+        session.close()
+
+
+def s3_asset_download(asset_id: str) -> dict | None:
+    if get_settings().persistence_backend != "db":
+        return None
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            raise KeyError(asset_id)
+        if asset.storage_backend != "s3":
+            return None
+        return {
+            "assetId": asset.id,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageKey": asset.storage_key,
+            "metadata": asset.metadata_json or {},
+            "url": s3_asset_storage().presigned_url(asset.storage_key, expires_in=900),
+        }
+    finally:
+        session.close()
+
+
+def _s3_input_key(payload: dict, *, asset_id: str, file_name: str) -> str:
+    scope = _s3_scope_metadata(payload)
+    if scope.get("batchJobId"):
+        return (
+            f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/inputs/{asset_id}/{file_name}"
+        )
+    return (
+        f"request-batches/{scope['requestBatchId']}/items/{scope['requestItemId']}/"
+        f"jobs/{scope['jobId']}/inputs/{asset_id}/{file_name}"
+    )
+
+
+def _s3_scope_metadata(payload: dict) -> dict[str, str]:
+    request_batch_id = str(payload.get("requestBatchId") or "").strip()
+    batch_job_id = str(payload.get("batchJobId") or "").strip()
+    request_item_id = str(payload.get("requestItemId") or "").strip()
+    job_id = str(payload.get("jobId") or payload.get("taskId") or "").strip()
+    prompt_batch_id = str(payload.get("promptBatchId") or "").strip()
+    if not request_batch_id and not batch_job_id:
+        raise ValueError("requestBatchId or batchJobId is required for S3 upload scope")
+    if not request_item_id or not job_id:
+        raise ValueError("requestItemId and jobId are required for S3 upload scope")
+    metadata = {
+        "requestItemId": request_item_id,
+        "jobId": job_id,
+    }
+    if request_batch_id:
+        metadata["requestBatchId"] = request_batch_id
+    if batch_job_id:
+        metadata["batchJobId"] = batch_job_id
+    if prompt_batch_id:
+        metadata["promptBatchId"] = prompt_batch_id
+    return metadata
+
+
 def get_asset(asset_id: str) -> tuple[dict, Path]:
     with studio_repository() as repository:
         return repository.get_asset(asset_id)
+
+
+def asset_metadata(asset_id: str) -> dict:
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            raise KeyError(asset_id)
+        return {
+            "assetId": asset.id,
+            "type": asset.asset_type,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageBackend": asset.storage_backend,
+            "storageKey": asset.storage_key,
+            "publicUrl": asset.public_url,
+            **(asset.metadata_json or {}),
+        }
+    finally:
+        session.close()
 
 
 def register_asset(file_path: Path, asset_type: str, mime_type: str | None = None, file_name: str | None = None) -> dict:
@@ -321,8 +485,21 @@ def hydrate_input_images(item: dict) -> list[dict]:
 
 
 def asset_to_runpod_image(asset_id: str, fallback_name: str | None = None) -> dict:
+    if get_settings().storage_backend == "s3":
+        try:
+            asset = asset_metadata(asset_id)
+        except KeyError:
+            asset = {}
+        if asset.get("storageBackend") == "s3" and asset.get("storageKey"):
+            settings = get_settings()
+            return {
+                "assetId": asset_id,
+                "name": safe_filename(str(asset.get("fileName") or fallback_name or asset_id)),
+                "s3Uri": f"s3://{settings.s3_bucket}/{asset['storageKey']}",
+            }
     asset, path = get_asset(asset_id)
     return {
+        "assetId": asset_id,
         "name": safe_filename(asset.get("fileName") or fallback_name or path.name),
         "path": str(path),
     }
@@ -342,14 +519,42 @@ def build_runpod_images(payload: dict) -> list[dict]:
     return images
 
 
-def build_runpod_payload(workflow: dict, images: list[dict]) -> dict:
+def build_runpod_payload(workflow: dict, images: list[dict], job_scope: dict | None = None) -> dict:
     input_body = {"workflow": workflow}
     if images:
-        input_body["images"] = [
-            {"name": image["name"], "image": encode_file_base64(Path(image["path"]))}
-            for image in images
-        ]
+        input_body["images"] = [_runpod_image_payload(image) for image in images]
+    output_destination = _runpod_s3_output_destination(job_scope or {})
+    if output_destination:
+        input_body["output"] = output_destination
     return {"input": input_body}
+
+
+def _runpod_image_payload(image: dict) -> dict:
+    if image.get("s3Uri"):
+        return {
+            "assetId": image.get("assetId"),
+            "name": image["name"],
+            "s3Uri": image["s3Uri"],
+        }
+    return {"name": image["name"], "image": encode_file_base64(Path(image["path"]))}
+
+
+def _runpod_s3_output_destination(job_scope: dict) -> dict | None:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        return None
+    try:
+        output_prefix = _s3_job_storage_key(job_scope, "outputs")
+        manifest_key = _s3_job_storage_key(job_scope, "manifests/runpod-result.json")
+    except ValueError:
+        return None
+    return {
+        "mode": "s3",
+        "bucket": settings.s3_bucket,
+        "prefix": output_prefix,
+        "manifestKey": manifest_key,
+        "appJobId": str(job_scope.get("taskId") or job_scope.get("jobId") or "").strip(),
+    }
 
 
 def existing_save_video_outputs(workflow: dict, workflow_id: str, segments: list[dict]) -> dict:
@@ -389,7 +594,80 @@ def runpod_connection() -> dict:
 
 
 def save_runpod_outputs(result: dict, job: dict) -> dict:
+    result = _result_with_s3_manifest_outputs(result, job)
     return output_service.save_runpod_outputs(result, job, data_paths()["outputs"], register_asset)
+
+
+def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
+    if get_settings().storage_backend != "s3" or _has_inline_runpod_outputs(result):
+        return result
+    try:
+        manifest_key = _s3_job_storage_key({**(job.get("payload") or {}), "taskId": job.get("taskId")}, "manifests/runpod-result.json")
+        with s3_asset_storage().open_read(manifest_key) as stream:
+            raw = stream.read()
+    except Exception:
+        return result
+    manifest = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    output = {"videos": [], "images": [], "gifs": []}
+    for item in manifest.get("outputs") or []:
+        normalized = _manifest_output_item(item)
+        if not normalized:
+            continue
+        output[_manifest_output_kind(normalized)].append(normalized)
+    if not any(output.values()):
+        return result
+    enriched = dict(result)
+    enriched["output"] = output
+    return enriched
+
+
+def _has_inline_runpod_outputs(result: dict) -> bool:
+    output = (result or {}).get("output") or {}
+    return any(output.get(kind) for kind in ("videos", "images", "gifs"))
+
+
+def _manifest_output_item(item: dict) -> dict | None:
+    storage_key = str(item.get("key") or item.get("storageKey") or "").strip().lstrip("/")
+    if not storage_key:
+        return None
+    mime_type = str(item.get("mimeType") or item.get("contentType") or "application/octet-stream")
+    file_name = safe_filename(str(item.get("filename") or item.get("fileName") or Path(storage_key).name))
+    return {
+        "type": "s3_object",
+        "assetId": str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}"),
+        "bucket": str(item.get("bucket") or get_settings().s3_bucket),
+        "key": storage_key,
+        "filename": file_name,
+        "mimeType": mime_type,
+        "sizeBytes": int(item.get("sizeBytes") or 0),
+        "node_id": item.get("node_id") or item.get("nodeId") or item.get("node"),
+    }
+
+
+def _manifest_output_kind(item: dict) -> str:
+    mime_type = str(item.get("mimeType") or "")
+    suffix = Path(str(item.get("filename") or item.get("key") or "")).suffix.lower()
+    if mime_type.startswith("video/") or suffix in output_service.VIDEO_SUFFIXES:
+        return "videos"
+    if mime_type.startswith("image/gif") or suffix == ".gif":
+        return "gifs"
+    return "images"
+
+
+def _s3_job_storage_key(job_scope: dict, leaf: str) -> str:
+    scope = _s3_scope_metadata(job_scope)
+    if scope.get("batchJobId"):
+        suffix = (
+            f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/{leaf.strip('/')}"
+        )
+    else:
+        suffix = (
+            f"request-batches/{scope['requestBatchId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/{leaf.strip('/')}"
+        )
+    prefix = get_settings().s3_prefix.strip("/")
+    return f"{prefix}/{suffix}" if prefix else suffix
 
 
 def build_wan_node_config_snapshot(workflow_id: str, segments_payload: list[dict]) -> dict:

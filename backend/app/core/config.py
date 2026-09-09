@@ -25,6 +25,8 @@ class Settings:
     storage_backend: str = "local"
     s3_bucket: str = ""
     s3_prefix: str = "dobedub-studio"
+    s3_endpoint_url: str = ""
+    s3_force_path_style: bool = False
     # B-04: 운영 배포 문서(ecs-express-deployment-runbook.md 외 3곳)가 모두
     # RUNPOD_DRY_RUN=0(실제 실행)을 운영 환경 필수값으로 명시하므로, 코드 기본값도
     # 실제 운영 기본값에 맞춘다. 로컬 개발은 .env.example의 명시적
@@ -179,6 +181,8 @@ def get_settings() -> Settings:
         storage_backend=os.environ.get("STORAGE_BACKEND", "local"),
         s3_bucket=os.environ.get("S3_BUCKET", ""),
         s3_prefix=os.environ.get("S3_PREFIX", "dobedub-studio"),
+        s3_endpoint_url=os.environ.get("S3_ENDPOINT_URL", "").strip(),
+        s3_force_path_style=os.environ.get("S3_FORCE_PATH_STYLE", "0") in {"1", "true", "TRUE", "yes", "YES"},
         dry_run=dry_run,
         runpod_api_key=os.environ.get("RUNPOD_API_KEY", ""),
         runpod_endpoint_id=os.environ.get("RUNPOD_ENDPOINT_ID", ""),

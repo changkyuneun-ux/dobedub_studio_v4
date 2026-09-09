@@ -174,6 +174,28 @@ def save_runpod_outputs(
     total = len(output_items)
     for index, (kind, item) in enumerate(output_items, start=1):
         data = item.get("data")
+        if item.get("type") == "s3_object":
+            metadata = infer_output_metadata(item, index, total, job)
+            asset_id = str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+            file_name = safe_filename(item.get("filename") or item.get("fileName") or f"{kind}_{index}")
+            bucket = str(item.get("bucket") or "")
+            storage_key = str(item.get("key") or item.get("storageKey") or "")
+            mime_type = str(item.get("mimeType") or "application/octet-stream")
+            effective_kind = "videos" if mime_type.startswith("video/") or Path(file_name).suffix.lower() in VIDEO_SUFFIXES else kind
+            saved.append({
+                "assetId": asset_id,
+                "fileName": file_name,
+                "downloadUrl": f"/api/files/{asset_id}",
+                "kind": effective_kind,
+                "mimeType": mime_type,
+                "sizeBytes": int(item.get("sizeBytes") or 0),
+                "outputRole": metadata.get("outputRole"),
+                "segmentIndex": metadata.get("segmentIndex"),
+                "storageBackend": "s3",
+                "storageKey": storage_key,
+                "publicUrl": f"s3://{bucket}/{storage_key}" if bucket and storage_key else None,
+            })
+            continue
         if item.get("type") == "s3_url" and data:
             remote_urls.append(data)
             continue

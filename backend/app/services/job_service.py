@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ class JobRuntime:
     jobs: dict[str, dict]
     dry_run: bool
     prepare_workflow_for_job: Callable[[dict], tuple[dict, list[dict], dict]]
-    build_runpod_payload: Callable[[dict, list[dict]], dict]
+    build_runpod_payload: Callable[..., dict]
     runpod_request: Callable[[str, str, dict | None], dict]
     save_runpod_outputs: Callable[[dict, dict], dict]
     append_history: Callable[[dict], list[dict]]
@@ -46,7 +47,7 @@ def config_without_seed(config: dict | None) -> dict:
 
 def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     workflow, images, patch_summary = runtime.prepare_workflow_for_job(payload)
-    response = runtime.runpod_request("POST", "/run", runtime.build_runpod_payload(workflow, images))
+    response = runtime.runpod_request("POST", "/run", _build_runpod_payload(runtime, workflow, images, payload))
     runpod_job_id = response.get("id")
     if not runpod_job_id:
         raise RuntimeError(f"RunPod response did not include job id: {response}")
@@ -55,6 +56,13 @@ def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
         "patchSummary": patch_summary,
         "runpodSubmit": response,
     }
+
+
+def _build_runpod_payload(runtime: JobRuntime, workflow: dict, images: list[dict], payload: dict) -> dict:
+    signature = inspect.signature(runtime.build_runpod_payload)
+    if len(signature.parameters) >= 3:
+        return runtime.build_runpod_payload(workflow, images, payload)
+    return runtime.build_runpod_payload(workflow, images)
 
 
 def queue_job(runtime: JobRuntime, payload: dict) -> dict:
@@ -135,6 +143,7 @@ def dispatch_queued_job(runtime: JobRuntime, job: dict) -> dict:
         raise ValueError("Queued task payload is missing")
     if job.get("generationSeed") is not None:
         payload["generationSeed"] = job["generationSeed"]
+    payload["taskId"] = job["taskId"]
 
     runpod_data = submit_runpod_job(runtime, payload)
     execution_mode = "runpod"
@@ -175,21 +184,28 @@ def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
     job["progress"] = progress
     job["runpodStatus"] = runpod_status
 
-    if state == "COMPLETED" and not job.get("outputsSaved"):
-        saved = runtime.save_runpod_outputs(runpod_status, job)
-        job["outputAssets"] = saved["assets"]
-        job["remoteOutputUrls"] = saved["remoteUrls"]
-        final_asset = next((asset for asset in saved["assets"] if asset.get("outputRole") == "final"), None)
-        job["outputUrl"] = (
-            final_asset["downloadUrl"]
-            if final_asset
-            else saved["assets"][0]["downloadUrl"]
-            if saved["assets"]
-            else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
-        )
-        job["outputsSaved"] = True
+    if state == "COMPLETED":
+        _save_completed_outputs_if_needed(runtime, job, runpod_status)
     record_job(runtime, job)
     return runpod_status, elapsed, progress
+
+
+def _save_completed_outputs_if_needed(runtime: JobRuntime, job: dict, runpod_status: dict) -> None:
+    if job.get("outputsSaved"):
+        return
+    saved = runtime.save_runpod_outputs(runpod_status, job)
+    job["outputAssets"] = saved["assets"]
+    job["remoteOutputUrls"] = saved["remoteUrls"]
+    final_asset = next((asset for asset in saved["assets"] if asset.get("outputRole") == "final"), None)
+    job["outputUrl"] = (
+        final_asset["downloadUrl"]
+        if final_asset
+        else saved["assets"][0]["downloadUrl"]
+        if saved["assets"]
+        else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
+    )
+    job["outputsSaved"] = True
+    record_job(runtime, job)
 
 
 def is_runpod_job_not_found_error(exc: Exception) -> bool:
@@ -247,6 +263,8 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         progress = 100
         job["progress"] = progress
         runpod_status = job.get("runpodStatus") or {"status": status}
+        if status == "COMPLETED":
+            _save_completed_outputs_if_needed(runtime, job, runpod_status)
         terminal = True
     elif job.get("executionMode") == "runpod":
         runpod_status, elapsed, progress = poll_runpod_job(runtime, job)

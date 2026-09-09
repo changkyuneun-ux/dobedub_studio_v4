@@ -417,6 +417,16 @@ def test_runpod_request_queue_exposes_prompt_batch_identity_without_redundant_na
     assert "onGoTo(\"review.history\")" not in screen
 
 
+def test_api_client_exposes_s3_upload_presign_and_complete() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "type S3UploadScope" in client
+    assert "presignUpload" in client
+    assert "\"/api/uploads/presign\"" in client
+    assert "completeUpload" in client
+    assert "\"/api/uploads/complete\"" in client
+
+
 def test_runpod_request_queue_uses_fixed_ten_row_pages_and_shared_dashboard_scope() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")

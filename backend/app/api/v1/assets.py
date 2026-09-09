@@ -8,7 +8,7 @@ from typing import Callable, Iterator
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from backend.app.core.security import CurrentUser, current_user_from_asset_session, has_permission, require_permission
 from backend.app.core.observability import observe_asset_stream, request_timing
@@ -68,6 +68,26 @@ def create_upload(payload: dict, current_user: CurrentUser = Depends(require_per
     }
 
 
+@router.post("/uploads/presign", status_code=201)
+def create_s3_upload_presign(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    if not payload.get("fileName") or not payload.get("mimeType"):
+        raise HTTPException(status_code=400, detail="fileName and mimeType are required")
+    try:
+        return studio_api_service.create_s3_upload_presign(payload, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/uploads/complete", status_code=201)
+def complete_s3_upload(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    try:
+        return studio_api_service.complete_s3_upload(payload, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Uploaded object was not found.") from exc
+
+
 @router.delete("/uploads/{asset_id}")
 def delete_upload(asset_id: str, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
     session = SessionLocal()
@@ -92,6 +112,26 @@ def get_file(
 ):
     if not any(has_permission(current_user.permissions, permission) for permission in ("jobs:run", "history:read")):
         raise HTTPException(status_code=403, detail="One of permissions is required: jobs:run, history:read")
+    try:
+        with request_timing(request, "db"):
+            s3_asset = studio_api_service.s3_asset_download(asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}") from exc
+    if s3_asset is not None:
+        metadata = s3_asset.get("metadata") or {}
+        created_by = str(metadata.get("createdBy") or "")
+        if created_by and created_by != current_user.id and not has_permission(current_user.permissions, "history:read"):
+            raise HTTPException(status_code=403, detail="Asset access denied")
+        file_name = str(s3_asset.get("fileName") or asset_id).replace('"', "")
+        disposition = "attachment" if download == "1" else "inline"
+        return RedirectResponse(
+            str(s3_asset["url"]),
+            status_code=307,
+            headers={
+                "Cache-Control": "private, no-cache",
+                "Content-Disposition": _content_disposition(disposition, file_name),
+            },
+        )
     try:
         with request_timing(request, "db"):
             asset, asset_path = studio_api_service.get_asset(asset_id)
