@@ -12,6 +12,22 @@ from backend.app.services.workflow_parser import PARAM_LABELS, PARAM_UI_KEYS
 
 I2V_INPUT_IMAGE_REQUIRED_MESSAGE = "입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다."
 MAX_GENERATION_SEED = (1 << 53) - 1
+WAN_IMAGE_TO_VIDEO_CLASS = "WanImageToVideo"
+
+
+def pick_wan_size(img_w: int, img_h: int) -> tuple[int, int]:
+    width = int(img_w)
+    height = int(img_h)
+    if width <= 0 or height <= 0:
+        raise ValueError("Wan source image dimensions must be positive integers.")
+    ratio = width / height
+    if ratio > 1.3:
+        return 832, 480
+    if ratio < 0.77:
+        return 480, 832
+    return 640, 640
+
+
 def validate_i2v_input_images(payload: dict, workflow: dict, segments: list[dict]) -> None:
     """Require one uploaded asset for every image input the selected i2v workflow needs."""
     required_count = workflow_parser.keyframe_count(workflow, segments)
@@ -172,6 +188,36 @@ def ui_config_to_param_config(node_config: dict) -> dict:
     }
 
 
+def _wan_size_from_config(node_config: dict) -> tuple[int, int] | None:
+    width = node_config.get("width")
+    height = node_config.get("height")
+    if width is None or height is None:
+        return None
+    if isinstance(width, str) and not width.strip():
+        return None
+    if isinstance(height, str) and not height.strip():
+        return None
+    try:
+        return pick_wan_size(int(width), int(height))
+    except (TypeError, ValueError):
+        return None
+
+
+def _wan_resolution_param_value(workflow: dict, param_name: str, param_spec: dict, node_config: dict):
+    if param_name not in {"width", "height"}:
+        return None
+    preset = _wan_size_from_config(node_config)
+    if not preset:
+        return None
+    has_wan_target = any(
+        workflow.get(str(target.get("node")), {}).get("class_type") == WAN_IMAGE_TO_VIDEO_CLASS
+        for target in param_spec.get("targets") or []
+    )
+    if not has_wan_target:
+        return None
+    return preset[0] if param_name == "width" else preset[1]
+
+
 def validate_segment_resolution(params: dict, node_config: dict, segment_index: int) -> None:
     """Validate dimensions without replacing the Wan node's own size policy.
 
@@ -249,7 +295,9 @@ def apply_node_config_to_workflow(
         for param_name, param_spec in params.items():
             if param_name == "seed":
                 continue
-            value = node_config.get(param_name, param_spec.get("default"))
+            value = _wan_resolution_param_value(workflow, param_name, param_spec, node_config)
+            if value is None:
+                value = node_config.get(param_name, param_spec.get("default"))
             if value is None:
                 continue
             for target in param_spec.get("targets") or []:
@@ -288,7 +336,9 @@ def build_wan_node_config_snapshot(
             if param_name == "seed":
                 continue
             ui_key = PARAM_UI_KEYS.get(param_name, param_name)
-            value = ui_values.get(param_name, param_spec.get("default"))
+            value = _wan_resolution_param_value(workflow, param_name, param_spec, ui_values)
+            if value is None:
+                value = ui_values.get(param_name, param_spec.get("default"))
             param_items.append({
                 "param": param_name,
                 "uiKey": ui_key,

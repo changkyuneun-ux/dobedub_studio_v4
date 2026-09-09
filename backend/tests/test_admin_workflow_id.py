@@ -9,8 +9,10 @@ from backend.app.services.workflow_parser import (
     prompt_text,
 )
 from backend.app.services.workflow_patch_service import (
+    apply_node_config_to_workflow,
     apply_single_prompt,
     build_submission_request_snapshot,
+    pick_wan_size,
     ui_config_to_param_config,
     validate_segment_resolution,
 )
@@ -74,6 +76,70 @@ class AdminWorkflowIdTests(unittest.TestCase):
             1,
         )
 
+    def test_pick_wan_size_uses_aspect_ratio_presets(self) -> None:
+        self.assertEqual(pick_wan_size(2040, 1090), (832, 480))
+        self.assertEqual(pick_wan_size(1090, 2040), (480, 832))
+        self.assertEqual(pick_wan_size(1024, 1024), (640, 640))
+
+    def test_wan_image_to_video_resolution_uses_aspect_ratio_preset(self) -> None:
+        workflow = {
+            "98": {
+                "class_type": "WanImageToVideo",
+                "inputs": {"width": 832, "height": 480, "length": 161, "batch_size": 1},
+            },
+        }
+        param_config = {
+            "segments": [{
+                "params": {
+                    "width": {"default": 832, "targets": [{"node": "98", "field": "width"}]},
+                    "height": {"default": 480, "targets": [{"node": "98", "field": "height"}]},
+                    "frames": {"default": 81, "targets": [{"node": "98", "field": "length"}]},
+                },
+            }],
+        }
+        workflows_dir = self._write_param_config("wan-test.json", param_config)
+
+        applied = apply_node_config_to_workflow(
+            workflow,
+            "wan-test.json",
+            [{"config": {"width": 1090, "height": 2040, "frames": 81}}],
+            workflows_dir,
+        )
+
+        self.assertEqual(workflow["98"]["inputs"]["width"], 480)
+        self.assertEqual(workflow["98"]["inputs"]["height"], 832)
+        self.assertEqual(workflow["98"]["inputs"]["length"], 81)
+        self.assertIn({"segment": 1, "param": "width", "node": "98", "field": "width", "value": 480}, applied)
+        self.assertIn({"segment": 1, "param": "height", "node": "98", "field": "height", "value": 832}, applied)
+        self.assertIn({"segment": 1, "param": "frames", "node": "98", "field": "length", "value": 81}, applied)
+
+    def test_non_wan_resolution_targets_keep_exact_config_values(self) -> None:
+        workflow = {
+            "video": {
+                "class_type": "OtherVideoNode",
+                "inputs": {"width": 640, "height": 640},
+            },
+        }
+        param_config = {
+            "segments": [{
+                "params": {
+                    "width": {"default": 640, "targets": [{"node": "video", "field": "width"}]},
+                    "height": {"default": 640, "targets": [{"node": "video", "field": "height"}]},
+                },
+            }],
+        }
+        workflows_dir = self._write_param_config("other-test.json", param_config)
+
+        apply_node_config_to_workflow(
+            workflow,
+            "other-test.json",
+            [{"config": {"width": 1090, "height": 2040}}],
+            workflows_dir,
+        )
+
+        self.assertEqual(workflow["video"]["inputs"]["width"], 1090)
+        self.assertEqual(workflow["video"]["inputs"]["height"], 2040)
+
     def test_rejects_non_positive_upload_resolution(self) -> None:
         with self.assertRaisesRegex(ValueError, "height must be greater than zero"):
             validate_segment_resolution(
@@ -117,3 +183,15 @@ class AdminWorkflowIdTests(unittest.TestCase):
     def test_param_config_accepts_legacy_length_alias_for_frames(self) -> None:
         self.assertEqual(ui_config_to_param_config({"length": 81})["frames"], 81)
         self.assertEqual(ui_config_to_param_config({"frame_count": 49})["frames"], 49)
+
+    def _write_param_config(self, workflow_id: str, param_config: dict):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        workflows_dir = Path(tempfile.mkdtemp())
+        (workflows_dir / f"{Path(workflow_id).stem}.paramconfig.json").write_text(
+            json.dumps(param_config),
+            encoding="utf-8",
+        )
+        return workflows_dir
