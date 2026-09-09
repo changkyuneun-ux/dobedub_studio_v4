@@ -538,7 +538,7 @@ def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
         session.close()
 
 
-def s3_asset_download(asset_id: str) -> dict | None:
+def s3_asset_download(asset_id: str, *, include_url: bool = True) -> dict | None:
     if get_settings().persistence_backend != "db":
         return None
     session = SessionLocal()
@@ -548,15 +548,17 @@ def s3_asset_download(asset_id: str) -> dict | None:
             raise KeyError(asset_id)
         if asset.storage_backend != "s3":
             return None
-        return {
+        item = {
             "assetId": asset.id,
             "fileName": asset.file_name,
             "mimeType": asset.mime_type,
             "sizeBytes": asset.size_bytes,
             "storageKey": asset.storage_key,
             "metadata": asset.metadata_json or {},
-            "url": s3_asset_storage().presigned_url(asset.storage_key, expires_in=900),
         }
+        if include_url:
+            item["url"] = s3_asset_storage().presigned_url(asset.storage_key, expires_in=900)
+        return item
     finally:
         session.close()
 

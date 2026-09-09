@@ -114,7 +114,7 @@ def get_file(
         raise HTTPException(status_code=403, detail="One of permissions is required: jobs:run, history:read")
     try:
         with request_timing(request, "db"):
-            s3_asset = studio_api_service.s3_asset_download(asset_id)
+            s3_asset = studio_api_service.s3_asset_download(asset_id, include_url=download != "1")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}") from exc
     if s3_asset is not None:
@@ -124,6 +124,34 @@ def get_file(
             raise HTTPException(status_code=403, detail="Asset access denied")
         file_name = str(s3_asset.get("fileName") or asset_id).replace('"', "")
         disposition = "attachment" if download == "1" else "inline"
+        if download == "1":
+            storage_key = str(s3_asset.get("storageKey") or "").strip()
+            if not storage_key:
+                raise HTTPException(status_code=404, detail=f"File not found: {asset_id}")
+            try:
+                stored = studio_api_service.s3_asset_storage().stat(storage_key)
+            except (KeyError, FileNotFoundError) as exc:
+                raise HTTPException(status_code=404, detail=f"File not found: {asset_id}") from exc
+            headers = {
+                "Content-Disposition": _content_disposition(disposition, file_name),
+                "Cache-Control": "private, no-cache",
+                "Content-Length": str(stored.size_bytes),
+            }
+            if stored.etag:
+                headers["ETag"] = str(stored.etag)
+            return StreamingResponse(
+                _iter_s3_object(
+                    storage_key,
+                    on_complete=lambda duration_ms, bytes_sent: observe_asset_stream(
+                        request,
+                        duration_ms=duration_ms,
+                        bytes_sent=bytes_sent,
+                        status_code=200,
+                    ),
+                ),
+                media_type=str(s3_asset.get("mimeType") or stored.mime_type or "application/octet-stream"),
+                headers=headers,
+            )
         return RedirectResponse(
             str(s3_asset["url"]),
             status_code=307,
@@ -192,6 +220,22 @@ def get_file(
         )
 
     return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers, stat_result=stat_result)
+
+
+def _iter_s3_object(storage_key: str, *, on_complete: Callable[[float, int], None] | None = None, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    started = perf_counter()
+    bytes_sent = 0
+    try:
+        with studio_api_service.s3_asset_storage().open_read(storage_key) as stream:
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_sent += len(chunk)
+                yield chunk
+    finally:
+        if on_complete:
+            on_complete((perf_counter() - started) * 1000, bytes_sent)
 
 
 def _content_disposition(disposition: str, file_name: str) -> str:

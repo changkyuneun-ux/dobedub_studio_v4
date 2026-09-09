@@ -36,9 +36,9 @@ def test_save_runpod_outputs_registers_s3_object_without_downloading(tmp_path):
     assert calls == []
     assert saved == {
         "assets": [{
-            "assetId": "asset_output_001",
+            "assetId": "asset_task_1_001",
             "fileName": "final.mp4",
-            "downloadUrl": "/api/files/asset_output_001",
+            "downloadUrl": "/api/files/asset_task_1_001",
             "kind": "videos",
             "mimeType": "video/mp4",
             "sizeBytes": 123,
@@ -50,6 +50,54 @@ def test_save_runpod_outputs_registers_s3_object_without_downloading(tmp_path):
         }],
         "remoteUrls": [],
     }
+
+
+def test_s3_output_asset_ids_are_scoped_to_task(tmp_path):
+    def register_asset(path: Path, asset_type: str):
+        raise AssertionError("S3 object outputs must not be downloaded through ECS")
+
+    first = output_service.save_runpod_outputs(
+        {
+            "output": {
+                "videos": [{
+                    "type": "s3_object",
+                    "assetId": "asset_output_001",
+                    "bucket": "dobedub-studio",
+                    "key": "prod/request-batches/rpb_1/items/rpi_1/jobs/task_a/outputs/asset_output_001/final.mp4",
+                    "filename": "final.mp4",
+                    "mimeType": "video/mp4",
+                    "sizeBytes": 123,
+                }]
+            }
+        },
+        {"taskId": "task_a", "payload": {"requestBatchId": "rpb_1", "requestItemId": "rpi_1"}},
+        tmp_path,
+        register_asset,
+    )
+    second = output_service.save_runpod_outputs(
+        {
+            "output": {
+                "videos": [{
+                    "type": "s3_object",
+                    "assetId": "asset_output_001",
+                    "bucket": "dobedub-studio",
+                    "key": "prod/request-batches/rpb_1/items/rpi_2/jobs/task_b/outputs/asset_output_001/final.mp4",
+                    "filename": "final.mp4",
+                    "mimeType": "video/mp4",
+                    "sizeBytes": 456,
+                }]
+            }
+        },
+        {"taskId": "task_b", "payload": {"requestBatchId": "rpb_1", "requestItemId": "rpi_2"}},
+        tmp_path,
+        register_asset,
+    )
+
+    assert first["assets"][0]["assetId"] == "asset_task_a_001"
+    assert second["assets"][0]["assetId"] == "asset_task_b_001"
+    assert first["assets"][0]["assetId"] != second["assets"][0]["assetId"]
+    assert first["assets"][0]["storageKey"].endswith("/task_a/outputs/asset_output_001/final.mp4")
+    assert second["assets"][0]["storageKey"].endswith("/task_b/outputs/asset_output_001/final.mp4")
 
 
 def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_inline_output(monkeypatch):
@@ -106,7 +154,7 @@ def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_
     assert opened_keys == [
         "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/manifests/runpod-result.json"
     ]
-    assert saved["assets"][0]["assetId"] == "asset_output_001"
+    assert saved["assets"][0]["assetId"] == "asset_task_1_001"
     assert saved["assets"][0]["storageBackend"] == "s3"
     assert saved["assets"][0]["storageKey"] == (
         "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/outputs/asset_output_001/final.mp4"

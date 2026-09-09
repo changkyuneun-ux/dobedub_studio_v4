@@ -176,7 +176,7 @@ def save_runpod_outputs(
         data = item.get("data")
         if item.get("type") == "s3_object":
             metadata = infer_output_metadata(item, index, total, job)
-            asset_id = str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+            asset_id = s3_output_asset_id(item, index, job)
             file_name = safe_filename(item.get("filename") or item.get("fileName") or f"{kind}_{index}")
             bucket = str(item.get("bucket") or "")
             storage_key = str(item.get("key") or item.get("storageKey") or "")
@@ -220,3 +220,11 @@ def save_runpod_outputs(
             "segmentIndex": metadata.get("segmentIndex"),
         })
     return {"assets": saved, "remoteUrls": remote_urls}
+
+
+def s3_output_asset_id(item: dict, index: int, job: dict) -> str:
+    task_id = str(job.get("taskId") or (job.get("payload") or {}).get("taskId") or "").strip()
+    if task_id:
+        safe_task_id = re.sub(r"[^A-Za-z0-9_-]+", "_", task_id).strip("_")[:48]
+        return f"asset_{safe_task_id}_{index:03d}"
+    return str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")

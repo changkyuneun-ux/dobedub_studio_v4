@@ -255,6 +255,44 @@ def test_s3_file_access_redirects_to_presigned_get(api_client, monkeypatch):
     assert fake.presigned[-1][0] == "get_object"
 
 
+def test_s3_file_download_streams_through_api_without_redirect(api_client, monkeypatch):
+    fake = FakeS3Client()
+    _install_fake_s3(monkeypatch, fake)
+    session = SessionLocal()
+    try:
+        session.add(User(id="operator", name="operator", role="OPERATOR", permissions_json=["jobs:run", "history:read"], is_active=True))
+        session.add(Asset(
+            id="asset_s3_download",
+            asset_type="output_video",
+            file_name="final.mp4",
+            mime_type="video/mp4",
+            size_bytes=8,
+            storage_backend="s3",
+            storage_key="local/request-batches/rpb_api/items/rpi_api/jobs/task_api/outputs/asset_s3_download/final.mp4",
+            public_url="s3://dobedub-studio-local/local/request-batches/rpb_api/items/rpi_api/jobs/task_api/outputs/asset_s3_download/final.mp4",
+            metadata_json={"createdBy": "operator"},
+        ))
+        session.commit()
+    finally:
+        session.close()
+    fake.objects[("dobedub-studio-local", "local/request-batches/rpb_api/items/rpi_api/jobs/task_api/outputs/asset_s3_download/final.mp4")] = {
+        "Body": io.BytesIO(b"mp4-data"),
+        "ContentLength": 8,
+        "ContentType": "video/mp4",
+    }
+
+    response = api_client.get(
+        "/api/files/asset_s3_download?download=1",
+        headers=_headers("operator"),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"mp4-data"
+    assert response.headers["content-disposition"] == 'attachment; filename="final.mp4"'
+    assert fake.presigned == []
+
+
 def test_s3_uploaded_image_can_generate_grok_prompt(api_client, monkeypatch):
     fake = FakeS3Client()
     _install_fake_s3(monkeypatch, fake)
