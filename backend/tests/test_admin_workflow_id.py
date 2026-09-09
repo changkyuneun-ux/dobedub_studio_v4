@@ -11,6 +11,7 @@ from backend.app.services.workflow_parser import (
 from backend.app.services.workflow_patch_service import (
     apply_single_prompt,
     build_submission_request_snapshot,
+    ui_config_to_param_config,
     validate_segment_resolution,
 )
 
@@ -112,3 +113,7 @@ class AdminWorkflowIdTests(unittest.TestCase):
         self.assertEqual(snapshot["prompts"][0]["positivePrompt"], "A person turns gently, smooth movement.")
         self.assertEqual(snapshot["prompts"][0]["negativePrompt"], "low quality")
         self.assertEqual(snapshot["videoSettings"], [{"segmentIndex": 1, "length": 81, "fps": 16}])
+
+    def test_param_config_accepts_legacy_length_alias_for_frames(self) -> None:
+        self.assertEqual(ui_config_to_param_config({"length": 81})["frames"], 81)
+        self.assertEqual(ui_config_to_param_config({"frame_count": 49})["frames"], 49)

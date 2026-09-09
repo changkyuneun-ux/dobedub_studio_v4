@@ -1602,6 +1602,19 @@ export function StudioShell({
     })));
   }
 
+  function normalizeGenerationLengthConfig(config: Record<string, string | number>) {
+    return {
+      ...config,
+      frames: 81,
+      frame_count: 81,
+      length: 81,
+      duration: 5,
+      duration_seconds: 5,
+      fps: 16,
+      output_fps: 16
+    };
+  }
+
   function applyWanResolutionForKeyframe(slotIndex: number, imageWidth?: number | null, imageHeight?: number | null) {
     const width = Number(imageWidth || 0);
     const height = Number(imageHeight || 0);
@@ -1705,10 +1718,11 @@ export function StudioShell({
           ...segment,
           config: {
             ...currentConfig,
-            ...defaultConfig
+            ...normalizeGenerationLengthConfig(defaultConfig)
           }
         };
       }));
+      setGrokVideoLengthFrames(81);
       setNotice("세그먼트 설정을 워크플로우 기본값으로 초기화했습니다.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "세그먼트 기본값을 불러오지 못했습니다.");

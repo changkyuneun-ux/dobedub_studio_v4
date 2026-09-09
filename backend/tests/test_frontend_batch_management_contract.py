@@ -77,6 +77,33 @@ def test_prompt_management_can_delete_unsubmitted_uploads() -> None:
     assert "프롬프트 항목 삭제" not in prompt_mapping
 
 
+def test_prompt_management_clears_upload_context_when_workflow_changes() -> None:
+    source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+    select_workflow = source.split("function selectWorkflow(id: string)", 1)[1].split("async function refreshActivePromptGenerationBatches", 1)[0]
+
+    assert "setWorkflowId(id)" in select_workflow
+    assert "setUploads([])" in select_workflow
+    assert "setDrafts({})" in select_workflow
+    assert "setActiveBatchPage(1)" in select_workflow
+
+
+def test_prompt_management_submits_canonical_selected_workflow_id() -> None:
+    source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+    generate_all = source.split("async function generateAll()", 1)[1].split("function updateVisibleDraft", 1)[0]
+
+    assert "const targetWorkflowId = selectedWorkflow?.id || \"\";" in generate_all
+    assert "if (!targetWorkflowId || !uploads.length) return;" in generate_all
+    assert "workflowId: targetWorkflowId" in generate_all
+    assert "workflowId," not in generate_all
+
+
+def test_prompt_management_displays_exact_workflow_id_to_avoid_duplicate_label_confusion() -> None:
+    source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+    workflow_card = source.split("v3-prompt-workflow-option", 1)[1].split("v3-prompt-workflow-callout", 1)[0]
+
+    assert "<small>{workflow.id} · {workflow.keyframeCount || 1} kf" in workflow_card
+
+
 def test_prompt_history_uses_worker_names_without_worker_generation_stats() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
@@ -327,6 +354,13 @@ def test_prompt_history_removes_negative_prompt_column() -> None:
     assert "워크플로우 내장 Negative Prompt" not in prompt_history
     assert 'title={item.negativePrompt || ""}' not in prompt_history
     assert "{item.negativePrompt || \"-\"}" not in prompt_history
+
+
+def test_studio_workflow_default_reset_preserves_five_second_generation_length() -> None:
+    source = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
+    reset_block = source.split("async function resetSegmentConfigsToDefaults", 1)[1].split("function copyFirstSegmentConfig", 1)[0]
+
+    assert "normalizeGenerationLengthConfig" in reset_block
 
 
 def test_runpod_retry_status_updates_result_column_not_download_action() -> None:

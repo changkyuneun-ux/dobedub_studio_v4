@@ -161,7 +161,7 @@ def ui_config_to_param_config(node_config: dict) -> dict:
         "height": node_config.get("height"),
         "fps": node_config.get("fps"),
         "output_fps": node_config.get("outputFps", node_config.get("output_fps")),
-        "frames": node_config.get("frames"),
+        "frames": node_config.get("frames", node_config.get("frame_count", node_config.get("length"))),
         "duration_seconds": node_config.get("durationSeconds", node_config.get("duration_seconds")),
         "steps": node_config.get("steps"),
         "cfg_scale": node_config.get("cfgScale", node_config.get("cfg_scale")),

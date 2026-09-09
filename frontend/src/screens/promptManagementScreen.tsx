@@ -131,10 +131,12 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
 
   function selectWorkflow(id: string) {
     setWorkflowId(id);
+    setUploads([]);
     setDrafts({});
     setNegativePrompt("");
     setInstructionStatus(null);
     setNotice("");
+    setActiveBatchPage(1);
   }
 
   async function refreshActivePromptGenerationBatches() {
@@ -167,7 +169,8 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   }
 
   async function generateAll() {
-    if (!workflowId || !uploads.length) return;
+    const targetWorkflowId = selectedWorkflow?.id || "";
+    if (!targetWorkflowId || !uploads.length) return;
     if (!instructionStatus?.configured) {
       setNotice("선택한 워크플로우에 활성 프롬프트 지시문이 없습니다. 관리자 > 프롬프트 생성 지시 관리에서 먼저 지시문을 설정하세요.");
       return;
@@ -176,7 +179,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     setNotice("");
     try {
       const next = await apiClient.createImagePromptBatch({
-        workflowId,
+        workflowId: targetWorkflowId,
         items: uploads.map((upload, index) => ({
           assetId: upload.assetId,
           slotIndex: index + 1,
@@ -246,7 +249,7 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
     <AppShell user={user} area="generate" activeItem="promptManagement" onNavigate={(key) => shellNavigate(key, onGoTo)} headerEyebrow="GENERATE · PROMPT MANAGEMENT" headerTitle="Grok 프롬프트 생성" headerActions={<span className="v3-status-chip is-ok">{generating ? "GROK GENERATING" : "GROK CONFIGURED"}</span>}>
       <section className="v3-card v3-prompt-workflow-card">
         <div className="v3-card-header"><div className="v3-card-header-title">Prompt Workflow</div><span className="v3-muted-text">프롬프트 생성 전에 워크플로우 지시문을 선택합니다.</span></div>
-        <div className="v3-prompt-workflow-list">{workflows.map((workflow) => <button key={workflow.id} type="button" className={`v3-prompt-workflow-option ${workflow.id === workflowId ? "is-selected" : ""}`} onClick={() => selectWorkflow(workflow.id)}><b>{workflowName(workflow)}</b><small>{workflow.keyframeCount || 1} kf · {workflow.id === workflowId ? "SELECTED" : "ACTIVE"}</small></button>)}</div>
+        <div className="v3-prompt-workflow-list">{workflows.map((workflow) => <button key={workflow.id} type="button" className={`v3-prompt-workflow-option ${workflow.id === workflowId ? "is-selected" : ""}`} onClick={() => selectWorkflow(workflow.id)}><b>{workflowName(workflow)}</b><small>{workflow.id} · {workflow.keyframeCount || 1} kf · {workflow.id === workflowId ? "SELECTED" : "ACTIVE"}</small></button>)}</div>
         <p className={`v3-prompt-workflow-callout${!selectedWorkflow || (instructionStatus && !instructionStatus.configured) ? " is-error" : ""}`}>{selectedWorkflow ? instructionStatus?.configured ? `${workflowName(selectedWorkflow)}의 활성 프롬프트 지시문 ${instructionStatus.count}개를 사용해 업로드 이미지별 Positive Prompt를 생성합니다.` : `${workflowName(selectedWorkflow)}에 활성 프롬프트 지시문이 없습니다. 관리자 > 프롬프트 생성 지시 관리에서 새 지시문을 생성하거나 다른 워크플로우의 문서를 복사하세요.` : "워크플로우를 선택하세요. 연결된 지시문이 없으면 프롬프트 생성 요청을 시작할 수 없습니다."}</p>
       </section>
 

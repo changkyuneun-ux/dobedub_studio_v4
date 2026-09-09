@@ -16,6 +16,15 @@ class FakeS3Client:
         self.objects: dict[tuple[str, str], dict] = {}
         self.presigned: list[tuple[str, dict, int]] = []
 
+    def put_object(self, **kwargs):
+        self.objects[(kwargs["Bucket"], kwargs["Key"])] = {
+            "Body": kwargs["Body"],
+            "ContentLength": len(kwargs["Body"]),
+            "ContentType": kwargs.get("ContentType"),
+            "ETag": '"fake-put-etag"',
+        }
+        return {"ETag": '"fake-put-etag"'}
+
     def head_object(self, **kwargs):
         stored = self.objects[(kwargs["Bucket"], kwargs["Key"])]
         return {
@@ -164,6 +173,48 @@ def test_s3_upload_presign_and_complete_api(api_client, monkeypatch):
     completed = complete_response.json()
     assert completed["assetId"] == presign["assetId"]
     assert completed["storageBackend"] == "s3"
+
+
+def test_legacy_upload_api_stores_input_image_in_s3(api_client, monkeypatch):
+    fake = FakeS3Client()
+    _install_fake_s3(monkeypatch, fake)
+    session = SessionLocal()
+    try:
+        session.add(User(id="operator", name="operator", role="OPERATOR", permissions_json=["jobs:run"], is_active=True))
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.post(
+        "/api/uploads",
+        headers=_headers("operator"),
+        json={
+            "fileName": "scene.png",
+            "mimeType": "image/png",
+            "dataUrl": (
+                "data:image/png;base64,"
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            ),
+        },
+    )
+
+    assert response.status_code == 201
+    uploaded = response.json()
+    expected_key = f"local/uploads/{uploaded['assetId']}/scene.png"
+    assert ("dobedub-studio-local", expected_key) in fake.objects
+    assert fake.objects[("dobedub-studio-local", expected_key)]["ContentType"] == "image/png"
+
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, uploaded["assetId"])
+        assert asset is not None
+        assert asset.asset_type == "input_image"
+        assert asset.storage_backend == "s3"
+        assert asset.storage_key == expected_key
+        assert asset.public_url == f"s3://dobedub-studio-local/{expected_key}"
+        assert asset.metadata_json["createdBy"] == "operator"
+    finally:
+        session.close()
 
 
 def test_s3_file_access_redirects_to_presigned_get(api_client, monkeypatch):

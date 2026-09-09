@@ -13,7 +13,7 @@ from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, time
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
 from backend.app.services import job_service, output_service, workflow_patch_service, workflow_service
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
-from backend.app.services.asset_storage import encode_file_base64, safe_filename
+from backend.app.services.asset_storage import decode_data_url, encode_file_base64, image_dimensions, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
 from backend.app.services.storage_backends import S3AssetStorage
@@ -303,8 +303,74 @@ def prompt_options() -> dict:
 
 
 def create_upload(payload: dict) -> dict:
+    settings = get_settings()
+    if settings.storage_backend == "s3" and settings.persistence_backend == "db":
+        return _create_s3_upload_from_data_url(payload)
     with studio_repository() as repository:
         return repository.create_upload(payload)
+
+
+def _create_s3_upload_from_data_url(payload: dict) -> dict:
+    settings = get_settings()
+    file_name = safe_filename(str(payload.get("fileName") or "upload.bin"))
+    raw, decoded_mime_type = decode_data_url(payload.get("dataUrl", ""))
+    if len(raw) == 0:
+        raise ValueError("uploaded file is empty")
+    mime_type = str(payload.get("mimeType") or decoded_mime_type or "application/octet-stream").strip() or "application/octet-stream"
+    asset_id = f"asset_{uuid.uuid4().hex[:12]}"
+    stored = s3_asset_storage().save_bytes(
+        f"uploads/{asset_id}/{file_name}",
+        raw,
+        file_name=file_name,
+        mime_type=mime_type,
+    )
+    image_width, image_height = image_dimensions(raw, mime_type)
+    metadata = {
+        "createdBy": payload.get("createdBy") or None,
+        "downloadUrl": f"/api/files/{asset_id}",
+        **timestamp_fields(
+            "createdAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="s3-upload",
+        ),
+    }
+    if image_width and image_height:
+        metadata["imageWidth"] = image_width
+        metadata["imageHeight"] = image_height
+
+    session = SessionLocal()
+    try:
+        asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+        asset.asset_type = "input_image"
+        asset.file_name = file_name
+        asset.mime_type = stored.mime_type
+        asset.size_bytes = stored.size_bytes
+        asset.storage_backend = "s3"
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = metadata
+        session.add(asset)
+        session.commit()
+    finally:
+        session.close()
+
+    item = {
+        "assetId": asset_id,
+        "type": "input_image",
+        "fileName": file_name,
+        "mimeType": stored.mime_type,
+        "sizeBytes": stored.size_bytes,
+        "storageBackend": "s3",
+        "storageKey": stored.storage_key,
+        "publicUrl": stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}",
+        "downloadUrl": f"/api/files/{asset_id}",
+    }
+    if image_width and image_height:
+        item["imageWidth"] = image_width
+        item["imageHeight"] = image_height
+    return item
 
 
 def s3_asset_storage() -> S3AssetStorage:
