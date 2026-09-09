@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from datetime import timedelta
 from pathlib import Path
 
@@ -68,6 +69,53 @@ def test_batch_persists_items_and_grok_attempt_metadata(db_session, monkeypatch,
     assert result["items"][0]["grokResponse"]["inputTokens"] == 12
     assert result["items"][1]["positivePrompt"] is None
     assert db_session.query(PromptGenerationAttempt).count() == 2
+
+
+def test_batch_grok_generation_reads_s3_input_asset_bytes(db_session, monkeypatch):
+    db_session.add(Asset(
+        id="asset_s3_batch_prompt",
+        asset_type="input_image",
+        file_name="scene.png",
+        mime_type="image/png",
+        size_bytes=8,
+        image_width=900,
+        image_height=1200,
+        storage_backend="s3",
+        storage_key="local/uploads/asset_s3_batch_prompt/scene.png",
+        metadata_json={},
+    ))
+    db_session.commit()
+    monkeypatch.setattr(service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    calls = []
+
+    class FakeS3Storage:
+        def open_read(self, storage_key):
+            assert storage_key == "local/uploads/asset_s3_batch_prompt/scene.png"
+            return io.BytesIO(b"png-data")
+
+    def fake_generate(*_args, **kwargs):
+        calls.append(kwargs)
+        return GrokImagePromptResult(
+            "A character moves gently, locked camera, smooth movement.",
+            "static_character",
+            [],
+            {"usage": {"input_tokens": 12, "output_tokens": 8}},
+        )
+
+    monkeypatch.setattr(service.studio_api_service, "s3_asset_storage", lambda: FakeS3Storage())
+    monkeypatch.setattr(service, "generate_image_prompt", fake_generate)
+    batch = service.create_prompt_generation_batch(
+        db_session,
+        {"workflowId": "1-images.json", "items": [{"assetId": "asset_s3_batch_prompt", "slotIndex": 1}]},
+        created_by="dobedub",
+    )
+
+    result = service.process_prompt_generation_batch(db_session, batch["id"])
+
+    assert result["status"] == service.BATCH_COMPLETED
+    assert result["completedCount"] == 1
+    assert calls[0]["asset_bytes"] == b"png-data"
+    assert calls[0]["file_name"] == "scene.png"
 
 
 def test_batch_stops_grok_calls_after_provider_auth_failure(db_session, monkeypatch, tmp_path):

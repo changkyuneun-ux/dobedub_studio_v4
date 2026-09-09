@@ -263,6 +263,36 @@ def test_create_zip_batch_job_preserves_source_relative_paths_on_drafts(db_sessi
     assert {draft.raw_json["sourceZipFileName"] for draft in drafts} == {"홍길동.zip"}
 
 
+def test_create_zip_batch_job_preserves_import_item_scope_on_drafts(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+
+    result = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceDirName": "홍길동",
+            "sourceZipFileName": "홍길동.zip",
+            "requestedFrames": 81,
+            "items": [
+                {"assetId": "asset_1", "fileName": "a.jpg", "relativePath": "홍길동/a.jpg", "requestItemId": "item_0001"},
+                {"assetId": "asset_2", "fileName": "b.jpg", "relativePath": "홍길동/b.jpg", "requestItemId": "item_0002"},
+            ],
+        },
+        created_by=user.id,
+    )
+
+    drafts = db_session.scalars(
+        select(ImagePromptDraft)
+        .where(ImagePromptDraft.batch_job_id == result["id"])
+        .order_by(ImagePromptDraft.slot_index.asc())
+    ).all()
+
+    assert [draft.raw_json["requestItemId"] for draft in drafts] == ["item_0001", "item_0002"]
+
+
 def test_create_zip_batch_job_records_custom_negative_prompt_on_drafts(db_session, monkeypatch):
     user = User(id="operator_1", name="장균은", role="OPERATOR")
     db_session.add(user)
@@ -664,7 +694,7 @@ def _drafts_of(db_session, batch_job_id: str) -> list[ImagePromptDraft]:
     ).all())
 
 
-def test_promote_ready_drafts_creates_task_history_without_runpod_request_items(db_session, monkeypatch):
+def test_promote_ready_drafts_creates_task_history_with_batch_item_scope_without_request_batches(db_session, monkeypatch):
     created = _batch_with_ready_drafts(db_session, monkeypatch, count=2)
     for draft in _drafts_of(db_session, created["id"]):
         draft.status = "READY"
@@ -684,7 +714,7 @@ def test_promote_ready_drafts_creates_task_history_without_runpod_request_items(
     assert {task.config_json.get("frames") for task in tasks} == {81}
     assert {task.status for task in tasks} == {"PENDING_SUBMIT"}
     assert {task.request_batch_id for task in tasks} == {None}
-    assert {task.request_item_id for task in tasks} == {None}
+    assert [task.request_item_id for task in tasks] == ["item_0001", "item_0002"]
     assert db_session.scalars(select(RunpodRequestBatch)).all() == []
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
@@ -714,7 +744,7 @@ def test_promote_later_ready_drafts_adds_task_history_rows_without_request_batch
         assert len(tasks) == index
         assert [task.prompt_draft_id for task in tasks] == [ready.id for ready in drafts[:index]]
         assert {task.request_batch_id for task in tasks} == {None}
-        assert {task.request_item_id for task in tasks} == {None}
+        assert [task.request_item_id for task in tasks] == [f"item_{item_index:04d}" for item_index in range(1, index + 1)]
         assert db_session.scalars(select(RunpodRequestBatch)).all() == []
         assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
@@ -808,7 +838,7 @@ def test_promote_stamps_batch_job_id_on_created_tasks(db_session, monkeypatch):
     assert len(tasks) == 1
     assert tasks[0].batch_job_id == created["id"]
     assert tasks[0].request_batch_id is None
-    assert tasks[0].request_item_id is None
+    assert tasks[0].request_item_id == "item_0001"
 
 
 def test_promote_is_idempotent(db_session, monkeypatch):

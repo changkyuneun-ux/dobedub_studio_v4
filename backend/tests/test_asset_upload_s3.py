@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from datetime import datetime
 
 import pytest
@@ -8,6 +9,7 @@ from backend.app.core.security import create_access_token
 from backend.app.db.models import Asset, User
 from backend.app.db.session import SessionLocal
 from backend.app.services import studio_api_service
+from backend.app.services.grok_image_prompt_service import GrokImagePromptResult
 from backend.app.services.storage_backends import S3AssetStorage
 
 
@@ -33,6 +35,10 @@ class FakeS3Client:
             "ETag": stored.get("ETag", '"etag"'),
             "LastModified": stored.get("LastModified", datetime(2026, 9, 9)),
         }
+
+    def get_object(self, **kwargs):
+        stored = self.objects[(kwargs["Bucket"], kwargs["Key"])]
+        return {"Body": stored["Body"]}
 
     def generate_presigned_url(self, operation, Params, ExpiresIn):
         self.presigned.append((operation, Params, ExpiresIn))
@@ -247,3 +253,59 @@ def test_s3_file_access_redirects_to_presigned_get(api_client, monkeypatch):
     assert response.status_code == 307
     assert response.headers["location"].startswith("https://example.test/dobedub-studio-local/local/request-batches/")
     assert fake.presigned[-1][0] == "get_object"
+
+
+def test_s3_uploaded_image_can_generate_grok_prompt(api_client, monkeypatch):
+    fake = FakeS3Client()
+    _install_fake_s3(monkeypatch, fake)
+    monkeypatch.setenv("GROK_ENABLED", "1")
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "backend.app.api.v1.prompts.active_instruction_text",
+        lambda _workflow_id: ("workflow instruction", "wf@1"),
+    )
+    calls = []
+
+    def fake_generate(_settings, **kwargs):
+        calls.append(kwargs)
+        return GrokImagePromptResult(
+            "A character gently shifts posture, locked camera, smooth movement.",
+            "static_character",
+            [],
+            {"output_text": "{}"},
+        )
+
+    monkeypatch.setattr("backend.app.api.v1.prompts.generate_image_prompt", fake_generate)
+    session = SessionLocal()
+    try:
+        session.add(User(id="operator", name="operator", role="OPERATOR", permissions_json=["jobs:run", "prompts:build"], is_active=True))
+        session.add(Asset(
+            id="asset_grok_s3",
+            asset_type="input_image",
+            file_name="scene.png",
+            mime_type="image/png",
+            size_bytes=5,
+            storage_backend="s3",
+            storage_key="local/uploads/asset_grok_s3/scene.png",
+            public_url="s3://dobedub-studio-local/local/uploads/asset_grok_s3/scene.png",
+            metadata_json={"createdBy": "operator"},
+        ))
+        session.commit()
+    finally:
+        session.close()
+    fake.objects[("dobedub-studio-local", "local/uploads/asset_grok_s3/scene.png")] = {
+        "Body": io.BytesIO(b"png-data"),
+        "ContentLength": 8,
+        "ContentType": "image/png",
+    }
+
+    response = api_client.post(
+        "/api/prompts/image-drafts/generate",
+        headers=_headers("operator"),
+        json={"assetId": "asset_grok_s3", "workflowId": "1-images.json", "slotIndex": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "READY"
+    assert calls[0]["asset_bytes"] == b"png-data"
+    assert calls[0]["file_name"] == "scene.png"

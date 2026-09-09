@@ -253,6 +253,7 @@ def _link_prompt_batch(
                     "slotIndex": index,
                     "requestedFrames": requested_frames,
                     "negativePrompt": negative_prompt,
+                    "requestItemId": str(item.get("requestItemId") or f"item_{index:04d}").strip(),
                 }
                 | {
                     key: value

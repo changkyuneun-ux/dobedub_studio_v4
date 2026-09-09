@@ -80,7 +80,8 @@ class GrokImagePromptResult:
 def generate_image_prompt(
     settings: Settings,
     *,
-    asset_path: Path,
+    asset_path: Path | None = None,
+    asset_bytes: bytes | None = None,
     mime_type: str,
     file_name: str,
     image_width: int | None = None,
@@ -91,10 +92,13 @@ def generate_image_prompt(
         raise GrokPromptError("Grok image prompt generation is disabled. Set GROK_ENABLED=1.")
     if not settings.grok_api_key or settings.grok_api_key.startswith("your_"):
         raise GrokPromptError("GROK_API_KEY is not configured.")
-    if not asset_path.exists() or not asset_path.is_file():
-        raise GrokPromptError("Uploaded image file is not available for Grok analysis.")
 
-    raw = asset_path.read_bytes()
+    if asset_bytes is None:
+        if asset_path is None or not asset_path.exists() or not asset_path.is_file():
+            raise GrokPromptError("Uploaded image file is not available for Grok analysis.")
+        raw = asset_path.read_bytes()
+    else:
+        raw = asset_bytes
     if len(raw) > settings.grok_max_image_bytes:
         raise GrokPromptError(
             f"Image is too large for Grok prompt generation ({len(raw)} bytes; limit {settings.grok_max_image_bytes} bytes)."

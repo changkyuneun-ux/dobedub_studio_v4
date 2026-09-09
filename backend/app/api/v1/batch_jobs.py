@@ -57,6 +57,8 @@ async def create_batch_job_from_zip(
         imported = batch_zip_import_service.import_zip_bytes(
             await file.read(),
             zip_file_name=file.filename or "upload.zip",
+            batch_job_id=batch_id,
+            created_by=current_user.id,
         )
         return batch_job_service.create_batch_job(
             db,

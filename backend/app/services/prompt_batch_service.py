@@ -93,6 +93,7 @@ def create_prompt_generation_batch(
             for key, value in {
                 "sourceRelativePath": str(source.get("sourceRelativePath") or "").strip(),
                 "sourceZipFileName": str(source.get("sourceZipFileName") or "").strip(),
+                "requestItemId": str(source.get("requestItemId") or "").strip(),
             }.items()
             if value
         }
@@ -551,12 +552,12 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
     try:
         source_metadata = _draft_source_metadata(draft)
         instruction_text, _ = active_instruction_text(draft.workflow_id)
-        asset, asset_path = studio_api_service.get_asset(draft.asset_id)
+        asset, asset_bytes = studio_api_service.read_asset_bytes(draft.asset_id)
         result = generate_image_prompt(
             get_settings(),
-            asset_path=asset_path,
+            asset_bytes=asset_bytes,
             mime_type=str(asset.get("mimeType") or ""),
-            file_name=str(asset.get("fileName") or asset_path.name),
+            file_name=str(asset.get("fileName") or draft.asset_id),
             image_width=asset.get("imageWidth"),
             image_height=asset.get("imageHeight"),
             instruction_text=instruction_text,

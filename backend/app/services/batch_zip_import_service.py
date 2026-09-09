@@ -32,6 +32,8 @@ def import_zip_bytes(
     *,
     zip_file_name: str,
     work_dir: Path | None = None,
+    batch_job_id: str | None = None,
+    created_by: str | None = None,
 ) -> BatchZipImportResult:
     """Validate, persist extracted images, and register them as input assets."""
     if not zip_file_name.lower().endswith(".zip"):
@@ -60,23 +62,43 @@ def import_zip_bytes(
 
             source_dir_name = _source_dir_name([path for _member, path in members], zip_file_name)
             items: list[dict[str, str]] = []
-            for member, safe_path in members:
+            for index, (member, safe_path) in enumerate(members, start=1):
                 target = import_dir / "images" / Path(*safe_path.parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as destination:
-                    destination.write(source.read())
+                    image_bytes = source.read()
+                    destination.write(image_bytes)
                 file_name = safe_path.name
-                asset = studio_api_service.register_asset(
-                    target,
-                    "input_image",
-                    mimetypes.guess_type(file_name)[0] or "application/octet-stream",
-                    file_name,
-                )
-                items.append({
+                mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+                request_item_id = f"item_{index:04d}"
+                if batch_job_id and _s3_batch_inputs_enabled():
+                    asset = studio_api_service.create_s3_input_asset_from_bytes(
+                        raw=image_bytes,
+                        file_name=file_name,
+                        mime_type=mime_type,
+                        batch_job_id=batch_job_id,
+                        request_item_id=request_item_id,
+                        created_by=created_by,
+                        metadata={
+                            "sourceRelativePath": safe_path.as_posix(),
+                            "sourceZipFileName": normalize_zip_path(Path(zip_file_name).name),
+                        },
+                    )
+                else:
+                    asset = studio_api_service.register_asset(
+                        target,
+                        "input_image",
+                        mime_type,
+                        file_name,
+                    )
+                item = {
                     "assetId": str(asset["assetId"]),
                     "fileName": file_name,
                     "relativePath": safe_path.as_posix(),
-                })
+                }
+                if batch_job_id:
+                    item["requestItemId"] = request_item_id
+                items.append(item)
     except zipfile.BadZipFile as exc:
         raise ValueError("올바른 ZIP 파일이 아닙니다.") from exc
     finally:
@@ -129,6 +151,11 @@ def _source_dir_name(paths: list[PurePosixPath], zip_file_name: str) -> str:
     if len(top_levels) == 1 and all(len(path.parts) > 1 for path in paths):
         return next(iter(top_levels))
     return Path(Path(zip_file_name).name).stem or "upload"
+
+
+def _s3_batch_inputs_enabled() -> bool:
+    settings = studio_api_service.get_settings()
+    return settings.storage_backend == "s3" and settings.persistence_backend == "db"
 
 
 __all__ = [

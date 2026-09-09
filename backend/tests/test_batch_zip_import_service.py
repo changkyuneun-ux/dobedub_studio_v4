@@ -6,6 +6,10 @@ import zipfile
 
 import pytest
 
+from backend.app.db.models import Asset
+from backend.app.db.session import SessionLocal
+from backend.app.services.storage_backends import S3AssetStorage
+
 
 PNG_1X1 = (
     b"\x89PNG\r\n\x1a\n"
@@ -107,6 +111,57 @@ def test_zip_import_recovers_macos_korean_paths_without_utf8_flag(monkeypatch, t
             "relativePath": "2권 08-10화-테스트/2권 08화/0001.jpg",
         }
     ]
+
+
+def test_zip_import_stores_batch_inputs_in_s3_when_storage_backend_is_s3(db_session, monkeypatch, tmp_path):
+    from backend.app.services import batch_zip_import_service, studio_api_service
+
+    class FakeS3Client:
+        def __init__(self):
+            self.objects: dict[tuple[str, str], dict] = {}
+
+        def put_object(self, **kwargs):
+            self.objects[(kwargs["Bucket"], kwargs["Key"])] = {
+                "Body": kwargs["Body"],
+                "ContentLength": len(kwargs["Body"]),
+                "ContentType": kwargs.get("ContentType"),
+            }
+            return {"ETag": '"fake"'}
+
+    fake = FakeS3Client()
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("PERSISTENCE_BACKEND", "db")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio-local")
+    monkeypatch.setenv("S3_PREFIX", "local")
+    monkeypatch.setattr(
+        studio_api_service,
+        "s3_asset_storage",
+        lambda: S3AssetStorage(bucket="dobedub-studio-local", prefix="local", client=fake),
+    )
+
+    result = batch_zip_import_service.import_zip_bytes(
+        _zip_bytes({"shoot/0001.png": PNG_1X1, "shoot/0002.png": PNG_1X1}),
+        zip_file_name="shoot.zip",
+        work_dir=tmp_path,
+        batch_job_id="operator_shoot_260909",
+    )
+
+    assert [item["requestItemId"] for item in result.items] == ["item_0001", "item_0002"]
+    first_key = f"local/batches/operator_shoot_260909/items/item_0001/inputs/{result.items[0]['assetId']}/0001.png"
+    second_key = f"local/batches/operator_shoot_260909/items/item_0002/inputs/{result.items[1]['assetId']}/0002.png"
+    assert ("dobedub-studio-local", first_key) in fake.objects
+    assert ("dobedub-studio-local", second_key) in fake.objects
+
+    session = SessionLocal()
+    try:
+        first_asset = session.get(Asset, result.items[0]["assetId"])
+        assert first_asset is not None
+        assert first_asset.storage_backend == "s3"
+        assert first_asset.storage_key == first_key
+        assert first_asset.metadata_json["batchJobId"] == "operator_shoot_260909"
+        assert first_asset.metadata_json["requestItemId"] == "item_0001"
+    finally:
+        session.close()
 
 
 @pytest.mark.parametrize("entry_name", ["../evil.jpg", "/absolute/evil.jpg", "safe/../../evil.jpg"])

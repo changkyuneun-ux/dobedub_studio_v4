@@ -1,9 +1,10 @@
 """Stream completed batch outputs as a source-shaped ZIP archive."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Iterator
+from typing import BinaryIO, Iterator
 import zipfile
 from urllib.parse import quote
 
@@ -95,7 +96,7 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
     if batch is None:
         raise ValueError("배치 작업을 찾을 수 없습니다.")
     query = (
-        select(WorkflowTask.id, TaskOutputAsset.asset_id, Asset.file_name)
+        select(WorkflowTask.id, TaskOutputAsset.asset_id, Asset.file_name, Asset.storage_backend, Asset.storage_key)
         .join(TaskOutputAsset, TaskOutputAsset.task_id == WorkflowTask.id)
         .join(Asset, Asset.id == TaskOutputAsset.asset_id)
         .where(
@@ -111,7 +112,7 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
     source_names = _source_file_names(db, batch_job_id)
     used: set[str] = set()
     collected: list[dict] = []
-    for task_id, asset_id, output_file_name in db.execute(query).all():
+    for task_id, asset_id, output_file_name, storage_backend, storage_key in db.execute(query).all():
         source = source_names.get(str(task_id)) or {}
         source_file_name = str(source.get("fileName") or output_file_name or task_id)
         source_relative_path = str(source.get("relativePath") or "")
@@ -126,7 +127,12 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
         else:
             entry = zip_entry_name(source_file_name, used)
         used.add(entry)
-        collected.append({"assetId": str(asset_id), "entryName": entry})
+        collected.append({
+            "assetId": str(asset_id),
+            "entryName": entry,
+            "storageBackend": str(storage_backend or "local"),
+            "storageKey": str(storage_key or ""),
+        })
     return collected
 
 
@@ -160,18 +166,28 @@ def stream_batch_zip(batch_job_id: str, *, task_ids: list[str] | None) -> tuple[
     finally:
         db.close()
 
-    resolved: list[tuple[str, Path]] = []
+    resolved: list[dict] = []
     skipped = 0
     for entry in entries:
-        try:
-            _, path = studio_api_service.get_asset(entry["assetId"])
-        except (KeyError, FileNotFoundError):
-            skipped += 1
-            continue
-        if not path.exists():
-            skipped += 1
-            continue
-        resolved.append((entry["entryName"], path))
+        if entry.get("storageBackend") == "s3":
+            storage_key = str(entry.get("storageKey") or "")
+            if not storage_key:
+                skipped += 1
+                continue
+            if not _s3_asset_exists(studio_api_service.s3_asset_storage(), storage_key):
+                skipped += 1
+                continue
+            resolved.append(entry)
+        else:
+            try:
+                _, path = studio_api_service.get_asset(entry["assetId"])
+            except (KeyError, FileNotFoundError):
+                skipped += 1
+                continue
+            if not path.exists():
+                skipped += 1
+                continue
+            resolved.append({**entry, "path": path})
 
     if not resolved:
         raise ValueError("내려받을 완료 영상이 없습니다.")
@@ -179,8 +195,8 @@ def stream_batch_zip(batch_job_id: str, *, task_ids: list[str] | None) -> tuple[
     def generate() -> Iterator[bytes]:
         buffer = _StreamBuffer()
         with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_STORED) as archive:
-            for entry_name, path in resolved:
-                with archive.open(entry_name, mode="w") as target, path.open("rb") as source:
+            for entry in resolved:
+                with archive.open(entry["entryName"], mode="w") as target, _open_asset_stream(entry) as source:
                     while True:
                         chunk = source.read(CHUNK_SIZE)
                         if not chunk:
@@ -191,6 +207,43 @@ def stream_batch_zip(batch_job_id: str, *, task_ids: list[str] | None) -> tuple[
         yield from buffer.drain()
 
     return generate(), skipped
+
+
+@contextmanager
+def _open_asset_stream(entry: dict) -> Iterator[BinaryIO]:
+    if entry.get("storageBackend") == "s3":
+        from backend.app.services import studio_api_service
+
+        with studio_api_service.s3_asset_storage().open_read(str(entry.get("storageKey") or "")) as source:
+            yield source
+        return
+
+    path = Path(entry["path"])
+    with path.open("rb") as source:
+        yield source
+
+
+def _s3_asset_exists(storage, storage_key: str) -> bool:
+    try:
+        storage.stat(storage_key)
+        return True
+    except (FileNotFoundError, KeyError):
+        return False
+    except Exception as exc:
+        if _is_s3_not_found_error(exc):
+            return False
+        raise
+
+
+def _is_s3_not_found_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return False
+    code = str(error.get("Code") or "")
+    return code in {"404", "NoSuchKey", "NotFound"}
 
 
 class _StreamBuffer:

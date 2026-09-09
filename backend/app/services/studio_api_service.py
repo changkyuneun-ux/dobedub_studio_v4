@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -373,6 +375,87 @@ def _create_s3_upload_from_data_url(payload: dict) -> dict:
     return item
 
 
+def create_s3_input_asset_from_bytes(
+    *,
+    raw: bytes,
+    file_name: str,
+    mime_type: str,
+    batch_job_id: str,
+    request_item_id: str,
+    created_by: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3" or settings.persistence_backend != "db":
+        raise ValueError("STORAGE_BACKEND=s3 and PERSISTENCE_BACKEND=db are required for S3 input assets")
+    safe_name = safe_filename(file_name)
+    normalized_batch_id = str(batch_job_id or "").strip()
+    normalized_item_id = str(request_item_id or "").strip()
+    if not normalized_batch_id or not normalized_item_id:
+        raise ValueError("batchJobId and requestItemId are required for S3 input assets")
+    if not raw:
+        raise ValueError("uploaded file is empty")
+    asset_id = f"asset_{uuid.uuid4().hex[:12]}"
+    stored = s3_asset_storage().save_bytes(
+        f"batches/{normalized_batch_id}/items/{normalized_item_id}/inputs/{asset_id}/{safe_name}",
+        raw,
+        file_name=safe_name,
+        mime_type=mime_type,
+    )
+    image_width, image_height = image_dimensions(raw, stored.mime_type)
+    asset_metadata = {
+        "createdBy": created_by or None,
+        "batchJobId": normalized_batch_id,
+        "requestItemId": normalized_item_id,
+        "downloadUrl": f"/api/files/{asset_id}",
+        **(metadata or {}),
+        **timestamp_fields(
+            "createdAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="s3-batch-input",
+        ),
+    }
+    if image_width and image_height:
+        asset_metadata["imageWidth"] = image_width
+        asset_metadata["imageHeight"] = image_height
+
+    session = SessionLocal()
+    try:
+        asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+        asset.asset_type = "input_image"
+        asset.file_name = safe_name
+        asset.mime_type = stored.mime_type
+        asset.size_bytes = stored.size_bytes
+        asset.image_width = image_width
+        asset.image_height = image_height
+        asset.storage_backend = "s3"
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = asset_metadata
+        session.add(asset)
+        session.commit()
+    finally:
+        session.close()
+
+    result = {
+        "assetId": asset_id,
+        "type": "input_image",
+        "fileName": safe_name,
+        "mimeType": stored.mime_type,
+        "sizeBytes": stored.size_bytes,
+        "storageBackend": "s3",
+        "storageKey": stored.storage_key,
+        "publicUrl": stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}",
+        "downloadUrl": f"/api/files/{asset_id}",
+    }
+    if image_width and image_height:
+        result["imageWidth"] = image_width
+        result["imageHeight"] = image_height
+    return result
+
+
 def s3_asset_storage() -> S3AssetStorage:
     settings = get_settings()
     return S3AssetStorage(
@@ -480,6 +563,10 @@ def s3_asset_download(asset_id: str) -> dict | None:
 
 def _s3_input_key(payload: dict, *, asset_id: str, file_name: str) -> str:
     scope = _s3_scope_metadata(payload)
+    if not scope.get("requestBatchId") and not scope.get("batchJobId"):
+        raise ValueError("requestBatchId or batchJobId is required for S3 upload scope")
+    if not scope.get("requestItemId") or not scope.get("jobId"):
+        raise ValueError("requestItemId and jobId are required for S3 upload scope")
     if scope.get("batchJobId"):
         return (
             f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
@@ -497,10 +584,12 @@ def _s3_scope_metadata(payload: dict) -> dict[str, str]:
     request_item_id = str(payload.get("requestItemId") or "").strip()
     job_id = str(payload.get("jobId") or payload.get("taskId") or "").strip()
     prompt_batch_id = str(payload.get("promptBatchId") or "").strip()
-    if not request_batch_id and not batch_job_id:
-        raise ValueError("requestBatchId or batchJobId is required for S3 upload scope")
-    if not request_item_id or not job_id:
+    if not request_batch_id and not batch_job_id and not job_id:
+        raise ValueError("requestBatchId, batchJobId, or jobId is required for S3 upload scope")
+    if (request_batch_id or batch_job_id) and (not request_item_id or not job_id):
         raise ValueError("requestItemId and jobId are required for S3 upload scope")
+    if job_id and not request_item_id:
+        request_item_id = "item_0001"
     metadata = {
         "requestItemId": request_item_id,
         "jobId": job_id,
@@ -517,6 +606,19 @@ def _s3_scope_metadata(payload: dict) -> dict[str, str]:
 def get_asset(asset_id: str) -> tuple[dict, Path]:
     with studio_repository() as repository:
         return repository.get_asset(asset_id)
+
+
+def read_asset_bytes(asset_id: str) -> tuple[dict, bytes]:
+    try:
+        asset = asset_metadata(asset_id)
+    except KeyError:
+        asset = {}
+    if asset.get("storageBackend") == "s3" and asset.get("storageKey"):
+        with s3_asset_storage().open_read(str(asset["storageKey"])) as stream:
+            return asset, stream.read()
+
+    asset, path = get_asset(asset_id)
+    return asset, path.read_bytes()
 
 
 def asset_metadata(asset_id: str) -> dict:
@@ -661,7 +763,62 @@ def runpod_connection() -> dict:
 
 def save_runpod_outputs(result: dict, job: dict) -> dict:
     result = _result_with_s3_manifest_outputs(result, job)
+    result = _result_with_inline_outputs_stored_to_s3(result, job)
     return output_service.save_runpod_outputs(result, job, data_paths()["outputs"], register_asset)
+
+
+def _result_with_inline_outputs_stored_to_s3(result: dict, job: dict) -> dict:
+    if get_settings().storage_backend != "s3":
+        return result
+    output = (result or {}).get("output") or {}
+    output_items: list[tuple[str, dict]] = []
+    for kind in ("videos", "images", "gifs"):
+        for item in output.get(kind) or []:
+            if isinstance(item, dict):
+                output_items.append((kind, item))
+    if not output_items:
+        return result
+
+    converted = {"videos": [], "images": [], "gifs": []}
+    total = len(output_items)
+    changed = False
+    for index, (kind, item) in enumerate(output_items, start=1):
+        if item.get("type") == "s3_object":
+            converted[kind].append(item)
+            continue
+        data = item.get("data")
+        if not data:
+            converted[kind].append(item)
+            continue
+        metadata = output_service.infer_output_metadata(item, index, total, job)
+        file_name = output_service.output_file_name(kind, item, index, job, metadata, total)
+        raw = base64.b64decode(data)
+        asset_id = str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+        mime_type = str(item.get("mimeType") or mimetypes.guess_type(file_name)[0] or "application/octet-stream")
+        storage_key = _s3_job_storage_key({**(job.get("payload") or {}), "taskId": job.get("taskId")}, f"outputs/{asset_id}/{file_name}")
+        stored = s3_asset_storage().save_bytes(
+            storage_key.removeprefix(f"{get_settings().s3_prefix.strip('/')}/") if get_settings().s3_prefix.strip("/") and storage_key.startswith(f"{get_settings().s3_prefix.strip('/')}/") else storage_key,
+            raw,
+            file_name=file_name,
+            mime_type=mime_type,
+        )
+        converted[_manifest_output_kind({"filename": file_name, "mimeType": mime_type})].append({
+            "type": "s3_object",
+            "assetId": asset_id,
+            "bucket": stored.bucket or get_settings().s3_bucket,
+            "key": stored.storage_key,
+            "filename": file_name,
+            "mimeType": stored.mime_type,
+            "sizeBytes": stored.size_bytes,
+            "node_id": item.get("node_id") or item.get("nodeId") or item.get("node"),
+        })
+        changed = True
+
+    if not changed:
+        return result
+    enriched = dict(result)
+    enriched["output"] = converted
+    return enriched
 
 
 def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
@@ -726,6 +883,11 @@ def _s3_job_storage_key(job_scope: dict, leaf: str) -> str:
         suffix = (
             f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
             f"jobs/{scope['jobId']}/{leaf.strip('/')}"
+        )
+    elif not scope.get("requestBatchId"):
+        suffix = (
+            f"jobs/{scope['jobId']}/items/{scope['requestItemId']}/"
+            f"{leaf.strip('/')}"
         )
     else:
         suffix = (
@@ -839,6 +1001,7 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
             config["width"] = int(asset.image_width)
         if asset.image_height and int(asset.image_height) > 0:
             config["height"] = int(asset.image_height)
+        raw_metadata = draft.raw_json if isinstance(draft.raw_json, dict) else {}
         return {
             "workflowId": draft.workflow_id,
             # The job history must show the registered workflow label rather
@@ -846,6 +1009,7 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
             # stable display name for registered workflows.
             "workflowName": Path(draft.workflow_id).stem,
             "promptDraftId": draft.id,
+            "requestItemId": str(raw_metadata.get("requestItemId") or "").strip() or None,
             "resolutionTier": "sd",
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{

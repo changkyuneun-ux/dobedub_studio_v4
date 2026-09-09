@@ -443,7 +443,7 @@ def generate_image_draft(
         return _image_prompt_draft_payload(existing, cached=True)
 
     try:
-        asset, asset_path = studio_api_service.get_asset(asset_id)
+        asset, asset_bytes = studio_api_service.read_asset_bytes(asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Input image asset was not found.") from exc
     except FileNotFoundError as exc:
@@ -467,9 +467,9 @@ def generate_image_draft(
     try:
         result = generate_image_prompt(
             settings,
-            asset_path=asset_path,
+            asset_bytes=asset_bytes,
             mime_type=str(asset.get("mimeType") or ""),
-            file_name=str(asset.get("fileName") or asset_path.name),
+            file_name=str(asset.get("fileName") or asset_id),
             image_width=asset.get("imageWidth"),
             image_height=asset.get("imageHeight"),
             instruction_text=instruction_text,
