@@ -8,6 +8,7 @@ from typing import Callable
 
 from backend.app.services import metadata_loader, workflow_parser
 from backend.app.services.workflow_parser import PARAM_LABELS, PARAM_UI_KEYS
+from backend.app.services.workflow_visibility import assert_workflow_selectable
 
 
 I2V_INPUT_IMAGE_REQUIRED_MESSAGE = "입력파일을 업로드하세요. 이 워크플로우는 i2v 전용입니다. t2i, t2v는 지원하지 않습니다."
@@ -77,6 +78,8 @@ def _literal_int(value: object, *, class_type: str, node_id: str, field: str) ->
 
 def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") -> list[dict]:
     normalized_tier = normalize_resolution_tier(tier)
+    if any(":" in str(node_id) for node_id in workflow):
+        raise ValueError("subgraph node ids are not supported for Wan RunPod workflows.")
     budget = WAN_PIXEL_BUDGET[normalized_tier]
     generation: list[dict] = []
     total_length = 0
@@ -512,6 +515,7 @@ def prepare_workflow_for_job(
     existing_save_video_outputs: Callable[[dict, str, list[dict]], dict],
 ) -> tuple[dict, list[dict], dict]:
     workflow_id = payload.get("workflowId") or "unknown"
+    assert_workflow_selectable(workflow_id)
     resolution_tier = normalize_resolution_tier(payload.get("resolutionTier"))
     workflow = workflow_parser.load_workflow(workflow_id, workflows_dir)
     segments = workflow_parser.find_segments(workflow)

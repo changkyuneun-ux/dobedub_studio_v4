@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.app.services import output_service, studio_api_service
 from backend.app.services.storage_backends import StoredObject
 
@@ -206,3 +208,21 @@ def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_
     assert saved["assets"][0]["storageKey"] == (
         "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/outputs/asset_output_001/이미지1.mp4"
     )
+
+
+def test_studio_save_runpod_outputs_marks_missing_s3_manifest_retryable(monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+    monkeypatch.setenv("S3_PREFIX", "prod")
+
+    class MissingManifestStorage:
+        def open_read(self, _storage_key):
+            raise FileNotFoundError("manifest is not available yet")
+
+    monkeypatch.setattr(studio_api_service, "s3_asset_storage", lambda: MissingManifestStorage())
+
+    with pytest.raises(studio_api_service.OutputImportPending, match="manifest"):
+        studio_api_service.save_runpod_outputs(
+            {"status": "COMPLETED", "output": {}},
+            {"taskId": "task_1", "payload": {"requestBatchId": "rpb_1", "requestItemId": "rpi_1"}},
+        )

@@ -15,3 +15,8 @@ RETIRED_WORKFLOW_IDS = frozenset({
 
 def is_retired_workflow(workflow_id: object) -> bool:
     return Path(str(workflow_id or "")).name in RETIRED_WORKFLOW_IDS
+
+
+def assert_workflow_selectable(workflow_id: object) -> None:
+    if is_retired_workflow(workflow_id):
+        raise ValueError("This retired workflow cannot be used for new requests")

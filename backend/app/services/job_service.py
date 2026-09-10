@@ -228,6 +228,7 @@ def _save_completed_outputs_if_needed(runtime: JobRuntime, job: dict, runpod_sta
         else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
     )
     job["outputsSaved"] = True
+    job["outputImportStatus"] = "COMPLETED"
     job.pop("outputSaveError", None)
     if isinstance(job.get("runpodStatus"), dict):
         job["runpodStatus"].pop("outputSaveError", None)
@@ -239,6 +240,7 @@ def _save_completed_outputs_safely(runtime: JobRuntime, job: dict, runpod_status
         _save_completed_outputs_if_needed(runtime, job, runpod_status)
     except Exception as exc:
         error = str(exc)
+        job["outputImportStatus"] = "PENDING"
         job["outputSaveError"] = error
         if isinstance(job.get("runpodStatus"), dict):
             job["runpodStatus"]["outputSaveError"] = error
@@ -336,6 +338,7 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         "generationSeed": job.get("generationSeed"),
         "outputUrl": job.get("outputUrl", ""),
         "outputAssets": job.get("outputAssets", []),
+        "outputImportStatus": job.get("outputImportStatus") or ("COMPLETED" if job.get("outputsSaved") else "PENDING"),
         "cancelRequested": bool(job.get("cancelRequested")),
         "lastDispatchError": job.get("lastDispatchError"),
     }

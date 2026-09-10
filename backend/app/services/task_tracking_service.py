@@ -1576,6 +1576,8 @@ def _task_to_history_item(
     item["outputAssets"] = output_assets or item.get("outputAssets", [])
     item.setdefault("outputUrl", _first_output_url(item["outputAssets"]))
     item["runpodResponse"] = _runpod_response_summary(task, item["outputAssets"])
+    requested_generation = (task.patch_summary or {}).get("generation") if isinstance(task.patch_summary, dict) else None
+    item["requestedGeneration"] = requested_generation if isinstance(requested_generation, list) else []
     item["runpodGeneration"] = _runpod_generation(task.runpod_status_json or {})
     if item["runpodGeneration"]:
         item["runpodResponse"]["generation"] = item["runpodGeneration"]

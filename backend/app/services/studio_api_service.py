@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import uuid
 from datetime import timedelta
@@ -51,6 +52,13 @@ from backend.app.db.session import SessionLocal
 
 JOBS: dict[str, dict] = {}
 JOB_LOCK = RLock()
+LOGGER = logging.getLogger(__name__)
+
+
+class OutputImportPending(RuntimeError):
+    """RunPod finished, but its S3 manifest is not readable yet."""
+
+
 def ensure_storage_dirs() -> None:
     settings = get_settings()
     paths = data_paths()
@@ -699,6 +707,8 @@ def build_runpod_payload(workflow: dict, images: list[dict], job_scope: dict | N
     if images:
         input_body["images"] = [_runpod_image_payload(image) for image in images]
     output_destination = _runpod_s3_output_destination(job_scope or {})
+    if get_settings().storage_backend == "s3" and not output_destination:
+        raise ValueError("S3 output destination is required before submitting a RunPod job")
     if output_destination:
         input_body["output"] = output_destination
     return {"input": input_body}
@@ -836,8 +846,8 @@ def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
         storage = s3_asset_storage()
         with storage.open_read(manifest_key) as stream:
             raw = stream.read()
-    except Exception:
-        return result
+    except Exception as exc:
+        raise OutputImportPending("RunPod output manifest is not available yet") from exc
     manifest = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
     output = {"videos": [], "images": [], "gifs": []}
     items = [item for item in manifest.get("outputs") or [] if isinstance(item, dict)]
@@ -852,7 +862,7 @@ def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
         normalized = _manifest_output_with_source_filename(storage, normalized, desired_file_name)
         output[_manifest_output_kind(normalized)].append(normalized)
     if not any(output.values()):
-        return result
+        raise OutputImportPending("RunPod output manifest contains no output assets")
     enriched = dict(result)
     enriched["output"] = output
     return enriched
@@ -1306,6 +1316,13 @@ def monitor_active_jobs() -> dict:
         try:
             job_status(task_id)
         except Exception as exc:
+            with JOB_LOCK:
+                job = JOBS.get(task_id)
+                if job_service.is_runpod_job_not_found_error(exc) and job:
+                    job_service.mark_runpod_job_not_found(job_runtime(), job, str(exc))
+                    LOGGER.warning("RunPod job no longer exists; marked task failed: %s", task_id)
+                    continue
+            LOGGER.exception("RunPod monitor status refresh failed: task=%s", task_id)
             failures.append(task_id)
     return {"checked": len(task_ids), "failures": failures, "dispatch": dispatch}
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from backend.app.db.models import Asset
 from backend.app.services import studio_api_service
 from backend.app.services.storage_backends import S3AssetStorage
@@ -64,6 +66,14 @@ def test_build_runpod_payload_uses_s3_images_and_scoped_output_prefix(monkeypatc
         "manifestKey": "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/manifests/runpod-result.json",
         "appJobId": "task_1",
     }
+
+
+def test_build_runpod_payload_rejects_s3_submission_without_a_job_scope(monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+
+    with pytest.raises(ValueError, match="S3 output destination"):
+        studio_api_service.build_runpod_payload({"1": {"class_type": "Test"}}, [], {})
 
 
 def test_build_runpod_payload_uses_batch_item_output_prefix(monkeypatch):

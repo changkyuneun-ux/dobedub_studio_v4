@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.app.services import admin_service, workflow_service
+from backend.app.services.workflow_visibility import assert_workflow_selectable
 
 
 RETIRED_WORKFLOW_IDS = {
@@ -38,3 +39,8 @@ def test_retired_workflow_cannot_be_reactivated_or_registered_again():
 
     with pytest.raises(ValueError, match="retired workflow"):
         admin_service.register_admin_workflow({"workflowId": "1-images.json"})
+
+
+def test_retired_workflow_cannot_be_used_by_a_direct_request():
+    with pytest.raises(ValueError, match="retired workflow"):
+        assert_workflow_selectable("Pickme_Workflow.json")

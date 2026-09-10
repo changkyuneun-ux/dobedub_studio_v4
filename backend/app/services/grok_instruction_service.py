@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import get_settings
+from backend.app.services.workflow_visibility import is_retired_workflow
 
 
 _VALID_ROLES = {"CORE", "ROUTER", "GUIDE"}
@@ -22,6 +23,7 @@ _ROLE_ORDER = {"CORE": 0, "ROUTER": 1, "GUIDE": 2}
 _SCHEMA_VERSION = "2.0"
 _SET_CODE = "grok_wan_i2v_transformer"
 LEGACY_DEFAULT_WORKFLOW_ID = "1-images.json"
+DEFAULT_WAN_WORKFLOW_ID = "wan22_default_81.json"
 
 
 def _seed_path() -> Path:
@@ -56,7 +58,7 @@ def list_instruction_source_workflows() -> list[str]:
     return [
         workflow["workflowId"]
         for workflow in document_set["workflowInstructionSets"]
-        if workflow.get("documents")
+        if workflow.get("documents") and not is_retired_workflow(workflow["workflowId"])
     ]
 
 
@@ -212,9 +214,33 @@ def validate_instruction_set(workflow_set: dict[str, Any]) -> None:
 def _load_set() -> dict[str, Any]:
     path = ensure_instruction_set()
     document_set, promoted = _read_set(path)
-    if promoted:
+    migrated = _migrate_retired_default_documents(document_set)
+    if promoted or migrated:
         _write_set(document_set, path)
     return document_set
+
+
+def _migrate_retired_default_documents(document_set: dict[str, Any]) -> bool:
+    """Move the old 1-images instruction set to the supported flat WAN workflow.
+
+    Runtime instruction JSON is persisted outside the image, so changing the
+    tracked seed alone would strand existing production instructions on a
+    hidden workflow. The move is idempotent and never overwrites documents an
+    administrator already created for the supported workflow.
+    """
+    legacy = _find_workflow(document_set, LEGACY_DEFAULT_WORKFLOW_ID)
+    if legacy is None or not legacy.get("documents"):
+        return False
+    target = _find_workflow(document_set, DEFAULT_WAN_WORKFLOW_ID)
+    if target is not None and target.get("documents"):
+        return False
+    if target is None:
+        target = _get_or_create_workflow(document_set, DEFAULT_WAN_WORKFLOW_ID)
+    target["documents"] = legacy["documents"]
+    target["version"] = max(1, _safe_int(legacy.get("version"), 1))
+    legacy["documents"] = []
+    legacy["version"] = max(1, _safe_int(legacy.get("version"), 1) + 1)
+    return True
 
 
 def _save_set(document_set: dict[str, Any]) -> None:

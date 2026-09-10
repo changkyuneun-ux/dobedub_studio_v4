@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from backend.app.services.workflow_patch_service import (
@@ -179,6 +182,38 @@ def test_wan_generation_snapshot_rejects_non_unit_batch_size():
 
     with pytest.raises(ValueError, match="batch_size must be 1"):
         wan_image_to_video_generation_snapshot(workflow, tier="sd")
+
+
+def test_wan_generation_snapshot_rejects_subgraph_node_ids():
+    workflow = {
+        "129:98": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": 848, "height": 480, "length": 81, "batch_size": 1},
+        },
+    }
+
+    with pytest.raises(ValueError, match="subgraph"):
+        wan_image_to_video_generation_snapshot(workflow, tier="sd")
+
+
+def test_flat_wan_5_second_template_uses_one_81_frame_video_node():
+    template_path = Path("workflows/wan22_default_81.json")
+    workflow = json.loads(template_path.read_text(encoding="utf-8"))
+
+    assert not any(":" in node_id for node_id in workflow)
+    assert wan_image_to_video_generation_snapshot(workflow, tier="hd") == [
+        {
+            "nodeId": "98",
+            "classType": "WanImageToVideo",
+            "width": 720,
+            "height": 720,
+            "length": 81,
+            "batchSize": 1,
+            "pixelCount": 518400,
+            "tier": "hd",
+            "pixelBudget": 921600,
+        }
+    ]
 
 
 def test_wan_generation_snapshot_rejects_linked_or_zero_generation_values():
