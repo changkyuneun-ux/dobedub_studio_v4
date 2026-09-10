@@ -116,6 +116,46 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     assert job_payload["resolutionTier"] == "hd"
 
 
+def test_request_item_job_payload_uses_metadata_dimensions_when_asset_columns_are_empty(db_session):
+    db_session.add(Asset(
+        id="asset_request_metadata_dimensions",
+        asset_type="input_image",
+        file_name="portrait.png",
+        mime_type="image/png",
+        size_bytes=1,
+        storage_backend="s3",
+        storage_key="prod/uploads/asset_request_metadata_dimensions/portrait.png",
+        public_url="s3://dobedub-studio/prod/uploads/asset_request_metadata_dimensions/portrait.png",
+        image_width=None,
+        image_height=None,
+        metadata_json={"imageWidth": 747, "imageHeight": 840},
+    ))
+    db_session.add(_draft(
+        "asset_request_metadata_dimensions",
+        draft_id="draft_request_metadata_dimensions",
+        positive="portrait prompt",
+        frames=81,
+    ))
+    db_session.commit()
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_metadata_dimensions"}],
+    )
+    request_item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.request_batch_id == batch["id"])
+    )
+
+    job_payload = studio_api_service.job_payload_from_request_item(request_item.id, user={"id": "operator"})
+
+    assert job_payload["segments"][0]["config"]["width"] == 747
+    assert job_payload["segments"][0]["config"]["height"] == 840
+    asset = db_session.get(Asset, "asset_request_metadata_dimensions")
+    db_session.refresh(asset)
+    assert asset.image_width == 747
+    assert asset.image_height == 840
+
+
 def test_request_batch_rejects_removed_ten_second_length(db_session):
     db_session.add_all([
         _asset("asset_request_unsupported_length"),

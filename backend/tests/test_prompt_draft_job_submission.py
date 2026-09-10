@@ -62,3 +62,46 @@ def test_draft_job_payload_uses_the_draft_prompt_for_fixed_81_workflow(db_sessio
 
     assert applied == []
     assert workflow["98"]["inputs"]["length"] == 81
+
+
+def test_draft_job_payload_uses_metadata_dimensions_when_asset_columns_are_empty(db_session):
+    db_session.add(Asset(
+        id="asset_metadata_dimensions",
+        asset_type="input",
+        file_name="portrait.png",
+        mime_type="image/png",
+        size_bytes=1,
+        image_width=None,
+        image_height=None,
+        storage_key="inputs/portrait.png",
+        metadata_json={"imageWidth": 747, "imageHeight": 840},
+    ))
+    db_session.add(ImagePromptDraft(
+        id="grok_draft_metadata_dimensions",
+        asset_id="asset_metadata_dimensions",
+        workflow_id="1-images_81.json",
+        slot_index=1,
+        status="READY",
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="a person walks forward",
+        negative_prompt="blur",
+        requested_frames=81,
+        warnings_json=[],
+        raw_json={},
+        created_by="dobedub",
+    ))
+    db_session.commit()
+
+    payload = studio_api_service.job_payload_from_prompt_draft(
+        "grok_draft_metadata_dimensions",
+        user={"id": "dobedub", "name": "Dob"},
+    )
+
+    assert payload["segments"][0]["config"]["width"] == 747
+    assert payload["segments"][0]["config"]["height"] == 840
+    asset = db_session.get(Asset, "asset_metadata_dimensions")
+    db_session.refresh(asset)
+    assert asset.image_width == 747
+    assert asset.image_height == 840

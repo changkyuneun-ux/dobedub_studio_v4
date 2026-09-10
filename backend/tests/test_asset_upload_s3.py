@@ -218,6 +218,8 @@ def test_legacy_upload_api_stores_input_image_in_s3(api_client, monkeypatch):
         assert asset.storage_backend == "s3"
         assert asset.storage_key == expected_key
         assert asset.public_url == f"s3://dobedub-studio-local/{expected_key}"
+        assert asset.image_width == 1
+        assert asset.image_height == 1
         assert asset.metadata_json["createdBy"] == "operator"
     finally:
         session.close()

@@ -114,6 +114,36 @@ def _video_config_from_requested_frames(workflow_id: str, requested_frames: int 
     }
 
 
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _asset_dimensions(asset: Asset) -> tuple[int | None, int | None]:
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    width = _positive_int(asset.image_width) or _positive_int(metadata.get("imageWidth")) or _positive_int(metadata.get("image_width"))
+    height = _positive_int(asset.image_height) or _positive_int(metadata.get("imageHeight")) or _positive_int(metadata.get("image_height"))
+    return width, height
+
+
+def _apply_asset_dimensions(config: dict, asset: Asset, session=None) -> None:
+    width, height = _asset_dimensions(asset)
+    if not width or not height:
+        return
+    config["width"] = width
+    config["height"] = height
+    if session is not None and (_positive_int(asset.image_width) != width or _positive_int(asset.image_height) != height):
+        asset.image_width = width
+        asset.image_height = height
+        session.add(asset)
+        session.commit()
+
+
 def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
     # Task history is DB-only (D-03): always read through task_tracking_service,
     # independent of PERSISTENCE_BACKEND (which still governs assets/configs/
@@ -367,6 +397,8 @@ def _create_s3_upload_from_data_url(payload: dict) -> dict:
         asset.file_name = file_name
         asset.mime_type = stored.mime_type
         asset.size_bytes = stored.size_bytes
+        asset.image_width = image_width
+        asset.image_height = image_height
         asset.storage_backend = "s3"
         asset.storage_key = stored.storage_key
         asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
@@ -526,6 +558,11 @@ def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
     mime_type = str(payload.get("mimeType") or stored.mime_type or "application/octet-stream")
     metadata = _s3_scope_metadata(payload)
     metadata["createdBy"] = created_by
+    image_width = _positive_int(payload.get("imageWidth")) or _positive_int(payload.get("image_width"))
+    image_height = _positive_int(payload.get("imageHeight")) or _positive_int(payload.get("image_height"))
+    if image_width and image_height:
+        metadata["imageWidth"] = image_width
+        metadata["imageHeight"] = image_height
     session = SessionLocal()
     try:
         asset = session.get(Asset, asset_id)
@@ -536,12 +573,15 @@ def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
         asset.file_name = file_name
         asset.mime_type = mime_type
         asset.size_bytes = stored.size_bytes
+        if image_width and image_height:
+            asset.image_width = image_width
+            asset.image_height = image_height
         asset.storage_backend = "s3"
         asset.storage_key = storage_key
         asset.public_url = f"s3://{settings.s3_bucket}/{storage_key}"
         asset.metadata_json = metadata
         session.commit()
-        return {
+        item = {
             "assetId": asset.id,
             "type": asset.asset_type,
             "fileName": asset.file_name,
@@ -552,6 +592,10 @@ def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
             "publicUrl": asset.public_url,
             "downloadUrl": f"/api/files/{asset.id}",
         }
+        if image_width and image_height:
+            item["imageWidth"] = image_width
+            item["imageHeight"] = image_height
+        return item
     finally:
         session.close()
 
@@ -652,7 +696,8 @@ def asset_metadata(asset_id: str) -> dict:
         asset = session.get(Asset, asset_id)
         if asset is None:
             raise KeyError(asset_id)
-        return {
+        metadata = dict(asset.metadata_json or {})
+        item = {
             "assetId": asset.id,
             "type": asset.asset_type,
             "fileName": asset.file_name,
@@ -661,8 +706,13 @@ def asset_metadata(asset_id: str) -> dict:
             "storageBackend": asset.storage_backend,
             "storageKey": asset.storage_key,
             "publicUrl": asset.public_url,
-            **(asset.metadata_json or {}),
+            **metadata,
         }
+        width, height = _asset_dimensions(asset)
+        if width and height:
+            item["imageWidth"] = width
+            item["imageHeight"] = height
+        return item
     finally:
         session.close()
 
@@ -1051,10 +1101,7 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
         # Carry the persisted source dimensions so the Wan node receives the
         # exact uploaded image size, just as it does for a direct submission.
         config = _video_config_from_requested_frames(draft.workflow_id, draft.requested_frames)
-        if asset.image_width and int(asset.image_width) > 0:
-            config["width"] = int(asset.image_width)
-        if asset.image_height and int(asset.image_height) > 0:
-            config["height"] = int(asset.image_height)
+        _apply_asset_dimensions(config, asset, session)
         raw_metadata = draft.raw_json if isinstance(draft.raw_json, dict) else {}
         return {
             "workflowId": draft.workflow_id,
@@ -1098,10 +1145,7 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
         if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
         config = _video_config_from_requested_frames(item.workflow_id, item.requested_frames)
-        if asset.image_width and int(asset.image_width) > 0:
-            config["width"] = int(asset.image_width)
-        if asset.image_height and int(asset.image_height) > 0:
-            config["height"] = int(asset.image_height)
+        _apply_asset_dimensions(config, asset, session)
         return {
             "workflowId": item.workflow_id,
             "workflowName": Path(item.workflow_id).stem,
