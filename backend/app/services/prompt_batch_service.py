@@ -93,7 +93,7 @@ def create_prompt_generation_batch(
             for key, value in {
                 "sourceRelativePath": str(source.get("sourceRelativePath") or "").strip(),
                 "sourceZipFileName": str(source.get("sourceZipFileName") or "").strip(),
-                "requestItemId": str(source.get("requestItemId") or "").strip(),
+                "requestItemId": str(source.get("requestItemId") or f"item_{slot_index:04d}").strip(),
             }.items()
             if value
         }

@@ -1305,7 +1305,14 @@ def _replace_input_assets(
     for link in list(task.input_assets):
         session.delete(link)
     session.flush()
-    for index, asset_id in enumerate(_input_asset_ids(job), start=1):
+    seen_asset_ids: set[str] = set()
+    unique_asset_ids: list[str] = []
+    for asset_id in _input_asset_ids(job):
+        if asset_id in seen_asset_ids:
+            continue
+        seen_asset_ids.add(asset_id)
+        unique_asset_ids.append(asset_id)
+    for index, asset_id in enumerate(unique_asset_ids, start=1):
         _ensure_asset(session, asset_id, resolve_asset=resolve_asset)
         if session.get(Asset, asset_id):
             session.add(TaskInputAsset(task_id=task.id, asset_id=asset_id, slot_index=index))
@@ -1321,12 +1328,16 @@ def _replace_output_assets(
     for link in list(task.output_assets):
         session.delete(link)
     session.flush()
+    seen_asset_ids: set[str] = set()
     for asset in job.get("outputAssets") or []:
         if not isinstance(asset, dict):
             continue
         asset_id = str(asset.get("assetId") or "").strip()
         if not asset_id:
             continue
+        if asset_id in seen_asset_ids:
+            continue
+        seen_asset_ids.add(asset_id)
         _ensure_asset(session, asset_id, asset_payload=asset, resolve_asset=resolve_asset)
         if session.get(Asset, asset_id):
             session.add(TaskOutputAsset(

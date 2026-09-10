@@ -111,8 +111,13 @@ def collect_batch_outputs(db: Session, batch_job_id: str, *, task_ids: list[str]
 
     source_names = _source_file_names(db, batch_job_id)
     used: set[str] = set()
+    seen_task_assets: set[tuple[str, str]] = set()
     collected: list[dict] = []
     for task_id, asset_id, output_file_name, storage_backend, storage_key in db.execute(query).all():
+        task_asset = (str(task_id), str(asset_id))
+        if task_asset in seen_task_assets:
+            continue
+        seen_task_assets.add(task_asset)
         source = source_names.get(str(task_id)) or {}
         source_file_name = str(source.get("fileName") or output_file_name or task_id)
         source_relative_path = str(source.get("relativePath") or "")

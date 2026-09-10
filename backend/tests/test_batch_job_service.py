@@ -720,6 +720,7 @@ def test_promote_ready_drafts_creates_task_history_with_batch_item_scope_without
     assert {task.status for task in tasks} == {"PENDING_SUBMIT"}
     assert {task.request_batch_id for task in tasks} == {None}
     assert [task.request_item_id for task in tasks] == ["item_0001", "item_0002"]
+    assert [task.payload_json["requestItemId"] for task in tasks] == ["item_0001", "item_0002"]
     assert db_session.scalars(select(RunpodRequestBatch)).all() == []
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
 

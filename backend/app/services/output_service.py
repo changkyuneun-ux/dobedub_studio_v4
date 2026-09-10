@@ -97,6 +97,9 @@ def workflow_output_token(workflow_id: str) -> str:
 
 def first_upload_stem(job: dict) -> str:
     payload = job.get("payload") or {}
+    source_relative_path = str(payload.get("sourceRelativePath") or "").strip()
+    if source_relative_path:
+        return _safe_output_stem(Path(source_relative_path).name)
     keyframes = payload.get("keyframes") or []
     first_name = keyframes[0].get("fileName") if keyframes else ""
     return _safe_output_stem(first_name or "upload")

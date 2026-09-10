@@ -1005,6 +1005,7 @@ def _manifest_output_with_source_filename(storage: S3AssetStorage, item: dict, f
     if target_key == storage_key and item.get("filename") == safe_name:
         return item
     stored = storage.copy_stored_object(storage_key, target_key)
+    storage.delete(storage_key)
     return {
         **item,
         "key": stored.storage_key,
@@ -1157,6 +1158,11 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
         config = _video_config_from_requested_frames(draft.workflow_id, draft.requested_frames)
         _apply_asset_dimensions(config, asset, session)
         raw_metadata = draft.raw_json if isinstance(draft.raw_json, dict) else {}
+        request_item_id = str(raw_metadata.get("requestItemId") or "").strip()
+        if not request_item_id and draft.batch_job_id:
+            request_item_id = f"item_{int(draft.slot_index or 1):04d}"
+        source_relative_path = str(raw_metadata.get("sourceRelativePath") or "").strip()
+        source_zip_file_name = str(raw_metadata.get("sourceZipFileName") or "").strip()
         return {
             "workflowId": draft.workflow_id,
             # The job history must show the registered workflow label rather
@@ -1164,7 +1170,9 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
             # stable display name for registered workflows.
             "workflowName": Path(draft.workflow_id).stem,
             "promptDraftId": draft.id,
-            "requestItemId": str(raw_metadata.get("requestItemId") or "").strip() or None,
+            "requestItemId": request_item_id or None,
+            "sourceRelativePath": source_relative_path or None,
+            "sourceZipFileName": source_zip_file_name or None,
             "resolutionTier": "sd",
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
