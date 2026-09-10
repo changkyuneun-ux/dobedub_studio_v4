@@ -748,6 +748,48 @@ def asset_to_runpod_image(asset_id: str, fallback_name: str | None = None) -> di
     }
 
 
+def ensure_s3_input_asset_scoped(asset_id: str, payload: dict, fallback_name: str | None = None) -> None:
+    """Move a RunPod-bound S3 input asset to the final batch/job input prefix.
+
+    Legacy UI upload flows may stage images under ``uploads/`` before a task id
+    exists.  At dispatch time the payload has the full batch/item/job scope, so
+    copy the object in S3 and update the asset row before building
+    ``images[].s3Uri``.
+    """
+    settings = get_settings()
+    if settings.storage_backend != "s3" or settings.persistence_backend != "db":
+        return
+    if not str(payload.get("taskId") or payload.get("jobId") or "").strip():
+        return
+    if not str(payload.get("requestBatchId") or payload.get("batchJobId") or "").strip():
+        return
+
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None or asset.storage_backend != "s3" or not asset.storage_key:
+            return
+        file_name = safe_filename(str(asset.file_name or fallback_name or asset_id))
+        storage = s3_asset_storage()
+        target_key = storage._key(_s3_input_key(payload, asset_id=asset_id, file_name=file_name))
+        source_key = str(asset.storage_key or "").strip().lstrip("/")
+        if source_key == target_key:
+            return
+        stored = storage.copy_stored_object(source_key, target_key)
+        if _is_s3_input_staging_key(source_key):
+            storage.delete(source_key)
+        metadata = dict(asset.metadata_json or {})
+        metadata.setdefault("migratedFromStorageBackend", "s3")
+        metadata.setdefault("migratedFromStorageKey", source_key)
+        metadata.update(_s3_scope_metadata(payload))
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = metadata
+        session.commit()
+    finally:
+        session.close()
+
+
 def build_runpod_images(payload: dict) -> list[dict]:
     images = []
     keyframes = sorted(
@@ -758,6 +800,7 @@ def build_runpod_images(payload: dict) -> list[dict]:
         upload_id = keyframe.get("uploadId")
         if not upload_id:
             continue
+        ensure_s3_input_asset_scoped(str(upload_id), payload, keyframe.get("fileName"))
         images.append(asset_to_runpod_image(upload_id, keyframe.get("fileName")))
     return images
 
@@ -988,18 +1031,29 @@ def _s3_job_storage_key(job_scope: dict, leaf: str) -> str:
             f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
             f"jobs/{scope['jobId']}/{leaf.strip('/')}"
         )
-    elif not scope.get("requestBatchId"):
-        suffix = (
-            f"jobs/{scope['jobId']}/items/{scope['requestItemId']}/"
-            f"{leaf.strip('/')}"
-        )
-    else:
+    elif scope.get("requestBatchId"):
         suffix = (
             f"request-batches/{scope['requestBatchId']}/items/{scope['requestItemId']}/"
             f"jobs/{scope['jobId']}/{leaf.strip('/')}"
         )
+    else:
+        raise ValueError("batchJobId or requestBatchId is required for S3 job storage")
     prefix = get_settings().s3_prefix.strip("/")
     return f"{prefix}/{suffix}" if prefix else suffix
+
+
+def _is_s3_input_staging_key(storage_key: str) -> bool:
+    key = _strip_configured_s3_prefix(str(storage_key or "").strip().lstrip("/"))
+    if key.startswith("uploads/"):
+        return True
+    return key.startswith("batches/") and "/items/" in key and "/inputs/" in key and "/jobs/" not in key
+
+
+def _strip_configured_s3_prefix(storage_key: str) -> str:
+    prefix = get_settings().s3_prefix.strip("/")
+    if prefix and storage_key.startswith(f"{prefix}/"):
+        return storage_key[len(prefix) + 1:]
+    return storage_key
 
 
 def build_wan_node_config_snapshot(workflow_id: str, segments_payload: list[dict]) -> dict:

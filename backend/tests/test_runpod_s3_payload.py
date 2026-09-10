@@ -123,24 +123,17 @@ def test_build_runpod_payload_uses_fallback_item_for_batch_without_request_item(
     }
 
 
-def test_build_runpod_payload_uses_job_output_prefix_for_direct_tasks(monkeypatch):
+def test_build_runpod_payload_rejects_direct_task_output_prefix(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
     monkeypatch.setenv("S3_PREFIX", "prod")
 
-    payload = studio_api_service.build_runpod_payload(
-        {"1": {"class_type": "Test"}},
-        [],
-        {"taskId": "task_direct_1"},
-    )
-
-    assert payload["input"]["output"] == {
-        "mode": "s3",
-        "bucket": "dobedub-studio",
-        "prefix": "prod/jobs/task_direct_1/items/item_0001/outputs",
-        "manifestKey": "prod/jobs/task_direct_1/items/item_0001/manifests/runpod-result.json",
-        "appJobId": "task_direct_1",
-    }
+    with pytest.raises(ValueError, match="S3 output destination"):
+        studio_api_service.build_runpod_payload(
+            {"1": {"class_type": "Test"}},
+            [],
+            {"taskId": "task_direct_1"},
+        )
 
 
 def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_session, monkeypatch):
@@ -179,6 +172,140 @@ def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_sessi
     assert images[0]["name"] == "scene.png"
     assert workflow["1"]["inputs"]["image"] == "scene.png"
     assert patch_summary["images"] == [{"node": "1", "image": "scene.png"}]
+
+
+def test_build_runpod_images_copies_legacy_s3_input_to_job_scope(db_session, monkeypatch):
+    class FakeS3Client:
+        def __init__(self):
+            self.copied: list[tuple[dict, str]] = []
+            self.deleted: list[tuple[str, str]] = []
+
+        def copy_object(self, **kwargs):
+            self.copied.append((kwargs["CopySource"], kwargs["Key"]))
+            return {"CopyObjectResult": {"ETag": '"copied"'}}
+
+        def delete_object(self, **kwargs):
+            self.deleted.append((kwargs["Bucket"], kwargs["Key"]))
+            return {}
+
+        def head_object(self, **kwargs):
+            return {
+                "ContentLength": 5,
+                "ContentType": "image/png",
+                "ETag": '"copied"',
+            }
+
+    fake = FakeS3Client()
+    monkeypatch.setenv("PERSISTENCE_BACKEND", "db")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+    monkeypatch.setenv("S3_PREFIX", "prod")
+    monkeypatch.setattr(
+        studio_api_service,
+        "s3_asset_storage",
+        lambda: S3AssetStorage(bucket="dobedub-studio", prefix="prod", client=fake),
+    )
+    db_session.add(Asset(
+        id="asset_legacy_input",
+        asset_type="input_image",
+        file_name="scene.png",
+        mime_type="image/png",
+        size_bytes=5,
+        storage_backend="s3",
+        storage_key="prod/uploads/asset_legacy_input/scene.png",
+        public_url="s3://dobedub-studio/prod/uploads/asset_legacy_input/scene.png",
+        metadata_json={},
+    ))
+    db_session.commit()
+
+    images = studio_api_service.build_runpod_images({
+        "requestBatchId": "rpb_1",
+        "requestItemId": "rpi_1",
+        "taskId": "task_1",
+        "keyframes": [{"index": 1, "uploadId": "asset_legacy_input", "fileName": "scene.png"}],
+    })
+
+    expected_key = "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/inputs/asset_legacy_input/scene.png"
+    assert images == [{
+        "assetId": "asset_legacy_input",
+        "name": "scene.png",
+        "s3Uri": f"s3://dobedub-studio/{expected_key}",
+    }]
+    assert fake.copied == [(
+        {"Bucket": "dobedub-studio", "Key": "prod/uploads/asset_legacy_input/scene.png"},
+        expected_key,
+    )]
+    assert fake.deleted == [("dobedub-studio", "prod/uploads/asset_legacy_input/scene.png")]
+    db_session.refresh(db_session.get(Asset, "asset_legacy_input"))
+    asset = db_session.get(Asset, "asset_legacy_input")
+    assert asset.storage_key == expected_key
+    assert asset.public_url == f"s3://dobedub-studio/{expected_key}"
+    assert asset.metadata_json["migratedFromStorageKey"] == "prod/uploads/asset_legacy_input/scene.png"
+
+
+def test_build_runpod_images_moves_batch_staging_input_to_batch_job_scope(db_session, monkeypatch):
+    class FakeS3Client:
+        def __init__(self):
+            self.copied: list[tuple[dict, str]] = []
+            self.deleted: list[tuple[str, str]] = []
+
+        def copy_object(self, **kwargs):
+            self.copied.append((kwargs["CopySource"], kwargs["Key"]))
+            return {"CopyObjectResult": {"ETag": '"copied"'}}
+
+        def delete_object(self, **kwargs):
+            self.deleted.append((kwargs["Bucket"], kwargs["Key"]))
+            return {}
+
+        def head_object(self, **kwargs):
+            return {
+                "ContentLength": 5,
+                "ContentType": "image/png",
+                "ETag": '"copied"',
+            }
+
+    fake = FakeS3Client()
+    monkeypatch.setenv("PERSISTENCE_BACKEND", "db")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+    monkeypatch.setenv("S3_PREFIX", "prod")
+    monkeypatch.setattr(
+        studio_api_service,
+        "s3_asset_storage",
+        lambda: S3AssetStorage(bucket="dobedub-studio", prefix="prod", client=fake),
+    )
+    db_session.add(Asset(
+        id="asset_batch_input",
+        asset_type="input_image",
+        file_name="scene.png",
+        mime_type="image/png",
+        size_bytes=5,
+        storage_backend="s3",
+        storage_key="prod/batches/batch_1/items/item_0001/inputs/asset_batch_input/scene.png",
+        public_url="s3://dobedub-studio/prod/batches/batch_1/items/item_0001/inputs/asset_batch_input/scene.png",
+        metadata_json={"batchJobId": "batch_1", "requestItemId": "item_0001"},
+    ))
+    db_session.commit()
+
+    images = studio_api_service.build_runpod_images({
+        "batchJobId": "batch_1",
+        "requestItemId": "item_0001",
+        "taskId": "task_1",
+        "keyframes": [{"index": 1, "uploadId": "asset_batch_input", "fileName": "scene.png"}],
+    })
+
+    source_key = "prod/batches/batch_1/items/item_0001/inputs/asset_batch_input/scene.png"
+    expected_key = "prod/batches/batch_1/items/item_0001/jobs/task_1/inputs/asset_batch_input/scene.png"
+    assert images == [{
+        "assetId": "asset_batch_input",
+        "name": "scene.png",
+        "s3Uri": f"s3://dobedub-studio/{expected_key}",
+    }]
+    assert fake.copied == [({"Bucket": "dobedub-studio", "Key": source_key}, expected_key)]
+    assert fake.deleted == [("dobedub-studio", source_key)]
+    asset = db_session.get(Asset, "asset_batch_input")
+    assert asset.storage_key == expected_key
+    assert asset.public_url == f"s3://dobedub-studio/{expected_key}"
 
 
 def test_save_runpod_outputs_uploads_inline_outputs_to_s3_when_storage_backend_is_s3(db_session, monkeypatch, tmp_path):

@@ -117,3 +117,112 @@ def test_migrate_local_media_dry_run_does_not_update_db_or_s3(db_session, tmp_pa
     assert result.scanned == 1
     assert result.migrated == 1
     assert db_session.get(Asset, "asset_dry").storage_backend == "local"
+
+
+def test_migrate_existing_s3_upload_asset_to_request_batch_layout(db_session, monkeypatch):
+    db_session.add(User(id="operator", name="operator", role="OPERATOR"))
+    db_session.add_all([
+        Asset(
+            id="asset_input_s3",
+            asset_type="input_image",
+            file_name="scene.png",
+            mime_type="image/png",
+            size_bytes=3,
+            storage_backend="s3",
+            storage_key="local/uploads/asset_input_s3/scene.png",
+            public_url="s3://dobedub-studio-local/local/uploads/asset_input_s3/scene.png",
+            metadata_json={},
+        ),
+        WorkflowTask(
+            id="task_s3_1",
+            workflow_id="wan.json",
+            status="COMPLETED",
+            user_id="operator",
+            request_batch_id="rpb_1",
+            request_item_id="rpi_1",
+        ),
+    ])
+    db_session.add(TaskInputAsset(task_id="task_s3_1", asset_id="asset_input_s3", slot_index=1))
+    db_session.commit()
+
+    class FakeStorage:
+        def __init__(self):
+            self.copied: list[tuple[str, str]] = []
+            self.deleted: list[str] = []
+
+        def copy_stored_object(self, source_key, target_key):
+            self.copied.append((source_key, target_key))
+            return type("Stored", (), {
+                "storage_key": target_key,
+                "public_url": f"s3://dobedub-studio-local/{target_key}",
+            })()
+
+        def delete(self, storage_key):
+            self.deleted.append(storage_key)
+            return True
+
+    fake = FakeStorage()
+    monkeypatch.setenv("S3_PREFIX", "local")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio-local")
+    monkeypatch.setattr(s3_media_migration_service, "s3_asset_storage", lambda: fake)
+
+    result = s3_media_migration_service.migrate_s3_media_to_final_layout(db_session, apply=True)
+
+    expected_key = "local/request-batches/rpb_1/items/rpi_1/jobs/task_s3_1/inputs/asset_input_s3/scene.png"
+    assert result.scanned == 1
+    assert result.migrated == 1
+    assert fake.copied == [("local/uploads/asset_input_s3/scene.png", expected_key)]
+    assert fake.deleted == []
+    asset = db_session.get(Asset, "asset_input_s3")
+    assert asset.storage_key == expected_key
+    assert asset.public_url == f"s3://dobedub-studio-local/{expected_key}"
+    assert asset.metadata_json["migratedFromStorageKey"] == "local/uploads/asset_input_s3/scene.png"
+
+
+def test_s3_layout_migration_skips_local_and_unbatched_assets(db_session, tmp_path, monkeypatch):
+    local_path = tmp_path / "input.png"
+    local_path.write_bytes(b"png")
+    db_session.add(User(id="operator", name="operator", role="OPERATOR"))
+    db_session.add_all([
+        Asset(
+            id="asset_local",
+            asset_type="input_image",
+            file_name="local.png",
+            mime_type="image/png",
+            size_bytes=3,
+            storage_backend="local",
+            storage_key=str(local_path),
+            metadata_json={},
+        ),
+        Asset(
+            id="asset_unbatched_s3",
+            asset_type="input_image",
+            file_name="scene.png",
+            mime_type="image/png",
+            size_bytes=3,
+            storage_backend="s3",
+            storage_key="local/uploads/asset_unbatched_s3/scene.png",
+            metadata_json={},
+        ),
+        WorkflowTask(
+            id="task_direct",
+            workflow_id="wan.json",
+            status="COMPLETED",
+            user_id="operator",
+        ),
+    ])
+    db_session.add(TaskInputAsset(task_id="task_direct", asset_id="asset_unbatched_s3", slot_index=1))
+    db_session.commit()
+
+    def fail_if_called():
+        raise AssertionError("S3 storage must not be used when there is nothing migratable")
+
+    monkeypatch.setattr(s3_media_migration_service, "s3_asset_storage", fail_if_called)
+
+    result = s3_media_migration_service.migrate_s3_media_to_final_layout(db_session, apply=True)
+
+    assert result.scanned == 1
+    assert result.migrated == 0
+    assert result.skipped == 1
+    assert db_session.get(Asset, "asset_local").storage_backend == "local"
+    assert db_session.get(Asset, "asset_unbatched_s3").storage_key == "local/uploads/asset_unbatched_s3/scene.png"
