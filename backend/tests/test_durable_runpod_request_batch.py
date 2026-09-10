@@ -171,6 +171,51 @@ def test_request_batch_rejects_removed_ten_second_length(db_session):
         )
 
 
+def test_request_batch_rejects_hd_for_small_source_image(db_session):
+    small_asset = _asset("asset_request_small_hd")
+    small_asset.image_width = 640
+    small_asset.image_height = 640
+    db_session.add_all([
+        small_asset,
+        _draft("asset_request_small_hd", draft_id="draft_request_small_hd", positive="prompt", frames=81),
+    ])
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="HD"):
+        create_request_batch(
+            db_session,
+            created_by="operator",
+            items=[{"promptDraftId": "draft_request_small_hd", "requestedFrames": 81, "resolutionTier": "hd"}],
+        )
+
+
+def test_request_queue_exposes_metadata_dimensions_for_quality_limit(db_session):
+    db_session.add(Asset(
+        id="asset_request_queue_metadata_dimensions",
+        asset_type="input_image",
+        file_name="metadata-dimensions.png",
+        mime_type="image/png",
+        size_bytes=1,
+        storage_backend="s3",
+        storage_key="prod/uploads/asset_request_queue_metadata_dimensions/metadata-dimensions.png",
+        image_width=None,
+        image_height=None,
+        metadata_json={"imageWidth": 640, "imageHeight": 640},
+    ))
+    db_session.add(_draft(
+        "asset_request_queue_metadata_dimensions",
+        draft_id="draft_request_queue_metadata_dimensions",
+        positive="prompt",
+        frames=81,
+    ))
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+
+    assert queue["items"][0]["asset"]["imageWidth"] == 640
+    assert queue["items"][0]["asset"]["imageHeight"] == 640
+
+
 def test_request_batch_uses_workflow_default_negative_when_draft_is_blank(db_session):
     db_session.add_all([
         _asset("asset_request_default_negative"),

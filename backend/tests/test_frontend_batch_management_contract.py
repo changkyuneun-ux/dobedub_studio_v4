@@ -238,7 +238,10 @@ def test_runpod_history_shows_video_and_generation_times_before_download() -> No
 
     assert "durationSeconds?: number" in client
     assert "function formatRunpodHistoryTime" in source
-    assert 'return `${minutes}.${seconds}`;' in source
+    assert 'return `${minutes}:${seconds}`;' in source
+    assert "<span>작업자</span><span>실행일</span>" in table
+    assert "<span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span>" in table
+    assert "formatRunpodHistoryDate(item.timestampUtc || item.timestamp)" in table
     assert "<span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span>" in table
     assert "{formatRunpodHistoryTime(item.durationSeconds)}</span>\n              <span>{formatRunpodHistoryTime(item.runpodResponse?.executionSeconds ?? item.elapsedSeconds)}</span>\n              <span>" in table
 
@@ -672,6 +675,12 @@ def test_runpod_request_and_batch_zip_payload_include_resolution_tier() -> None:
     assert 'formData.set("resolutionTier", payload.resolutionTier || "sd");' in client
     assert "const [resolutionTier, setResolutionTier] = useState<ResolutionTier>(\"sd\");" in runpod_screen
     assert "resolutionTier" in runpod_screen.split("createRunpodRequestBatch", 1)[1]
+    assert "const SD_PIXEL_LIMIT = 409_600;" in runpod_screen
+    assert "function sourcePixelCount" in runpod_screen
+    assert "function hdDisabledForItem" in runpod_screen
+    assert "const hdDisabledForSelection" in runpod_screen
+    assert 'disabled={tier.value === "hd" && hdDisabledForSelection}' in runpod_screen
+    assert "resolutionTierForDraft(draft)" in runpod_screen.split("createRunpodRequestBatch", 1)[1]
     assert "const [resolutionTier, setResolutionTier] = useState<ResolutionTier>(\"sd\");" in batch_screen
     assert "resolutionTier," in batch_screen.split("createBatchJobFromZip", 1)[1]
     assert "Quality" in runpod_screen

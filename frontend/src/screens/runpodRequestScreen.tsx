@@ -27,6 +27,18 @@ const RESOLUTION_TIERS: Array<{ value: ResolutionTier; label: string }> = [
   { value: "sd", label: "SD · 409K px" },
   { value: "hd", label: "HD · 921K px" }
 ];
+const SD_PIXEL_LIMIT = 409_600;
+
+function sourcePixelCount(item: RunpodRequestQueueItemResponse) {
+  const width = Number(item.asset?.imageWidth || 0);
+  const height = Number(item.asset?.imageHeight || 0);
+  return width > 0 && height > 0 ? width * height : null;
+}
+
+function hdDisabledForItem(item: RunpodRequestQueueItemResponse) {
+  const pixels = sourcePixelCount(item);
+  return pixels !== null && pixels <= SD_PIXEL_LIMIT;
+}
 
 function workflowName(workflow: WorkflowItem | undefined, fallback: string) {
   return workflow?.label || workflow?.name || fallback;
@@ -119,6 +131,11 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
   }, [requestBatch?.id, selected, user.id, workflowOverrides]);
 
   const rows = queue?.items || [];
+  const selectedDrafts = useMemo(() => selected.flatMap((draftId) => {
+    const draft = rows.find((item) => item.promptDraftId === draftId);
+    return draft ? [draft] : [];
+  }), [rows, selected]);
+  const hdDisabledForSelection = selectedDrafts.some((item) => hdDisabledForItem(item));
   const selectable = useMemo(() => rows.filter((item) => {
     const workflow = workflows.find((workflow) => workflow.id === item.workflowId);
     return item.canSubmit && Boolean(item.promptDraftId) && (workflow?.keyframeCount || 1) === 1;
@@ -142,6 +159,15 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
     if (!indexed.has(user.id)) indexed.set(user.id, { workerId: user.id, workerName: user.name || user.id });
     return [...indexed.values()].sort((left, right) => left.workerName.localeCompare(right.workerName));
   }, [requestDashboard?.workers, user.id, user.name, workerStats]);
+
+  useEffect(() => {
+    if (resolutionTier === "hd" && hdDisabledForSelection) setResolutionTier("sd");
+  }, [hdDisabledForSelection, resolutionTier]);
+
+  function resolutionTierForDraft(draft: RunpodRequestQueueItemResponse): ResolutionTier {
+    if (!draft.canSubmit) return draft.resolutionTier || "sd";
+    return hdDisabledForItem(draft) ? "sd" : resolutionTier;
+  }
 
   async function submit() {
     if (!selected.length) return;
@@ -167,7 +193,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
           promptDraftId: draft.promptDraftId!,
           workflowId: workflowOverrides[draft.promptDraftId!] || draft.workflowId,
           requestedFrames: draft.requestedFrames || 81,
-          resolutionTier
+          resolutionTier: resolutionTierForDraft(draft)
         }))
       })));
       setRequestBatch(batches.length === 1 ? batches[0] : null);
@@ -203,7 +229,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
       </section>
 
       <section className="v3-card v3-runpod-request-card"><div className="v3-card-header"><div><div className="v3-card-header-title">Incomplete RunPod Requests</div><span className="v3-muted-text">생성 완료 이미지만 선택 · Workflow, Length, Quality는 이미지별 요청 스냅샷으로 저장</span></div><button className="v3-primary-button" type="button" disabled={!selected.length || busy} onClick={() => void submit()}>{busy ? "등록 중..." : `선택 ${selected.length}건 RunPod 요청`}</button></div>
-        <div className="v3-runpod-filter-bar">{canManageRequests ? <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value={ALL_WORKERS_FILTER}>전체 작업자</option>{visibleWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}</select></label> : null}<label>워크플로우<select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)}><option value={ALL_WORKFLOWS_FILTER}>전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowName(workflow, workflow.id)}</option>)}</select></label><label>상태<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>{REQUEST_STATUS_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}</select></label><label>Quality<select value={resolutionTier} onChange={(event) => setResolutionTier(event.target.value as ResolutionTier)}>{RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value}>{tier.label}</option>)}</select></label></div>
+        <div className="v3-runpod-filter-bar">{canManageRequests ? <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value={ALL_WORKERS_FILTER}>전체 작업자</option>{visibleWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}</select></label> : null}<label>워크플로우<select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)}><option value={ALL_WORKFLOWS_FILTER}>전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowName(workflow, workflow.id)}</option>)}</select></label><label>상태<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>{REQUEST_STATUS_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}</select></label><label>Quality<select value={resolutionTier} onChange={(event) => setResolutionTier(event.target.value as ResolutionTier)}>{RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value} disabled={tier.value === "hd" && hdDisabledForSelection}>{tier.label}</option>)}</select></label></div>
         {!rows.length ? <div className="v3-empty-panel">표시할 미완료 RunPod 요청이 없습니다.</div> : <div className="v3-runpod-request-table"><div className="v3-runpod-request-head"><input type="checkbox" checked={selectable.length > 0 && selected.length === selectable.length} onChange={(event) => setSelected(event.target.checked ? selectable.flatMap((item) => item.promptDraftId ? [item.promptDraftId] : []) : [])} /><span>이미지</span><span>입력 파일</span><span>작업자</span><span>Prompt Batch ID</span><span>Item No.</span><span>Positive Prompt</span><span>Workflow</span><span>Length</span><span>Quality</span><span>상태</span></div>{rows.map((draft) => {
           const workflow = workflows.find((item) => item.id === draft.workflowId);
           const supported = (workflow?.keyframeCount || 1) === 1;
@@ -211,7 +237,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
           const draftId = draft.promptDraftId || "";
           const selectedWorkflowId = workflowOverrides[draftId] || draft.workflowId;
           const editable = draft.canSubmit && Boolean(draftId);
-          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><span className="v3-runpod-prompt-cell">{draft.positivePrompt}</span><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div><span className="v3-runpod-tier">{draft.resolutionTier || resolutionTier}</span><span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span></article>;
+          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><span className="v3-runpod-prompt-cell">{draft.positivePrompt}</span><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div><span className="v3-runpod-tier" title={hdDisabledForItem(draft) ? "원본 픽셀이 409,600 이하라 HD 선택 불가" : undefined}>{resolutionTierForDraft(draft)}</span><span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span></article>;
         })}</div>}
         <div className="v3-pagination"><span className="v3-pagination-meta">{queue?.total ? `${(requestPage - 1) * 10 + 1}-${Math.min(requestPage * 10, queue.total)} / ${queue.total}건` : "0건"} · 페이지당 10건</span><div className="v3-pagination-controls"><button className="v3-page-button" type="button" disabled={requestPage <= 1 || busy} onClick={() => { const next = requestPage - 1; setRequestPage(next); void load(false, next); }}>이전</button><span className="v3-pagination-meta">{requestPage} / {Math.max(1, Math.ceil((queue?.total || 0) / 10))}</span><button className="v3-page-button" type="button" disabled={busy || requestPage >= Math.max(1, Math.ceil((queue?.total || 0) / 10))} onClick={() => { const next = requestPage + 1; setRequestPage(next); void load(false, next); }}>다음</button></div></div>
       </section>

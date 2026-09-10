@@ -95,7 +95,25 @@ function formatRunpodHistoryTime(totalSeconds?: number | string | null) {
   const total = Math.round(value);
   const minutes = String(Math.floor(total / 60)).padStart(2, "0");
   const seconds = String(total % 60).padStart(2, "0");
-  return `${minutes}.${seconds}`;
+  return `${minutes}:${seconds}`;
+}
+
+function formatRunpodHistoryDate(value?: string | null) {
+  if (!value) return "-";
+  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
+  const date = new Date(normalized);
+  const parts = Number.isNaN(date.getTime()) ? null : new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date).reduce<Record<string, string>>((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  if (parts?.year && parts.month && parts.day) return `${parts.year}:${parts.month}:${parts.day}`;
+  const fallback = String(value).match(/(\d{4})[-:/](\d{2})[-:/](\d{2})/);
+  return fallback ? `${fallback[1]}:${fallback[2]}:${fallback[3]}` : String(value).slice(0, 10);
 }
 
 function batchZipDownloadName(batch: BatchJobResponse) {
@@ -104,7 +122,7 @@ function batchZipDownloadName(batch: BatchJobResponse) {
   return `${base}_output.zip`;
 }
 
-const RUNPOD_HISTORY_GRID = "32px 36px minmax(58px, .55fr) minmax(82px, .7fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(62px, .45fr) minmax(62px, .45fr) minmax(88px, .55fr) 52px";
+const RUNPOD_HISTORY_GRID = "32px 36px minmax(44px, .28fr) minmax(58px, .35fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(110px, .85fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(62px, .45fr) minmax(62px, .45fr) minmax(88px, .55fr) 52px";
 
 // E-03 · 3a "작업 이력" — design_handoff_dobedub_v3/3 Review.dc.html의 첫 화면.
 // 목록·페이지네이션·삭제는 B-01/C-03에서 이미 완성된 로직(loadHistoryPage,
@@ -712,7 +730,7 @@ export function Create3aScreen({
       </div>
       <div className="v3-card v3-runpod-history-table">
         <div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
-          <span><input type="checkbox" aria-label="현재 페이지 종료 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>KST 실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
+          <span><input type="checkbox" aria-label="현재 페이지 종료 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
         {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {runpodHistoryNotice ? <p className={runpodHistoryNoticeKind === "success" ? "v3-inline-success" : "v3-inline-error"} style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
@@ -730,6 +748,7 @@ export function Create3aScreen({
           const resultStatusTone = runpodResultStatusTone(item.status);
           const reworkInFlight = reworkingRunpodTaskIds.includes(item.taskId);
           const displayBatchId = item.batchJobId || item.promptBatchId || "";
+          const runpodJobId = item.runpodJobId || item.runpodResponse?.jobId || "";
           return (
             <div
               key={item.taskId}
@@ -750,7 +769,7 @@ export function Create3aScreen({
               </span>
               <span className="v3-review-seg-name">{rowNo}</span>
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
-              <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatKstHistoryDate(item.timestampUtc || item.timestamp)}</span>
+              <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatRunpodHistoryDate(item.timestampUtc || item.timestamp)}</span>
               <span className="v3-review-prompt" title={item.workflowName || item.workflow || item.workflowId || ""}>{item.workflowName || item.workflow || item.workflowId || "-"}</span>
               <span className="v3-review-prompt" title={displayBatchId}>{displayBatchId || "-"}</span>
               <span className="v3-review-prompt" title={item.promptDraftId || ""}>
@@ -767,6 +786,8 @@ export function Create3aScreen({
                   </button>
                 ) : "-"}
               </span>
+              <span className="v3-review-prompt" title={item.taskId}>{item.taskId || "-"}</span>
+              <span className="v3-review-prompt" title={runpodJobId}>{runpodJobId || "-"}</span>
               <span>
                 <span className={`v3-status-badge ${resultStatusTone}`}>{resultStatusLabel}</span>
               </span>

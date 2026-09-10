@@ -14,6 +14,7 @@ from backend.app.services.workflow_patch_service import normalize_resolution_tie
 
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
+SD_PIXEL_LIMIT = 409_600
 
 
 def create_request_batch(
@@ -49,8 +50,13 @@ def create_request_batch(
         draft = by_id[requested["promptDraftId"]]
         if str(draft.status).upper() != "READY" or not str(draft.positive_prompt or "").strip():
             raise ValueError("완료된 Positive Prompt가 있는 초안만 RunPod 요청에 추가할 수 있습니다.")
-        if db.get(Asset, draft.asset_id) is None:
+        asset = db.get(Asset, draft.asset_id)
+        if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
+        if requested["resolutionTier"] == "hd":
+            pixel_count = _asset_pixel_count(asset)
+            if pixel_count is not None and pixel_count <= SD_PIXEL_LIMIT:
+                raise ValueError("원본 픽셀이 409,600 이하인 이미지는 HD Quality를 선택할 수 없습니다.")
 
     batch = _existing_batch_job_request_batch(db, batch_job_id=batch_job_id, created_by=created_by)
     if batch is None:
@@ -457,12 +463,7 @@ def _request_queue_entries(
             "promptDraftId": draft.id,
             "promptBatchId": draft.prompt_batch_id,
             "assetId": draft.asset_id,
-            "asset": {
-                "fileName": asset.file_name,
-                "mimeType": asset.mime_type,
-                "imageWidth": asset.image_width,
-                "imageHeight": asset.image_height,
-            } if asset else None,
+            "asset": _asset_payload(asset),
             "workflowId": draft.workflow_id,
             "positivePrompt": str(draft.positive_prompt or ""),
             "negativePrompt": draft.negative_prompt,
@@ -669,12 +670,7 @@ def _item_payload(
         "sequenceNo": item.sequence_no,
         "promptDraftId": item.prompt_draft_id,
         "assetId": item.asset_id,
-        "asset": {
-            "fileName": asset.file_name,
-            "mimeType": asset.mime_type,
-            "imageWidth": asset.image_width,
-            "imageHeight": asset.image_height,
-        } if asset else None,
+        "asset": _asset_payload(asset),
         "workflowId": item.workflow_id,
         "positivePrompt": item.positive_prompt,
         "negativePrompt": item.negative_prompt,
@@ -687,6 +683,38 @@ def _item_payload(
         "workerId": worker_id,
         "workerName": worker_name,
     }
+
+
+def _asset_payload(asset: Asset | None) -> dict | None:
+    if asset is None:
+        return None
+    width, height = _asset_dimensions(asset)
+    return {
+        "fileName": asset.file_name,
+        "mimeType": asset.mime_type,
+        "imageWidth": width,
+        "imageHeight": height,
+    }
+
+
+def _asset_pixel_count(asset: Asset) -> int | None:
+    width, height = _asset_dimensions(asset)
+    return width * height if width and height else None
+
+
+def _asset_dimensions(asset: Asset) -> tuple[int | None, int | None]:
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    width = _positive_int(asset.image_width) or _positive_int(metadata.get("imageWidth")) or _positive_int(metadata.get("width"))
+    height = _positive_int(asset.image_height) or _positive_int(metadata.get("imageHeight")) or _positive_int(metadata.get("height"))
+    return width, height
+
+
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _user_name(db: Session, user_id: str | None) -> str | None:
