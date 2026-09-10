@@ -71,6 +71,7 @@ def record_job_status(job: dict, *, resolve_asset: Callable[[str], tuple[dict, P
 # 테이블을 읽던 이전 시그니처는 호출부가 실수하기 쉬웠고, 실제로 prompt_options()가
 # 그 경로로 workflow_tasks 전체를 메모리에 올려 ECS OOM을 냈다.
 MAX_HISTORY_PAGE_SIZE = 200
+MAX_HISTORY_SELECTION_SIZE = 1000
 
 
 def task_history_items(
@@ -83,6 +84,7 @@ def task_history_items(
     date_from: str = "",
     date_to: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> list[dict]:
     session = SessionLocal()
     try:
@@ -95,6 +97,7 @@ def task_history_items(
             date_from=date_from,
             date_to=date_to,
             batch_job_id=batch_job_id,
+            job_id=job_id,
         )
         id_statement = (
             select(WorkflowTask.id)
@@ -149,6 +152,7 @@ def task_history_total(
     date_from: str = "",
     date_to: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> int:
     session = SessionLocal()
     try:
@@ -159,6 +163,7 @@ def task_history_total(
             date_from=date_from,
             date_to=date_to,
             batch_job_id=batch_job_id,
+            job_id=job_id,
         )
         statement = (
             select(func.count())
@@ -192,6 +197,7 @@ def task_history_stats(
     date_from: str = "",
     date_to: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> dict[str, int]:
     session = SessionLocal()
     try:
@@ -202,6 +208,7 @@ def task_history_stats(
             date_from=date_from,
             date_to=date_to,
             batch_job_id=batch_job_id,
+            job_id=job_id,
         )
         rows = session.execute(
             select(WorkflowTask.status, func.count())
@@ -234,6 +241,7 @@ def _history_filter_conditions(
     date_from: str = "",
     date_to: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> list:
     conditions = [WorkflowTask.deleted_at.is_(None)]
     if workflow_id:
@@ -250,6 +258,11 @@ def _history_filter_conditions(
             )
             .exists(),
         ))
+    if job_id:
+        conditions.append(or_(
+            WorkflowTask.id == job_id,
+            WorkflowTask.runpod_job_id == job_id,
+        ))
     from_value = _parse_history_date_boundary(date_from, end_of_day=False)
     if from_value is not None:
         conditions.append(WorkflowTask.created_at >= from_value)
@@ -260,6 +273,42 @@ def _history_filter_conditions(
     if result_condition is not None:
         conditions.append(result_condition)
     return conditions
+
+
+def task_history_selection_ids(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
+) -> dict[str, object]:
+    """Return bounded terminal task IDs for cross-page history selection."""
+    session = SessionLocal()
+    try:
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
+        )
+        rows = list(session.scalars(
+            select(WorkflowTask.id)
+            .where(*conditions, WorkflowTask.status.in_(TERMINAL_STATES))
+            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+            .limit(MAX_HISTORY_SELECTION_SIZE + 1)
+        ))
+        return {
+            "taskIds": rows[:MAX_HISTORY_SELECTION_SIZE],
+            "truncated": len(rows) > MAX_HISTORY_SELECTION_SIZE,
+        }
+    finally:
+        session.close()
 
 
 def _parse_history_date_boundary(value: str, *, end_of_day: bool) -> datetime | None:
@@ -789,6 +838,33 @@ def active_task_ids() -> list[str]:
                 .order_by(WorkflowTask.created_at.asc())
             )
         )
+    finally:
+        session.close()
+
+
+def pending_output_import_task_ids() -> list[str]:
+    """Return completed RunPod tasks whose manifest-backed output is absent.
+
+    The status monitor owns this retry path, so a delayed RunPod S3 manifest
+    is eventually imported even after every browser has left the page.
+    """
+    session = SessionLocal()
+    try:
+        missing_output = ~select(TaskOutputAsset.id).where(
+            TaskOutputAsset.task_id == WorkflowTask.id,
+        ).exists()
+        return list(session.scalars(
+            select(WorkflowTask.id)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.execution_mode == "runpod",
+                WorkflowTask.runpod_job_id.is_not(None),
+                WorkflowTask.status.in_({"COMPLETED", "SUCCESS"}),
+                missing_output,
+            )
+            .order_by(WorkflowTask.updated_at.asc(), WorkflowTask.id.asc())
+            .limit(20)
+        ))
     finally:
         session.close()
 

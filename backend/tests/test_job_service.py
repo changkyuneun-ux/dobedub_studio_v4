@@ -118,3 +118,26 @@ def test_completed_runpod_status_is_persisted_when_output_save_fails():
     assert job["outputSaveError"] == "S3 write failed"
     assert recorded[0]["status"] == "COMPLETED"
     assert recorded[-1]["runpodStatus"]["outputSaveError"] == "S3 write failed"
+    assert recorded[-1]["runpodStatus"]["outputImportStatus"] == "PENDING"
+
+
+def test_runpod_submission_logs_generation_snapshot_before_provider_request(caplog):
+    payload = {"taskId": "task_submission_log", "workflowId": "1-images_81.json", "resolutionTier": "hd"}
+    runtime = job_service.JobRuntime(
+        jobs={},
+        dry_run=False,
+        prepare_workflow_for_job=lambda _payload: ({}, [], {"generation": [{"nodeId": "98", "width": 832, "height": 480, "length": 81, "resolutionTier": "hd"}]}),
+        build_runpod_payload=lambda _workflow, _images, _payload: {"input": {}},
+        runpod_request=lambda *_args: {"id": "runpod-submission-log"},
+        save_runpod_outputs=lambda *_args: {"assets": [], "remoteUrls": []},
+        append_history=lambda _job: [],
+        build_wan_node_config_snapshot=lambda _workflow_id, _segments: {},
+        hydrate_input_images=lambda _job: [],
+    )
+
+    with caplog.at_level("INFO", logger="backend.app.services.job_service"):
+        job_service.submit_runpod_job(runtime, payload)
+
+    assert "runpod_submission_snapshot" in caplog.text
+    assert '"taskId": "task_submission_log"' in caplog.text
+    assert '"resolutionTier": "hd"' in caplog.text

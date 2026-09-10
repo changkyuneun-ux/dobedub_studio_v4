@@ -25,6 +25,7 @@ from backend.app.services.task_tracking_service import (
     assets_total,
     list_assets,
     record_job_status,
+    pending_output_import_task_ids,
     requeue_task_for_rework,
     restore_existing_job_for_prompt_draft,
     restore_job_from_task,
@@ -130,6 +131,7 @@ def paginated_history(
     date_from: str = "",
     date_to: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
@@ -139,6 +141,7 @@ def paginated_history(
     date_from = str(date_from or "").strip()
     date_to = str(date_to or "").strip()
     batch_job_id = str(batch_job_id or "").strip()
+    job_id = str(job_id or "").strip()
     return {
         "items": task_history_items(
             page,
@@ -149,6 +152,7 @@ def paginated_history(
             date_from=date_from,
             date_to=date_to,
             batch_job_id=batch_job_id,
+            job_id=job_id,
         ),
         "page": page,
         "pageSize": page_size,
@@ -159,6 +163,7 @@ def paginated_history(
             date_from=date_from,
             date_to=date_to,
             batch_job_id=batch_job_id,
+            job_id=job_id,
         ),
     }
 
@@ -171,6 +176,7 @@ def paginated_runpod_history(
     worker_id: str = "",
     run_date: str = "",
     batch_job_id: str = "",
+    job_id: str = "",
 ) -> dict:
     """Return the dedicated RunPod-history contract with its fixed 10-row page."""
     run_date = str(run_date or "").strip()
@@ -183,6 +189,7 @@ def paginated_runpod_history(
         date_from=run_date,
         date_to=run_date,
         batch_job_id=batch_job_id,
+        job_id=job_id,
     )
     response["stats"] = task_history_stats(
         workflow_id=workflow_id,
@@ -191,6 +198,7 @@ def paginated_runpod_history(
         date_from=run_date,
         date_to=run_date,
         batch_job_id=batch_job_id,
+        job_id=job_id,
     )
     return response
 
@@ -1312,7 +1320,7 @@ def monitor_active_jobs() -> dict:
     because the status API had a transient error.
     """
     dispatch = dispatch_next_queued_job()
-    task_ids = active_task_ids()
+    task_ids = list(dict.fromkeys([*active_task_ids(), *pending_output_import_task_ids()]))
     failures: list[str] = []
     for task_id in task_ids:
         try:

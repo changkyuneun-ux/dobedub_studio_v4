@@ -64,6 +64,7 @@ def runpod_history(
     workerId: str = "",
     runDate: str = "",
     batchId: str = "",
+    jobId: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
     """RunPod task history, deliberately fixed to 10 rows per page."""
@@ -74,6 +75,29 @@ def runpod_history(
         worker_id=workerId,
         run_date=runDate,
         batch_job_id=batchId,
+        job_id=jobId,
+    )
+
+
+@router.get("/runpod/selection")
+def runpod_history_selection(
+    workflowId: str = "",
+    resultStatus: str = "",
+    workerId: str = "",
+    runDate: str = "",
+    batchId: str = "",
+    jobId: str = "",
+    _: CurrentUser = Depends(require_permission("history:read")),
+):
+    """Resolve all terminal task IDs for the current history filter."""
+    return task_tracking_service.task_history_selection_ids(
+        workflow_id=workflowId,
+        result_status=resultStatus,
+        worker_id=workerId,
+        date_from=runDate,
+        date_to=runDate,
+        batch_job_id=batchId,
+        job_id=jobId,
     )
 
 

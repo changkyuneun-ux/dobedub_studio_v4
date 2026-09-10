@@ -9,7 +9,7 @@ from sqlalchemy.exc import OperationalError
 from backend.app.core.security import create_access_token
 from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, TaskOutputAsset, User, WorkflowTask
 from backend.app.db.session import SessionLocal
-from backend.app.services.task_tracking_service import active_task_ids
+from backend.app.services.task_tracking_service import active_task_ids, pending_output_import_task_ids
 from pathlib import Path
 
 
@@ -480,6 +480,60 @@ def test_runpod_history_filters_by_workflow(api_client):
     body = response.json()
     assert body["total"] == 1
     assert [item["taskId"] for item in body["items"]] == ["task_history_workflow_b"]
+
+
+def test_runpod_history_filters_by_studio_task_id_or_runpod_job_id(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            WorkflowTask(id="task_lookup_studio", runpod_job_id="runpod-lookup-a", workflow_id="1-images_81.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_lookup_other", runpod_job_id="runpod-lookup-b", workflow_id="1-images_81.json", status="COMPLETED", worker_name="History User", user_id="history-user", payload_json={}),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    studio_task = api_client.get("/api/history/runpod?page=1&jobId=task_lookup_studio", headers=_authorized_headers())
+    runpod_job = api_client.get("/api/history/runpod?page=1&jobId=runpod-lookup-b", headers=_authorized_headers())
+
+    assert [item["taskId"] for item in studio_task.json()["items"]] == ["task_lookup_studio"]
+    assert [item["taskId"] for item in runpod_job.json()["items"]] == ["task_lookup_other"]
+
+
+def test_runpod_history_selection_returns_terminal_ids_for_all_filtered_pages(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(
+            id="history-user",
+            name="History User",
+            email=None,
+            role="SUPER_ADMIN",
+            permissions_json=["admin:*"],
+            is_active=True,
+        ))
+        session.add_all([
+            WorkflowTask(id="task_select_1", workflow_id="1-images_81.json", status="COMPLETED", batch_job_id="batch_select_all", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_select_2", workflow_id="1-images_81.json", status="FAILED", batch_job_id="batch_select_all", worker_name="History User", user_id="history-user", payload_json={}),
+            WorkflowTask(id="task_select_active", workflow_id="1-images_81.json", status="IN_PROGRESS", batch_job_id="batch_select_all", worker_name="History User", user_id="history-user", payload_json={}),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.get("/api/history/runpod/selection?batchId=batch_select_all", headers=_authorized_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["taskIds"]) == {"task_select_1", "task_select_2"}
+    assert body["truncated"] is False
 
 
 def test_runpod_history_filters_by_result_status_and_workflow(api_client):
@@ -1056,6 +1110,32 @@ def test_monitor_keeps_transient_runpod_status_errors_retryable(db_session, monk
     assert "task_transient_runpod_error" in active_task_ids()
 
 
+def test_monitor_retries_completed_tasks_with_pending_output_import(db_session, monkeypatch):
+    from backend.app.services import studio_api_service
+
+    studio_api_service.JOBS.clear()
+    db_session.add(WorkflowTask(
+        id="task_pending_manifest",
+        runpod_job_id="runpod-pending-manifest",
+        workflow_id="1-images_81.json",
+        execution_mode="runpod",
+        status="COMPLETED",
+        progress=100,
+        runpod_status_json={"status": "COMPLETED", "outputImportStatus": "PENDING"},
+        payload_json={},
+    ))
+    db_session.commit()
+    monkeypatch.setattr(studio_api_service, "dispatch_next_queued_job", lambda: {"status": "idle"})
+    checked: list[str] = []
+    monkeypatch.setattr(studio_api_service, "job_status", lambda task_id: checked.append(task_id) or {})
+
+    result = studio_api_service.monitor_active_jobs()
+
+    assert pending_output_import_task_ids() == ["task_pending_manifest"]
+    assert result["checked"] == 1
+    assert checked == ["task_pending_manifest"]
+
+
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     screen = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
@@ -1072,8 +1152,9 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert 'query.set("dateFrom", params.dateFrom)' not in runpod_history_client
     assert 'query.set("dateTo", params.dateTo)' not in runpod_history_client
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId })" in screen
-    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId })" in screen
+    assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId, jobId: runpodJobSearch.trim() })" in screen
     assert 'query.set("batchId", params.batchId)' in client
+    assert 'query.set("jobId", params.jobId)' in client
     assert "v3-runpod-history-toolbar" in screen
     assert "v3-runpod-history-actions" in screen
     assert "runpodWorkerFilter" in screen
@@ -1082,6 +1163,7 @@ def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:
     assert "runpodDateTo" not in screen
     assert "batchSearchText" in screen
     assert "selectedBatchJobId" in screen
+    assert "runpodJobSearch" in screen
     assert "selectedPromptHistoryDraftId" in screen
     assert "setItems(response.items)" in screen
     assert "useEffect(() => {\n    selectPromptHistoryItem(items[0] || null);\n  }, [items]);" in screen

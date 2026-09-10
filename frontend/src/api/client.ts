@@ -1215,7 +1215,7 @@ export const apiClient = {
     if (params.batchId) query.set("batchId", params.batchId);
     return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
   },
-  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string } = {}) => {
+  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string; jobId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
     query.set("pageSize", "10");
@@ -1224,7 +1224,18 @@ export const apiClient = {
     if (params.workerId) query.set("workerId", params.workerId);
     if (params.runDate) query.set("runDate", params.runDate);
     if (params.batchId) query.set("batchId", params.batchId);
+    if (params.jobId) query.set("jobId", params.jobId);
     return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
+  },
+  runpodHistorySelection: (params: { workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string; jobId?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    if (params.resultStatus) query.set("resultStatus", params.resultStatus);
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.runDate) query.set("runDate", params.runDate);
+    if (params.batchId) query.set("batchId", params.batchId);
+    if (params.jobId) query.set("jobId", params.jobId);
+    return requestJson<{ taskIds: string[]; truncated: boolean }>(`/api/history/runpod/selection?${query.toString()}`);
   },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
   // 2026-08-11: Asset 관리 통합 - collectionId/uncategorized 필터 추가(사이드바

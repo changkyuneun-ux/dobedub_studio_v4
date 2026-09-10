@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import logging
 import time
 import uuid
@@ -64,6 +65,16 @@ def normalize_payload_resolution_tier(payload: dict) -> str:
 
 def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     workflow, images, patch_summary = runtime.prepare_workflow_for_job(payload)
+    LOGGER.info(
+        "runpod_submission_snapshot %s",
+        json.dumps({
+            "event": "runpod_submission_snapshot",
+            "taskId": str(payload.get("taskId") or ""),
+            "workflowId": str(payload.get("workflowId") or ""),
+            "resolutionTier": str(payload.get("resolutionTier") or "sd"),
+            "generation": (patch_summary or {}).get("generation") or [],
+        }, ensure_ascii=True, sort_keys=True),
+    )
     response = runtime.runpod_request("POST", "/run", _build_runpod_payload(runtime, workflow, images, payload))
     runpod_job_id = response.get("id")
     if not runpod_job_id:
@@ -206,6 +217,8 @@ def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
     if state == "COMPLETED":
         # The provider terminal state must survive even when output registration
         # (S3/local storage or asset DB writes) has a separate failure.
+        job["runpodStatus"] = {**runpod_status, "outputImportStatus": "PENDING"}
+        job["outputImportStatus"] = "PENDING"
         record_job(runtime, job)
         _save_completed_outputs_safely(runtime, job, runpod_status)
     else:
@@ -231,6 +244,10 @@ def _save_completed_outputs_if_needed(runtime: JobRuntime, job: dict, runpod_sta
     job["outputImportStatus"] = "COMPLETED"
     job.pop("outputSaveError", None)
     if isinstance(job.get("runpodStatus"), dict):
+        job["runpodStatus"] = {
+            **job["runpodStatus"],
+            "outputImportStatus": "COMPLETED",
+        }
         job["runpodStatus"].pop("outputSaveError", None)
     record_job(runtime, job)
 
@@ -243,7 +260,11 @@ def _save_completed_outputs_safely(runtime: JobRuntime, job: dict, runpod_status
         job["outputImportStatus"] = "PENDING"
         job["outputSaveError"] = error
         if isinstance(job.get("runpodStatus"), dict):
-            job["runpodStatus"]["outputSaveError"] = error
+            job["runpodStatus"] = {
+                **job["runpodStatus"],
+                "outputSaveError": error,
+                "outputImportStatus": "PENDING",
+            }
         LOGGER.exception("RunPod job completed but output persistence failed: task=%s", job.get("taskId"))
         record_job(runtime, job)
 
