@@ -29,16 +29,17 @@ def _draft(
     frames: int = 81,
     batch_job_id: str | None = None,
     negative: str | None = "blur",
+    workflow_id: str = "1-images_81.json",
 ) -> ImagePromptDraft:
     return ImagePromptDraft(
         id=draft_id,
         asset_id=asset_id,
-        workflow_id="1-images_81.json",
+        workflow_id=workflow_id,
         slot_index=1,
         status="READY",
         provider="grok",
         model="grok-test",
-        instruction_version="1-images_81.json@1",
+        instruction_version=f"{workflow_id}@1",
         positive_prompt=positive,
         negative_prompt=negative,
         requested_frames=frames,
@@ -114,6 +115,33 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     assert config["fps"] == 16
     assert config["output_fps"] == 16
     assert job_payload["resolutionTier"] == "hd"
+
+
+def test_request_batch_canonicalizes_legacy_draft_workflow_for_retries(db_session):
+    db_session.add_all([
+        _asset("asset_request_legacy_workflow"),
+        _draft(
+            "asset_request_legacy_workflow",
+            draft_id="draft_request_legacy_workflow",
+            positive="legacy prompt",
+            workflow_id="1-images_10s_chain.json",
+        ),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_legacy_workflow", "requestedFrames": 81, "resolutionTier": "hd"}],
+    )
+
+    assert batch["workflowId"] == "1-images_10s_chain_81.json"
+    assert batch["items"][0]["workflowId"] == "1-images_10s_chain_81.json"
+    item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.prompt_draft_id == "draft_request_legacy_workflow")
+    )
+    assert item is not None
+    assert item.workflow_id == "1-images_10s_chain_81.json"
 
 
 def test_request_item_job_payload_uses_metadata_dimensions_when_asset_columns_are_empty(db_session):

@@ -689,3 +689,12 @@ def test_runpod_request_and_batch_zip_payload_include_resolution_tier() -> None:
     assert "resolutionTier," in batch_screen.split("createBatchJobFromZip", 1)[1]
     assert "Quality" in runpod_screen
     assert "Quality" in batch_screen
+
+
+def test_runpod_request_screen_renders_item_failure_message() -> None:
+    runpod_screen = Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "draft.failureMessage" in runpod_screen
+    assert "v3-runpod-failure-message" in runpod_screen
+    assert ".v3-runpod-failure-message" in css

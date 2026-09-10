@@ -26,6 +26,10 @@ WAN_MAX_FRAMES = 81
 WAN_MAX_TOTAL_FRAMES = 162
 
 
+def _format_pixel_count(value: int) -> str:
+    return f"{int(value):,}px"
+
+
 def normalize_resolution_tier(tier: str | None) -> str:
     normalized = str(tier or "sd").strip().lower()
     if normalized not in WAN_PIXEL_BUDGET:
@@ -98,7 +102,15 @@ def wan_image_to_video_generation_snapshot(workflow: dict, *, tier: str = "sd") 
         if width % WAN_MULTIPLE or height % WAN_MULTIPLE:
             raise ValueError(f"{class_type} node {node_id} width/height must be multiples of {WAN_MULTIPLE}.")
         if pixel_count > budget:
-            raise ValueError(f"{class_type} node {node_id} pixel count {pixel_count} exceeds {normalized_tier} budget {budget}.")
+            tier_label = normalized_tier.upper()
+            if normalized_tier == "sd" and pixel_count <= WAN_PIXEL_BUDGET["hd"]:
+                action = "Quality를 HD로 변경하거나 워크플로우 해상도를 낮춰 다시 요청하세요."
+            else:
+                action = "워크플로우 해상도를 낮춰 다시 요청하세요."
+            raise ValueError(
+                f"{class_type} node {node_id}: 요청 픽셀 {_format_pixel_count(pixel_count)}가 "
+                f"{tier_label} 한도 {_format_pixel_count(budget)}를 초과했습니다. {action}"
+            )
         if length == 161:
             raise ValueError(f"{class_type} node {node_id} length=161 is prohibited.")
         if length > WAN_MAX_FRAMES:
@@ -514,8 +526,8 @@ def prepare_workflow_for_job(
     build_runpod_images: Callable[[dict], list[dict]],
     existing_save_video_outputs: Callable[[dict, str, list[dict]], dict],
 ) -> tuple[dict, list[dict], dict]:
-    workflow_id = payload.get("workflowId") or "unknown"
-    assert_workflow_selectable(workflow_id)
+    workflow_id = assert_workflow_selectable(payload.get("workflowId") or "unknown")
+    payload["workflowId"] = workflow_id
     resolution_tier = normalize_resolution_tier(payload.get("resolutionTier"))
     workflow = workflow_parser.load_workflow(workflow_id, workflows_dir)
     segments = workflow_parser.find_segments(workflow)

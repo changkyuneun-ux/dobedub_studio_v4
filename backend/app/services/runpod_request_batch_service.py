@@ -11,6 +11,7 @@ from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.services import workflow_service
 from backend.app.services.workflow_patch_service import normalize_resolution_tier
+from backend.app.services.workflow_visibility import canonical_workflow_id
 
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
@@ -60,10 +61,13 @@ def create_request_batch(
 
     batch = _existing_batch_job_request_batch(db, batch_job_id=batch_job_id, created_by=created_by)
     if batch is None:
+        first_workflow_id = canonical_workflow_id(
+            normalized_items[0]["workflowId"] or by_id[normalized_items[0]["promptDraftId"]].workflow_id
+        )
         batch = RunpodRequestBatch(
             id=f"rpb_{uuid.uuid4().hex[:16]}",
             # Kept for legacy consumers; every item still retains its own workflow.
-            workflow_id=normalized_items[0]["workflowId"] or by_id[normalized_items[0]["promptDraftId"]].workflow_id,
+            workflow_id=first_workflow_id,
             requested_count=0,
             status="QUEUED",
             queued_count=0,
@@ -97,7 +101,7 @@ def create_request_batch(
         if batch_job_id and requested["promptDraftId"] in existing_draft_ids:
             continue
         draft = by_id[requested["promptDraftId"]]
-        workflow_id = requested["workflowId"] or draft.workflow_id
+        workflow_id = canonical_workflow_id(requested["workflowId"] or draft.workflow_id)
         if workflow_id not in default_negatives_by_workflow:
             default_negatives_by_workflow[workflow_id] = _workflow_default_negative_prompt(workflow_id)
         negative_prompt = str(draft.negative_prompt or "").strip() or default_negatives_by_workflow[workflow_id] or None
@@ -387,7 +391,8 @@ def _request_queue_entries(
     if created_by:
         batch_statement = batch_statement.where(RunpodRequestBatch.created_by == created_by)
     if workflow_id:
-        batch_statement = batch_statement.where(RunpodRequestItem.workflow_id == workflow_id)
+        workflow_names = _workflow_filter_names(workflow_id)
+        batch_statement = batch_statement.where(RunpodRequestItem.workflow_id.in_(workflow_names))
 
     entries: list[dict] = []
     # 행을 먼저 모은 뒤 참조 자산/task를 한 번에 읽는다. 루프 안에서 항목마다
@@ -450,7 +455,8 @@ def _request_queue_entries(
     if created_by:
         draft_statement = draft_statement.where(ImagePromptDraft.created_by == created_by)
     if workflow_id:
-        draft_statement = draft_statement.where(ImagePromptDraft.workflow_id == workflow_id)
+        workflow_names = _workflow_filter_names(workflow_id)
+        draft_statement = draft_statement.where(ImagePromptDraft.workflow_id.in_(workflow_names))
     for draft in db.scalars(draft_statement).all():
         if draft.id in requested_draft_ids:
             continue
@@ -464,7 +470,7 @@ def _request_queue_entries(
             "promptBatchId": draft.prompt_batch_id,
             "assetId": draft.asset_id,
             "asset": _asset_payload(asset),
-            "workflowId": draft.workflow_id,
+            "workflowId": canonical_workflow_id(draft.workflow_id),
             "positivePrompt": str(draft.positive_prompt or ""),
             "negativePrompt": draft.negative_prompt,
             "requestedFrames": int(draft.requested_frames or 81),
@@ -671,7 +677,7 @@ def _item_payload(
         "promptDraftId": item.prompt_draft_id,
         "assetId": item.asset_id,
         "asset": _asset_payload(asset),
-        "workflowId": item.workflow_id,
+        "workflowId": canonical_workflow_id(item.workflow_id),
         "positivePrompt": item.positive_prompt,
         "negativePrompt": item.negative_prompt,
         "requestedFrames": item.requested_frames,
@@ -707,6 +713,17 @@ def _asset_dimensions(asset: Asset) -> tuple[int | None, int | None]:
     width = _positive_int(asset.image_width) or _positive_int(metadata.get("imageWidth")) or _positive_int(metadata.get("width"))
     height = _positive_int(asset.image_height) or _positive_int(metadata.get("imageHeight")) or _positive_int(metadata.get("height"))
     return width, height
+
+
+def _workflow_filter_names(workflow_id: str) -> set[str]:
+    canonical_id = canonical_workflow_id(workflow_id)
+    return {str(workflow_id or ""), canonical_id, *_legacy_ids_for_canonical(canonical_id)}
+
+
+def _legacy_ids_for_canonical(workflow_id: str) -> list[str]:
+    from backend.app.services.workflow_visibility import LEGACY_WORKFLOW_ID_MAP
+
+    return [legacy_id for legacy_id, canonical_id in LEGACY_WORKFLOW_ID_MAP.items() if canonical_id == workflow_id]
 
 
 def _positive_int(value) -> int | None:

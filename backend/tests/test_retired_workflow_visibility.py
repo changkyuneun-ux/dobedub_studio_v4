@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.app.services import admin_service, workflow_service
-from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS, assert_workflow_selectable
+from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS, assert_workflow_selectable, canonical_workflow_id
 
 
 REMOVED_WORKFLOW_IDS = {
@@ -46,6 +46,18 @@ def test_unapproved_workflow_cannot_be_used_by_a_direct_request():
         assert_workflow_selectable("Pickme_Workflow.json")
 
 
+@pytest.mark.parametrize(
+    ("legacy_id", "canonical_id"),
+    [
+        ("1-images.json", "1-images_81.json"),
+        ("1-images_10s_chain.json", "1-images_10s_chain_81.json"),
+    ],
+)
+def test_legacy_workflow_ids_are_canonicalized_for_existing_requests(legacy_id, canonical_id):
+    assert canonical_workflow_id(legacy_id) == canonical_id
+    assert assert_workflow_selectable(legacy_id) == canonical_id
+
+
 @pytest.mark.parametrize("workflow_id", sorted(SUPPORTED_WORKFLOW_IDS))
 def test_approved_workflow_can_be_used_by_a_direct_request(workflow_id):
-    assert_workflow_selectable(workflow_id)
+    assert assert_workflow_selectable(workflow_id) == workflow_id

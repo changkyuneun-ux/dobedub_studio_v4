@@ -53,6 +53,24 @@ def test_wan_generation_snapshot_reports_all_nodes_and_rejects_single_161_length
         wan_image_to_video_generation_snapshot(workflow, tier="sd")
 
 
+def test_wan_generation_snapshot_reports_korean_pixel_limit_message():
+    workflow = {
+        "98": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": 720, "height": 720, "length": 81, "batch_size": 1},
+        }
+    }
+
+    with pytest.raises(ValueError) as exc:
+        wan_image_to_video_generation_snapshot(workflow, tier="sd")
+
+    message = str(exc.value)
+    assert "SD 한도" in message
+    assert "518,400px" in message
+    assert "409,600px" in message
+    assert "HD" in message
+
+
 def test_wan_generation_snapshot_rejects_total_length_over_worker_limit():
     workflow = {
         "98": {
