@@ -10,6 +10,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.app.services.workflow_visibility import is_retired_workflow
+
 
 MANIFEST_FILE_NAME = "workflow-seed-manifest.json"
 
@@ -131,10 +133,21 @@ def _prune_inactive_runtime_workflows(runtime_dir: Path, data_dir: Path, result:
         for workflow_id, item in items.items()
         if isinstance(item, dict) and item.get("active") is False
     )
-    if not inactive_ids:
+    retired_ids = {
+        str(workflow_id)
+        for workflow_id in items
+        if is_retired_workflow(workflow_id)
+    }
+    retired_ids.update(
+        path.name
+        for path in runtime_dir.glob("*.json")
+        if not path.name.endswith(".paramconfig.json") and is_retired_workflow(path.name)
+    )
+    pruned_ids = sorted(set(inactive_ids) | retired_ids)
+    if not pruned_ids:
         return set()
 
-    for workflow_id in inactive_ids:
+    for workflow_id in pruned_ids:
         workflow_path = runtime_dir / Path(workflow_id).name
         param_path = runtime_dir / f"{workflow_path.stem}.paramconfig.json"
         removed = False
@@ -151,13 +164,13 @@ def _prune_inactive_runtime_workflows(runtime_dir: Path, data_dir: Path, result:
     defaults_path = data_dir / "segment-defaults.json"
     defaults = _load_json_object(defaults_path)
     changed_defaults = False
-    for workflow_id in inactive_ids:
+    for workflow_id in pruned_ids:
         if workflow_id in defaults:
             defaults.pop(workflow_id, None)
             changed_defaults = True
     if changed_defaults:
         _write_json_object(defaults_path, defaults)
-    return set(inactive_ids)
+    return set(pruned_ids)
 
 
 def workflow_store_status(seed_dir: Path, runtime_dir: Path, data_dir: Path) -> dict:

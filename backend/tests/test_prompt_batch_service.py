@@ -51,7 +51,7 @@ def test_batch_persists_items_and_grok_attempt_metadata(db_session, monkeypatch,
     batch = service.create_prompt_generation_batch(
         db_session,
         {
-            "workflowId": "1-images.json",
+            "workflowId": "1-images_81.json",
             "items": [
                 {"assetId": "asset_1", "slotIndex": 1, "requestedFrames": 81},
                 {"assetId": "asset_2", "slotIndex": 2, "requestedFrames": 49},
@@ -204,7 +204,7 @@ def test_batch_uses_workflow_default_negative_prompt_when_request_is_blank(db_se
     result = service.create_prompt_generation_batch(
         db_session,
         {
-            "workflowId": "1-images.json",
+            "workflowId": "1-images_81.json",
             "items": [
                 {"assetId": "asset_default_negative", "slotIndex": 1, "negativePrompt": "   "},
             ],

@@ -33,12 +33,12 @@ def _draft(
     return ImagePromptDraft(
         id=draft_id,
         asset_id=asset_id,
-        workflow_id="1-images.json",
+        workflow_id="1-images_81.json",
         slot_index=1,
         status="READY",
         provider="grok",
         model="grok-test",
-        instruction_version="1-images.json@1",
+        instruction_version="1-images_81.json@1",
         positive_prompt=positive,
         negative_prompt=negative,
         requested_frames=frames,
@@ -81,7 +81,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         db_session,
         created_by="operator",
         items=[
-            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 81, "resolutionTier": "hd"},
+            {"promptDraftId": "draft_request_1", "workflowId": "wan22_default_81.json", "requestedFrames": 81, "resolutionTier": "hd"},
             {"promptDraftId": "draft_request_2", "requestedFrames": 49},
         ],
     )
@@ -97,8 +97,8 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     snapshot = request_batch_payload(db_session, batch["id"], created_by="operator")
     assert snapshot["requestedCount"] == 2
     assert [(item["workflowId"], item["positivePrompt"], item["requestedFrames"]) for item in snapshot["items"]] == [
-        ("Pickme_Workflow.json", "first prompt", 81),
-        ("1-images.json", "second prompt", 49),
+        ("wan22_default_81.json", "first prompt", 81),
+        ("1-images_81.json", "second prompt", 49),
     ]
     assert [item["resolutionTier"] for item in snapshot["items"]] == ["hd", "sd"]
 

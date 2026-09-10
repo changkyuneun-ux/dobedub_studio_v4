@@ -40,7 +40,7 @@ def test_prompt_history_returns_image_prompt_and_grok_metadata(api_client):
         session.add(ImagePromptDraft(
             id="grok_draft_history_1",
             asset_id="asset_history_prompt",
-            workflow_id="1-images.json",
+            workflow_id="1-images_81.json",
             slot_index=1,
             status="READY",
             provider="grok",
@@ -304,7 +304,7 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
         session.add(WorkflowTask(
             id="task_history_runpod_1",
             runpod_job_id="runpod-job-1",
-            workflow_id="1-images.json",
+            workflow_id="1-images_81.json",
             status="COMPLETED",
             worker_name="History User",
             user_id="history-user",
@@ -327,7 +327,7 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
     assert body["total"] == 1
     item = body["items"][0]
     assert item["taskId"] == "task_history_runpod_1"
-    assert item["workflowName"] == "1-images"
+    assert item["workflowName"] == "1-images_81"
     assert item["promptDraftId"] == "grok_draft_history_1"
     assert item["runpodResponse"] == {
         "filename": "result.mp4",
