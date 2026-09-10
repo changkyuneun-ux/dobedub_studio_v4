@@ -60,6 +60,7 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
   const [queue, setQueue] = useState<RunpodRequestQueueResponse | null>(null);
   const [selected, setSelected] = useState<string[]>(initialWorkspace.selectedDraftIds);
   const [workflowOverrides, setWorkflowOverrides] = useState<Record<string, string>>(initialWorkspace.workflowOverrides);
+  const [qualityOverrides, setQualityOverrides] = useState<Record<string, ResolutionTier>>(initialWorkspace.qualityOverrides || {});
   const [requestBatch, setRequestBatch] = useState<RunpodRequestBatchResponse | null>(null);
   const [requestDashboard, setRequestDashboard] = useState<RunpodRequestDashboardResponse | null>(null);
   const [workerStats, setWorkerStats] = useState<Array<{ workerId?: string | null; workerName?: string | null }>>([]);
@@ -126,9 +127,10 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
     saveRunpodWorkspace(user.id, {
       selectedDraftIds: selected,
       workflowOverrides,
+      qualityOverrides,
       requestBatchId: requestBatch?.id
     });
-  }, [requestBatch?.id, selected, user.id, workflowOverrides]);
+  }, [qualityOverrides, requestBatch?.id, selected, user.id, workflowOverrides]);
 
   const rows = queue?.items || [];
   const selectedDrafts = useMemo(() => selected.flatMap((draftId) => {
@@ -166,7 +168,14 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
 
   function resolutionTierForDraft(draft: RunpodRequestQueueItemResponse): ResolutionTier {
     if (!draft.canSubmit) return draft.resolutionTier || "sd";
-    return hdDisabledForItem(draft) ? "sd" : resolutionTier;
+    const requestedTier = qualityOverrides[draft.promptDraftId || ""] || resolutionTier;
+    return hdDisabledForItem(draft) && requestedTier === "hd" ? "sd" : requestedTier;
+  }
+
+  function updateQuality(draft: RunpodRequestQueueItemResponse, tier: ResolutionTier) {
+    if (!draft.canSubmit || !draft.promptDraftId) return;
+    if (tier === "hd" && hdDisabledForItem(draft)) return;
+    setQualityOverrides((current) => ({ ...current, [draft.promptDraftId!]: tier }));
   }
 
   async function submit() {
@@ -237,7 +246,9 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
           const draftId = draft.promptDraftId || "";
           const selectedWorkflowId = workflowOverrides[draftId] || draft.workflowId;
           const editable = draft.canSubmit && Boolean(draftId);
-          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><span className="v3-runpod-prompt-cell">{draft.positivePrompt}</span><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div><span className="v3-runpod-tier" title={hdDisabledForItem(draft) ? "원본 픽셀이 409,600 이하라 HD 선택 불가" : undefined}>{resolutionTierForDraft(draft)}</span><span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span></article>;
+          const hdDisabled = hdDisabledForItem(draft);
+          const qualityTitle = hdDisabled ? "원본 픽셀이 409,600 이하라 HD 선택 불가" : undefined;
+          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><span className="v3-runpod-prompt-cell">{draft.positivePrompt}</span><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div>{editable ? <select className="v3-runpod-tier-select" aria-label="Quality" title={qualityTitle} value={resolutionTierForDraft(draft)} onChange={(event) => updateQuality(draft, event.target.value as ResolutionTier)}>{RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value} disabled={tier.value === "hd" && hdDisabled}>{tier.label}</option>)}</select> : <span className="v3-runpod-tier" title={qualityTitle}>{resolutionTierForDraft(draft)}</span>}<span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span></article>;
         })}</div>}
         <div className="v3-pagination"><span className="v3-pagination-meta">{queue?.total ? `${(requestPage - 1) * 10 + 1}-${Math.min(requestPage * 10, queue.total)} / ${queue.total}건` : "0건"} · 페이지당 10건</span><div className="v3-pagination-controls"><button className="v3-page-button" type="button" disabled={requestPage <= 1 || busy} onClick={() => { const next = requestPage - 1; setRequestPage(next); void load(false, next); }}>이전</button><span className="v3-pagination-meta">{requestPage} / {Math.max(1, Math.ceil((queue?.total || 0) / 10))}</span><button className="v3-page-button" type="button" disabled={busy || requestPage >= Math.max(1, Math.ceil((queue?.total || 0) / 10))} onClick={() => { const next = requestPage + 1; setRequestPage(next); void load(false, next); }}>다음</button></div></div>
       </section>

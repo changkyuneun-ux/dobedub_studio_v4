@@ -1730,8 +1730,16 @@ def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> d
     )
     summary = {
         "filename": filename or None,
-        "delaySeconds": _find_provider_value(submit_payload, ("delayTime", "delay_time", "delaySeconds")),
-        "executionSeconds": _find_provider_value(provider_payload, ("executionTime", "execution_time", "executionSeconds")),
+        "delaySeconds": _find_provider_duration_seconds(
+            submit_payload,
+            millisecond_keys=("delayTime", "delay_time"),
+            second_keys=("delaySeconds", "delay_seconds"),
+        ),
+        "executionSeconds": _find_provider_duration_seconds(
+            provider_payload,
+            millisecond_keys=("executionTime", "execution_time"),
+            second_keys=("executionSeconds", "execution_seconds"),
+        ),
         "jobId": task.runpod_job_id or _find_provider_value(submit_payload, ("id", "jobId", "job_id")) or None,
     }
     generation = _runpod_generation(provider_payload)
@@ -1752,6 +1760,36 @@ def _runpod_generation(provider_payload: dict) -> list:
         if isinstance(candidate, list):
             return candidate
     return []
+
+
+def _find_provider_duration_seconds(
+    payload: object,
+    *,
+    millisecond_keys: tuple[str, ...],
+    second_keys: tuple[str, ...],
+) -> float | int | str | None:
+    seconds = _find_provider_value(payload, second_keys)
+    if seconds not in (None, ""):
+        return _numeric_duration(seconds)
+    milliseconds = _find_provider_value(payload, millisecond_keys)
+    if milliseconds in (None, ""):
+        return None
+    value = _numeric_duration(milliseconds)
+    if isinstance(value, (int, float)):
+        return round(value / 1000, 3)
+    return value
+
+
+def _numeric_duration(value: object) -> float | int | str:
+    if isinstance(value, bool):
+        return str(value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not number.is_integer():
+        return number
+    return int(number)
 
 
 def _find_provider_value(payload: object, keys: tuple[str, ...]) -> object | None:

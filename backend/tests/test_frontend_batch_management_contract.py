@@ -680,6 +680,10 @@ def test_runpod_request_and_batch_zip_payload_include_resolution_tier() -> None:
     assert "function hdDisabledForItem" in runpod_screen
     assert "const hdDisabledForSelection" in runpod_screen
     assert 'disabled={tier.value === "hd" && hdDisabledForSelection}' in runpod_screen
+    assert "const [qualityOverrides, setQualityOverrides] = useState<Record<string, ResolutionTier>>" in runpod_screen
+    assert 'aria-label="Quality"' in runpod_screen
+    assert 'disabled={tier.value === "hd" && hdDisabled}' in runpod_screen
+    assert "setQualityOverrides" in runpod_screen
     assert "resolutionTierForDraft(draft)" in runpod_screen.split("createRunpodRequestBatch", 1)[1]
     assert "const [resolutionTier, setResolutionTier] = useState<ResolutionTier>(\"sd\");" in batch_screen
     assert "resolutionTier," in batch_screen.split("createBatchJobFromZip", 1)[1]

@@ -1,4 +1,4 @@
-import { GrokImagePromptDraftResponse, PromptGenerationBatchResponse, UploadResponse } from "../api/client";
+import { GrokImagePromptDraftResponse, PromptGenerationBatchResponse, ResolutionTier, UploadResponse } from "../api/client";
 
 export type PromptUploadItem = UploadResponse & { requestedFrames: number };
 
@@ -13,6 +13,7 @@ export type PromptWorkspaceSnapshot = {
 export type RunpodWorkspaceSnapshot = {
   selectedDraftIds: string[];
   workflowOverrides: Record<string, string>;
+  qualityOverrides: Record<string, ResolutionTier>;
   requestBatchId?: string;
 };
 
@@ -47,7 +48,7 @@ export function savePromptWorkspace(userId: string, snapshot: PromptWorkspaceSna
 
 export function loadRunpodWorkspace(userId: string): RunpodWorkspaceSnapshot {
   return load(`${prefix}.runpod.${userId}`, {
-    selectedDraftIds: [], workflowOverrides: {}, requestBatchId: undefined
+    selectedDraftIds: [], workflowOverrides: {}, qualityOverrides: {}, requestBatchId: undefined
   });
 }
 

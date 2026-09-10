@@ -312,8 +312,8 @@ def test_runpod_history_returns_task_and_provider_response(api_client):
             payload_json={},
             config_json={"durationSeconds": 5, "frames": 81, "fps": 16},
             elapsed_seconds=65,
-            runpod_submit_json={"id": "runpod-job-1", "delayTime": 7.5},
-            runpod_status_json={"status": "COMPLETED", "executionTime": 42.25, "output": {"filename": "result.mp4"}},
+            runpod_submit_json={"id": "runpod-job-1", "delayTime": 7500},
+            runpod_status_json={"status": "COMPLETED", "executionTime": 42250, "output": {"filename": "result.mp4"}},
         ))
         session.commit()
     finally:
