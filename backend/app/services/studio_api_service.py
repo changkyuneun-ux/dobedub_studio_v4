@@ -37,6 +37,7 @@ from backend.app.services.task_tracking_service import (
     update_task_prompt_review,
 )
 from backend.app.services.task_policy_service import assert_task_submission_allowed
+from backend.app.services.workflow_visibility import is_ten_second_chain_workflow
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
 from backend.app.services.runpod_request_batch_service import (
     attach_task_to_request_item,
@@ -99,7 +100,8 @@ def _video_config_from_requested_frames(workflow_id: str, requested_frames: int 
         frames = DEFAULT_REQUESTED_FRAMES
     frames = max(1, frames)
     fps = _workflow_default_fps(workflow_id)
-    duration_seconds = max(1, round(frames / fps))
+    chain_multiplier = 2 if is_ten_second_chain_workflow(workflow_id) else 1
+    duration_seconds = max(1, round((frames * chain_multiplier) / fps))
     return {
         "frames": frames,
         "frame_count": frames,

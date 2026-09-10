@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import get_settings
-from backend.app.services.workflow_visibility import is_retired_workflow
+from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS, is_retired_workflow
 
 
 _VALID_ROLES = {"CORE", "ROUTER", "GUIDE"}
@@ -221,26 +221,46 @@ def _load_set() -> dict[str, Any]:
 
 
 def _migrate_retired_default_documents(document_set: dict[str, Any]) -> bool:
-    """Move the old 1-images instruction set to the supported flat WAN workflow.
+    """Copy existing production instructions into every approved workflow.
 
-    Runtime instruction JSON is persisted outside the image, so changing the
-    tracked seed alone would strand existing production instructions on a
-    hidden workflow. The move is idempotent and never overwrites documents an
-    administrator already created for the supported workflow.
+    Runtime instruction JSON is persisted outside the image. Older installs
+    have the documents under ``1-images.json`` while newer installs have them
+    only under ``wan22_default_81.json``. Fill an empty approved set from that
+    existing source without overwriting a set an administrator has edited.
     """
     legacy = _find_workflow(document_set, LEGACY_DEFAULT_WORKFLOW_ID)
-    if legacy is None or not legacy.get("documents"):
+    source = legacy if legacy is not None and legacy.get("documents") else next(
+        (
+            _find_workflow(document_set, workflow_id)
+            for workflow_id in sorted(SUPPORTED_WORKFLOW_IDS)
+            if (_find_workflow(document_set, workflow_id) or {}).get("documents")
+        ),
+        None,
+    )
+    if source is None:
         return False
-    target = _find_workflow(document_set, DEFAULT_WAN_WORKFLOW_ID)
-    if target is not None and target.get("documents"):
-        return False
-    if target is None:
-        target = _get_or_create_workflow(document_set, DEFAULT_WAN_WORKFLOW_ID)
-    target["documents"] = legacy["documents"]
-    target["version"] = max(1, _safe_int(legacy.get("version"), 1))
-    legacy["documents"] = []
-    legacy["version"] = max(1, _safe_int(legacy.get("version"), 1) + 1)
-    return True
+
+    migrated = False
+    source_workflow_id = source["workflowId"]
+    for workflow_id in sorted(SUPPORTED_WORKFLOW_IDS):
+        target = _get_or_create_workflow(document_set, workflow_id)
+        if target.get("documents"):
+            continue
+        target["documents"] = [{
+            **item,
+            "id": f"grok_instruction_{uuid.uuid4().hex[:16]}",
+            "version": 1,
+            "source": f"Migrated from {source_workflow_id}",
+        } for item in source["documents"]]
+        target["version"] = max(1, _safe_int(source.get("version"), 1))
+        validate_instruction_set(target)
+        migrated = True
+
+    if source is legacy:
+        legacy["documents"] = []
+        legacy["version"] = max(1, _safe_int(legacy.get("version"), 1) + 1)
+        migrated = True
+    return migrated
 
 
 def _save_set(document_set: dict[str, Any]) -> None:

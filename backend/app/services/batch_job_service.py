@@ -29,6 +29,7 @@ from backend.app.db.models import (
 from backend.app.db.session import SessionLocal
 from backend.app.services import prompt_batch_service, workflow_service
 from backend.app.services.workflow_patch_service import normalize_resolution_tier
+from backend.app.services.workflow_visibility import is_ten_second_chain_workflow
 from backend.app.services.zip_encoding_service import normalize_zip_path
 
 ALLOWED_FRAMES: frozenset[int] = frozenset({49, 81})
@@ -76,7 +77,8 @@ def resolve_duration_seconds(workflow_id: str, requested_frames: int) -> int:
                     if isinstance(candidate, (int, float)) and not isinstance(candidate, bool) and candidate > 0:
                         fps = int(candidate)
                     break
-    return max(1, round(requested_frames / fps))
+    chain_multiplier = 2 if is_ten_second_chain_workflow(workflow_id) else 1
+    return max(1, round((requested_frames * chain_multiplier) / fps))
 
 
 def _validated_frames(value: Any) -> int:

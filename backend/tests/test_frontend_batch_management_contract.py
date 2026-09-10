@@ -602,6 +602,14 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "Incomplete Dashboard" not in screen
 
 
+def test_batch_job_screen_labels_81_frame_chain_workflows_as_ten_seconds() -> None:
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    assert "TEN_SECOND_CHAIN_WORKFLOW_IDS" in screen
+    assert "81f x 2 · 10초" in screen
+    assert "formatFrameDuration(job.requestedFrames, job.workflowId)" in screen
+
+
 def test_batch_recovery_modal_lists_only_error_items_with_ten_row_pages() -> None:
     screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
 

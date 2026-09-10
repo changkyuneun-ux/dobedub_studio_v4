@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.services import grok_instruction_service as svc
+from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS
 
 
 def _write_set(path: Path, payload: dict) -> None:
@@ -73,14 +74,15 @@ def test_legacy_v1_file_is_promoted_to_default_workflow(tmp_path, monkeypatch):
     assert migrated[svc.LEGACY_DEFAULT_WORKFLOW_ID]["documents"] == []
 
 
-def test_legacy_default_instruction_moves_only_to_supported_wan_workflow(tmp_path, monkeypatch):
+def test_legacy_default_instruction_is_copied_to_every_approved_workflow(tmp_path, monkeypatch):
     target = tmp_path / "grok_instruction_set.json"
     _write_set(target, {"schemaVersion": "1.0", "version": 1, "documents": [
         {"id": "legacy-core", "code": "legacy_core", "title": "legacy", "role": "CORE", "isActive": True, "contentMarkdown": "1-images only"},
     ]})
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    assert "1-images only" in svc.resolve_workflow_instruction_set(svc.DEFAULT_WAN_WORKFLOW_ID)["compiledMarkdown"]
+    for workflow_id in SUPPORTED_WORKFLOW_IDS:
+        assert "1-images only" in svc.resolve_workflow_instruction_set(workflow_id)["compiledMarkdown"]
 
     with pytest.raises(ValueError, match="활성 프롬프트 지시문이 없습니다"):
         svc.resolve_workflow_instruction_set(svc.LEGACY_DEFAULT_WORKFLOW_ID)
@@ -111,9 +113,11 @@ def test_delete_instruction_removes_only_the_selected_workflow_document(tmp_path
     })
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    result = svc.delete_instruction_document(svc.DEFAULT_WAN_WORKFLOW_ID, "guide-1")
+    migrated = svc.list_instruction_documents(svc.DEFAULT_WAN_WORKFLOW_ID)
+    guide_id = next(item["id"] for item in migrated["items"] if item["code"] == "guide")
+    result = svc.delete_instruction_document(svc.DEFAULT_WAN_WORKFLOW_ID, guide_id)
 
-    assert [item["id"] for item in result["items"]] == ["core-1"]
+    assert [item["code"] for item in result["items"]] == ["core"]
     assert [item["id"] for item in svc.list_instruction_documents("3-images.json")["items"]] == ["guide-3"]
 
 
@@ -157,7 +161,7 @@ def test_instruction_source_workflows_only_lists_workflows_with_documents(tmp_pa
     })
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    assert svc.list_instruction_source_workflows() == ["inactive-only.json", svc.DEFAULT_WAN_WORKFLOW_ID]
+    assert set(svc.list_instruction_source_workflows()) == SUPPORTED_WORKFLOW_IDS
 
 
 def test_existing_legacy_documents_move_to_flat_wan_without_overwriting_target(tmp_path, monkeypatch):
@@ -179,3 +183,5 @@ def test_existing_legacy_documents_move_to_flat_wan_without_overwriting_target(t
     stored = json.loads(target.read_text(encoding="utf-8"))
     stored_sets = {item["workflowId"]: item for item in stored["workflowInstructionSets"]}
     assert stored_sets["1-images.json"]["documents"] == []
+    for workflow_id in SUPPORTED_WORKFLOW_IDS:
+        assert stored_sets[workflow_id]["documents"]

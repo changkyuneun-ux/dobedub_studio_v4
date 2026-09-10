@@ -116,7 +116,7 @@
   },
   "93": {
     "inputs": {
-      "text": "",
+      "text": "<<POSITIVE_PROMPT>>",
       "clip": [
         "84",
         0
@@ -132,7 +132,7 @@
       "fps": 16,
       "bit_depth": 8,
       "images": [
-        "87",
+        "206",
         0
       ]
     },
@@ -172,8 +172,8 @@
   },
   "98": {
     "inputs": {
-      "width": 832,
-      "height": 480,
+      "width": 720,
+      "height": 720,
       "length": 81,
       "batch_size": 1,
       "positive": [
@@ -254,7 +254,7 @@
   },
   "108": {
     "inputs": {
-      "filename_prefix": "video/wan22_5s",
+      "filename_prefix": "video/wan22_10s",
       "format": "auto",
       "codec": "auto",
       "video": [
@@ -265,6 +265,139 @@
     "class_type": "SaveVideo",
     "_meta": {
       "title": "비디오 저장"
+    }
+  },
+  "200": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "87",
+        0
+      ],
+      "batch_index": 80,
+      "length": 1
+    }
+  },
+  "201": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "width": 720,
+      "height": 720,
+      "length": 81,
+      "batch_size": 1,
+      "positive": [
+        "93",
+        0
+      ],
+      "negative": [
+        "89",
+        0
+      ],
+      "vae": [
+        "90",
+        0
+      ],
+      "start_image": [
+        "200",
+        0
+      ]
+    }
+  },
+  "202": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 1042184853588323,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": 2,
+      "return_with_leftover_noise": "enable",
+      "model": [
+        "104",
+        0
+      ],
+      "positive": [
+        "201",
+        0
+      ],
+      "negative": [
+        "201",
+        1
+      ],
+      "latent_image": [
+        "201",
+        2
+      ]
+    }
+  },
+  "203": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "disable",
+      "noise_seed": 0,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 2,
+      "end_at_step": 4,
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "103",
+        0
+      ],
+      "positive": [
+        "201",
+        0
+      ],
+      "negative": [
+        "201",
+        1
+      ],
+      "latent_image": [
+        "202",
+        0
+      ]
+    }
+  },
+  "204": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "203",
+        0
+      ],
+      "vae": [
+        "90",
+        0
+      ]
+    }
+  },
+  "205": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "204",
+        0
+      ],
+      "batch_index": 1,
+      "length": 80
+    }
+  },
+  "206": {
+    "class_type": "ImageBatch",
+    "inputs": {
+      "image1": [
+        "87",
+        0
+      ],
+      "image2": [
+        "205",
+        0
+      ]
     }
   }
 }

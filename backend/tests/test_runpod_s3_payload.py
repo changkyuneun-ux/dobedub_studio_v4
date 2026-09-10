@@ -149,7 +149,7 @@ def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_sessi
     monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
     monkeypatch.setenv("WORKFLOWS_DIR", str(tmp_path))
 
-    workflow_path = tmp_path / "s3-i2v.json"
+    workflow_path = tmp_path / "1-images_81.json"
     workflow_path.write_text(json.dumps({
         "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
         "2": {"class_type": "WanImageToVideo", "inputs": {"image": ["1", 0], "width": 832, "height": 480}},
@@ -171,7 +171,7 @@ def test_prepare_workflow_patches_load_image_to_s3_image_name(tmp_path, db_sessi
     db_session.commit()
 
     workflow, images, patch_summary = studio_api_service.prepare_workflow_for_job({
-        "workflowId": "s3-i2v.json",
+        "workflowId": "1-images_81.json",
         "keyframes": [{"index": 1, "uploadId": "asset_s3_input", "fileName": "ignored-source-name.png"}],
         "segments": [],
     })

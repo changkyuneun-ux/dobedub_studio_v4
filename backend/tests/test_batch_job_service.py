@@ -603,6 +603,11 @@ def test_resolve_duration_seconds_falls_back_to_16fps_when_no_output_fps_control
     assert batch_job_service.resolve_duration_seconds("Blowbang1.json", 161) == 10
 
 
+@pytest.mark.parametrize("workflow_id", ["1-images_10s_chain_81.json", "wan22_10s_chain.json"])
+def test_resolve_duration_seconds_counts_both_nodes_of_an_81_frame_chain(workflow_id):
+    assert batch_job_service.resolve_duration_seconds(workflow_id, 81) == 10
+
+
 def test_resolve_duration_seconds_survives_missing_workflow():
     # 워크플로우 파일이 없어도 배치 생성 흐름을 막지 않도록 fallback으로 계산한다.
     assert batch_job_service.resolve_duration_seconds("does-not-exist.json", 81) == 5

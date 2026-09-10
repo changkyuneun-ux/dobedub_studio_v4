@@ -205,15 +205,27 @@ def test_flat_wan_5_second_template_uses_one_81_frame_video_node():
         {
             "nodeId": "98",
             "classType": "WanImageToVideo",
-            "width": 720,
-            "height": 720,
+            "width": 832,
+            "height": 480,
             "length": 81,
             "batchSize": 1,
-            "pixelCount": 518400,
+            "pixelCount": 399360,
             "tier": "hd",
             "pixelBudget": 921600,
         }
     ]
+
+
+@pytest.mark.parametrize("workflow_id", ["1-images_10s_chain_81.json", "wan22_10s_chain.json"])
+def test_flat_wan_10_second_chain_uses_two_81_frame_video_nodes(workflow_id):
+    workflow = json.loads((Path("workflows") / workflow_id).read_text(encoding="utf-8"))
+
+    snapshot = wan_image_to_video_generation_snapshot(workflow, tier="hd")
+
+    assert not any(":" in node_id for node_id in workflow)
+    assert [item["nodeId"] for item in snapshot] == ["98", "201"]
+    assert [item["length"] for item in snapshot] == [81, 81]
+    assert sum(item["length"] for item in snapshot) == 162
 
 
 def test_wan_generation_snapshot_rejects_linked_or_zero_generation_values():

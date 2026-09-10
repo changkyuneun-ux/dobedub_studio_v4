@@ -13,6 +13,7 @@ const PAGE_SIZE = 5;
 const RECOVERY_PAGE_SIZE = 10;
 const DEFAULT_REQUESTED_FRAMES = 81;
 const DEFAULT_FRAME_DURATION_LABEL = "81f · 5초";
+const TEN_SECOND_CHAIN_WORKFLOW_IDS = new Set(["1-images_10s_chain_81.json", "wan22_10s_chain.json"]);
 const PAGE_COUNT_FORMAT_LABEL = "1 / 4 페이지";
 const RESOLUTION_TIERS: Array<{ value: ResolutionTier; label: string }> = [
   { value: "sd", label: "SD · 409K px" },
@@ -25,7 +26,11 @@ function frameSeconds(frames: number) {
   return Math.max(1, Math.round(frames / 16));
 }
 
-function formatFrameDuration(frames: number) {
+function formatFrameDuration(frames: number, workflowId = "") {
+  if (TEN_SECOND_CHAIN_WORKFLOW_IDS.has(workflowId)) {
+    if (frames === DEFAULT_REQUESTED_FRAMES) return "81f x 2 · 10초";
+    return `${frames}f x 2 · ${frameSeconds(frames) * 2}초`;
+  }
   if (frames === DEFAULT_REQUESTED_FRAMES) return DEFAULT_FRAME_DURATION_LABEL;
   return `${frames}f · ${frameSeconds(frames)}초`;
 }
@@ -440,7 +445,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 </button>
               ))}
             </div>
-            <small>{formatFrameDuration(requestedFrames)}</small>
+            <small>{formatFrameDuration(requestedFrames, workflowId)}</small>
           </div>
           <div className="v3-batch-field-card">
             <label>Quality</label>
@@ -453,7 +458,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile || !instructionStatus?.configured} onClick={requestBatchConfirmation}>
               작업 요청
             </button>
-            <small>{selectedZipFile ? selectedZipFile.name : `${formatFrameDuration(requestedFrames)} · ${resolutionTier.toUpperCase()}`}</small>
+            <small>{selectedZipFile ? selectedZipFile.name : `${formatFrameDuration(requestedFrames, workflowId)} · ${resolutionTier.toUpperCase()}`}</small>
           </div>
           <label className="v3-batch-negative-card">
             <span>Built-in Negative Prompt</span>
@@ -550,7 +555,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <td>{formatDateTime(job.createdAt)}</td>
                   <td>{job.createdByName || job.createdBy || "-"}</td>
                   <td><span className={`v3-batch-status-chip is-${batchResultTone(job)}`}>{batchResultLabel(job)}</span></td>
-                  <td>{formatFrameDuration(job.requestedFrames)}</td>
+                  <td>{formatFrameDuration(job.requestedFrames, job.workflowId)}</td>
                   <td>{job.promptCompletedCount} / {job.totalImages}</td>
                   <td>{job.videoCompletedCount} / {job.totalImages}</td>
                   <td>{job.sourceZipFileName || job.sourceDirName || "-"}</td>
@@ -596,7 +601,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <div className="v3-batch-recovery-header">
               <div className="v3-batch-recovery-summary">
                 <strong>{recoveryDetail.batch.id}</strong>
-                <span>{recoveryDetail.batch.sourceZipFileName || recoveryDetail.batch.sourceDirName || "-"} · {recoveryDetail.batch.totalImages}개 항목 · {recoveryDetail.batch.workflowId} · {formatFrameDuration(recoveryDetail.batch.requestedFrames)}</span>
+                <span>{recoveryDetail.batch.sourceZipFileName || recoveryDetail.batch.sourceDirName || "-"} · {recoveryDetail.batch.totalImages}개 항목 · {recoveryDetail.batch.workflowId} · {formatFrameDuration(recoveryDetail.batch.requestedFrames, recoveryDetail.batch.workflowId)}</span>
                 <span>재처리는 기존 Prompt ID와 RunPod Task ID를 유지합니다. 새 ZIP 업로드가 없으면 새 작업 이력을 생성하지 않습니다.</span>
               </div>
               <div className="v3-batch-recovery-actions">
@@ -687,7 +692,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <div className="v3-batch-confirm-summary">
               <div><span>워크플로우</span><strong>{selectedWorkflowLabel}</strong></div>
               <div><span>ZIP 파일명</span><strong>{selectedZipFile?.name || "-"}</strong></div>
-              <div><span>길이</span><strong>{formatFrameDuration(requestedFrames)}</strong></div>
+              <div><span>길이</span><strong>{formatFrameDuration(requestedFrames, workflowId)}</strong></div>
               <div><span>Quality</span><strong>{resolutionTier.toUpperCase()}</strong></div>
               <div><span>Negative Prompt</span><strong>{batchNegativePrompt.trim() || workflowDefaultNegativePrompt || "-"}</strong></div>
             </div>

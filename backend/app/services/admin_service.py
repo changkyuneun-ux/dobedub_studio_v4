@@ -259,7 +259,7 @@ def list_admin_workflows() -> dict:
 def register_admin_workflow(payload: dict) -> dict:
     workflow_id = normalize_workflow_id(payload.get("workflowId") or payload.get("fileName"))
     if is_retired_workflow(workflow_id):
-        raise ValueError("This retired workflow cannot be registered again")
+        raise ValueError("This workflow is not approved for new requests")
     workflow_json = payload.get("workflowJson")
     if not isinstance(workflow_json, dict):
         raise ValueError("workflowJson object is required")
@@ -313,7 +313,7 @@ def register_admin_workflow(payload: dict) -> dict:
 def set_admin_workflow_active(workflow_id: str, active: bool) -> dict:
     workflow_id = normalize_workflow_id(workflow_id)
     if is_retired_workflow(workflow_id):
-        raise ValueError("This retired workflow cannot be activated")
+        raise ValueError("This workflow is not approved for new requests")
     settings = get_settings()
     if not (settings.workflows_dir / workflow_id).exists():
         raise ValueError("Workflow file not found")
