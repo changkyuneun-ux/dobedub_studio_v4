@@ -588,9 +588,14 @@ def _s3_scope_metadata(payload: dict) -> dict[str, str]:
     prompt_batch_id = str(payload.get("promptBatchId") or "").strip()
     if not request_batch_id and not batch_job_id and not job_id:
         raise ValueError("requestBatchId, batchJobId, or jobId is required for S3 upload scope")
-    if (request_batch_id or batch_job_id) and (not request_item_id or not job_id):
+    if request_batch_id and (not request_item_id or not job_id):
         raise ValueError("requestItemId and jobId are required for S3 upload scope")
+    if batch_job_id and not job_id:
+        raise ValueError("jobId is required for batch S3 upload scope")
     if job_id and not request_item_id:
+        # Folder batches deliberately do not create RunPod request items. Their
+        # task id already makes the S3 path unique, so use a storage-only item
+        # token without adding a fake request_item_id to the DB relationship.
         request_item_id = "item_0001"
     metadata = {
         "requestItemId": request_item_id,

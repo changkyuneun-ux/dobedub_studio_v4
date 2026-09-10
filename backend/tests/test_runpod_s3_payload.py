@@ -90,6 +90,29 @@ def test_build_runpod_payload_uses_batch_item_output_prefix(monkeypatch):
     }
 
 
+def test_build_runpod_payload_uses_fallback_item_for_batch_without_request_item(monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+    monkeypatch.setenv("S3_PREFIX", "prod")
+
+    payload = studio_api_service.build_runpod_payload(
+        {"1": {"class_type": "Test"}},
+        [],
+        {
+            "batchJobId": "함승현_Test_260909",
+            "taskId": "task_20260909_173031_429aa5",
+        },
+    )
+
+    assert payload["input"]["output"] == {
+        "mode": "s3",
+        "bucket": "dobedub-studio",
+        "prefix": "prod/batches/함승현_Test_260909/items/item_0001/jobs/task_20260909_173031_429aa5/outputs",
+        "manifestKey": "prod/batches/함승현_Test_260909/items/item_0001/jobs/task_20260909_173031_429aa5/manifests/runpod-result.json",
+        "appJobId": "task_20260909_173031_429aa5",
+    }
+
+
 def test_build_runpod_payload_uses_job_output_prefix_for_direct_tasks(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
