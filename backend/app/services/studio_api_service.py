@@ -5,7 +5,7 @@ import json
 import mimetypes
 import uuid
 from datetime import timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import RLock
 
 from sqlalchemy import func, select
@@ -828,16 +828,23 @@ def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
         return result
     try:
         manifest_key = _s3_job_storage_key({**(job.get("payload") or {}), "taskId": job.get("taskId")}, "manifests/runpod-result.json")
-        with s3_asset_storage().open_read(manifest_key) as stream:
+        storage = s3_asset_storage()
+        with storage.open_read(manifest_key) as stream:
             raw = stream.read()
     except Exception:
         return result
     manifest = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
     output = {"videos": [], "images": [], "gifs": []}
-    for item in manifest.get("outputs") or []:
+    items = [item for item in manifest.get("outputs") or [] if isinstance(item, dict)]
+    total = len(items)
+    for index, item in enumerate(items, start=1):
         normalized = _manifest_output_item(item)
         if not normalized:
             continue
+        kind = _manifest_output_kind(normalized)
+        metadata = output_service.infer_output_metadata(normalized, index, total, job)
+        desired_file_name = output_service.output_file_name(kind, normalized, index, job, metadata, total)
+        normalized = _manifest_output_with_source_filename(storage, normalized, desired_file_name)
         output[_manifest_output_kind(normalized)].append(normalized)
     if not any(output.values()):
         return result
@@ -866,6 +873,26 @@ def _manifest_output_item(item: dict) -> dict | None:
         "mimeType": mime_type,
         "sizeBytes": int(item.get("sizeBytes") or 0),
         "node_id": item.get("node_id") or item.get("nodeId") or item.get("node"),
+    }
+
+
+def _manifest_output_with_source_filename(storage: S3AssetStorage, item: dict, file_name: str) -> dict:
+    safe_name = PurePosixPath(str(file_name or "")).name
+    if not safe_name:
+        return item
+    storage_key = str(item.get("key") or "").strip().lstrip("/")
+    if not storage_key:
+        return item
+    target_key = str(PurePosixPath(storage_key).with_name(safe_name))
+    if target_key == storage_key and item.get("filename") == safe_name:
+        return item
+    stored = storage.copy_stored_object(storage_key, target_key)
+    return {
+        **item,
+        "key": stored.storage_key,
+        "filename": safe_name,
+        "mimeType": item.get("mimeType") or stored.mime_type,
+        "sizeBytes": int(item.get("sizeBytes") or stored.size_bytes or 0),
     }
 
 

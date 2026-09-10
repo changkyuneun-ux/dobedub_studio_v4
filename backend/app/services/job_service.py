@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from backend.app.services.workflow_patch_service import normalize_resolution_tie
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -200,8 +204,12 @@ def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
     job["runpodStatus"] = runpod_status
 
     if state == "COMPLETED":
-        _save_completed_outputs_if_needed(runtime, job, runpod_status)
-    record_job(runtime, job)
+        # The provider terminal state must survive even when output registration
+        # (S3/local storage or asset DB writes) has a separate failure.
+        record_job(runtime, job)
+        _save_completed_outputs_safely(runtime, job, runpod_status)
+    else:
+        record_job(runtime, job)
     return runpod_status, elapsed, progress
 
 
@@ -220,7 +228,22 @@ def _save_completed_outputs_if_needed(runtime: JobRuntime, job: dict, runpod_sta
         else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
     )
     job["outputsSaved"] = True
+    job.pop("outputSaveError", None)
+    if isinstance(job.get("runpodStatus"), dict):
+        job["runpodStatus"].pop("outputSaveError", None)
     record_job(runtime, job)
+
+
+def _save_completed_outputs_safely(runtime: JobRuntime, job: dict, runpod_status: dict) -> None:
+    try:
+        _save_completed_outputs_if_needed(runtime, job, runpod_status)
+    except Exception as exc:
+        error = str(exc)
+        job["outputSaveError"] = error
+        if isinstance(job.get("runpodStatus"), dict):
+            job["runpodStatus"]["outputSaveError"] = error
+        LOGGER.exception("RunPod job completed but output persistence failed: task=%s", job.get("taskId"))
+        record_job(runtime, job)
 
 
 def is_runpod_job_not_found_error(exc: Exception) -> bool:
@@ -279,7 +302,7 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         job["progress"] = progress
         runpod_status = job.get("runpodStatus") or {"status": status}
         if status == "COMPLETED":
-            _save_completed_outputs_if_needed(runtime, job, runpod_status)
+            _save_completed_outputs_safely(runtime, job, runpod_status)
         terminal = True
     elif job.get("executionMode") == "runpod":
         runpod_status, elapsed, progress = poll_runpod_job(runtime, job)

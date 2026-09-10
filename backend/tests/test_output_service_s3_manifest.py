@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from backend.app.services import output_service, studio_api_service
+from backend.app.services.storage_backends import StoredObject
 
 
 def test_save_runpod_outputs_registers_s3_object_without_downloading(tmp_path):
@@ -37,7 +38,7 @@ def test_save_runpod_outputs_registers_s3_object_without_downloading(tmp_path):
     assert saved == {
         "assets": [{
             "assetId": "asset_task_1_001",
-            "fileName": "final.mp4",
+            "fileName": "upload.mp4",
             "downloadUrl": "/api/files/asset_task_1_001",
             "kind": "videos",
             "mimeType": "video/mp4",
@@ -100,6 +101,39 @@ def test_s3_output_asset_ids_are_scoped_to_task(tmp_path):
     assert second["assets"][0]["storageKey"].endswith("/task_b/outputs/asset_output_001/final.mp4")
 
 
+def test_s3_object_output_filename_uses_input_file_stem(tmp_path):
+    def register_asset(path: Path, asset_type: str):
+        raise AssertionError("S3 object outputs must not be downloaded through ECS")
+
+    saved = output_service.save_runpod_outputs(
+        {
+            "output": {
+                "videos": [{
+                    "type": "s3_object",
+                    "assetId": "asset_output_001",
+                    "bucket": "dobedub-studio",
+                    "key": "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/outputs/asset_output_001/final.mp4",
+                    "filename": "final.mp4",
+                    "mimeType": "video/mp4",
+                    "sizeBytes": 123,
+                }]
+            }
+        },
+        {
+            "taskId": "task_1",
+            "payload": {
+                "requestBatchId": "rpb_1",
+                "requestItemId": "rpi_1",
+                "keyframes": [{"fileName": "이미지1.png"}],
+            },
+        },
+        tmp_path,
+        register_asset,
+    )
+
+    assert saved["assets"][0]["fileName"] == "이미지1.mp4"
+
+
 def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_inline_output(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
@@ -134,6 +168,17 @@ def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_
             opened_keys.append(storage_key)
             return ManifestBody()
 
+        def copy_stored_object(self, source_key, target_key):
+            return StoredObject(
+                storage_backend="s3",
+                storage_key=target_key,
+                file_name=Path(target_key).name,
+                mime_type="video/mp4",
+                size_bytes=123,
+                public_url=f"s3://dobedub-studio/{target_key}",
+                bucket="dobedub-studio",
+            )
+
     def unexpected_register_asset(*_args, **_kwargs):
         raise AssertionError("S3 manifest outputs must be registered without ECS downloading media")
 
@@ -147,6 +192,7 @@ def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_
             "payload": {
                 "requestBatchId": "rpb_1",
                 "requestItemId": "rpi_1",
+                "keyframes": [{"fileName": "이미지1.png"}],
             },
         },
     )
@@ -155,7 +201,8 @@ def test_studio_save_runpod_outputs_reads_s3_manifest_when_runpod_status_has_no_
         "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/manifests/runpod-result.json"
     ]
     assert saved["assets"][0]["assetId"] == "asset_task_1_001"
+    assert saved["assets"][0]["fileName"] == "이미지1.mp4"
     assert saved["assets"][0]["storageBackend"] == "s3"
     assert saved["assets"][0]["storageKey"] == (
-        "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/outputs/asset_output_001/final.mp4"
+        "prod/request-batches/rpb_1/items/rpi_1/jobs/task_1/outputs/asset_output_001/이미지1.mp4"
     )

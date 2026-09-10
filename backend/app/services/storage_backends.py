@@ -140,6 +140,20 @@ class S3AssetStorage:
             last_modified=response.get("LastModified"),
         )
 
+    def copy_stored_object(self, source_key: str, target_key: str) -> StoredObject:
+        source = str(source_key or "").strip().lstrip("/")
+        target = str(target_key or "").strip().lstrip("/")
+        if not source or not target:
+            raise ValueError("source and target storage keys are required")
+        if source != target:
+            self.client.copy_object(
+                Bucket=self.bucket,
+                CopySource={"Bucket": self.bucket, "Key": source},
+                Key=target,
+                MetadataDirective="COPY",
+            )
+        return self.stat(target)
+
     def open_read(self, storage_key: str):
         response = self.client.get_object(Bucket=self.bucket, Key=storage_key)
         return closing(response["Body"])

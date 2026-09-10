@@ -99,7 +99,13 @@ def first_upload_stem(job: dict) -> str:
     payload = job.get("payload") or {}
     keyframes = payload.get("keyframes") or []
     first_name = keyframes[0].get("fileName") if keyframes else ""
-    return Path(safe_filename(first_name or "upload")).stem or "upload"
+    return _safe_output_stem(first_name or "upload")
+
+
+def _safe_output_stem(name: str) -> str:
+    stem = Path(str(name or "upload")).stem or "upload"
+    stem = re.sub(r"[^\w_.-]+", "_", stem, flags=re.UNICODE).strip("._")
+    return stem or "upload"
 
 
 def output_file_name(
@@ -115,7 +121,6 @@ def output_file_name(
     default_suffix = {"videos": ".mp4", "images": ".png", "gifs": ".gif"}.get(kind, "")
     if not suffix:
         suffix = default_suffix
-    sequence = job.setdefault("outputSequence", uuid.uuid4().hex[:6])
     metadata = metadata or {}
     if metadata.get("outputRole") == "segment":
         role_suffix = f"_segment{metadata.get('segmentIndex') or index}"
@@ -123,7 +128,7 @@ def output_file_name(
         role_suffix = "_final"
     else:
         role_suffix = f"_{index:02d}" if index > 1 else ""
-    return f"{first_upload_stem(job)}_{workflow_output_token(job.get('workflowId'))}_{sequence}{role_suffix}{suffix}"
+    return f"{first_upload_stem(job)}{role_suffix}{suffix}"
 
 
 def infer_output_metadata(item: dict, index: int, total: int, job: dict) -> dict:
@@ -177,7 +182,7 @@ def save_runpod_outputs(
         if item.get("type") == "s3_object":
             metadata = infer_output_metadata(item, index, total, job)
             asset_id = s3_output_asset_id(item, index, job)
-            file_name = safe_filename(item.get("filename") or item.get("fileName") or f"{kind}_{index}")
+            file_name = output_file_name(kind, item, index, job, metadata, total)
             bucket = str(item.get("bucket") or "")
             storage_key = str(item.get("key") or item.get("storageKey") or "")
             mime_type = str(item.get("mimeType") or "application/octet-stream")

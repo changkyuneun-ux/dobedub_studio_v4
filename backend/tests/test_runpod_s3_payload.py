@@ -193,3 +193,46 @@ def test_save_runpod_outputs_uploads_inline_outputs_to_s3_when_storage_backend_i
     )
     assert ("dobedub-studio-local", saved["assets"][0]["storageKey"]) in fake.objects
     assert fake.objects[("dobedub-studio-local", saved["assets"][0]["storageKey"])]["Body"] == b"mp4"
+
+
+def test_save_runpod_outputs_uploads_inline_output_with_input_filename(db_session, monkeypatch, tmp_path):
+    class FakeS3Client:
+        def __init__(self):
+            self.objects: dict[tuple[str, str], dict] = {}
+
+        def put_object(self, **kwargs):
+            self.objects[(kwargs["Bucket"], kwargs["Key"])] = {
+                "Body": kwargs["Body"],
+                "ContentLength": len(kwargs["Body"]),
+                "ContentType": kwargs.get("ContentType"),
+            }
+            return {"ETag": '"fake"'}
+
+    fake = FakeS3Client()
+    monkeypatch.setenv("PERSISTENCE_BACKEND", "db")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio-local")
+    monkeypatch.setenv("S3_PREFIX", "local")
+    monkeypatch.setattr(
+        studio_api_service,
+        "s3_asset_storage",
+        lambda: S3AssetStorage(bucket="dobedub-studio-local", prefix="local", client=fake),
+    )
+
+    saved = studio_api_service.save_runpod_outputs(
+        {"output": {"videos": [{"filename": "final.mp4", "data": "bXA0"}]}},
+        {
+            "taskId": "task_inline_name",
+            "workflowId": "wan22_default_81.json",
+            "payload": {
+                "taskId": "task_inline_name",
+                "batchJobId": "batch_inline_name",
+                "requestItemId": "item_0001",
+                "keyframes": [{"fileName": "이미지1.png"}],
+                "segments": [{"index": 1}],
+            },
+        },
+    )
+
+    assert saved["assets"][0]["fileName"] == "이미지1.mp4"
+    assert saved["assets"][0]["storageKey"].endswith("/이미지1.mp4")

@@ -82,3 +82,39 @@ def test_completed_runpod_job_status_retries_unsaved_outputs_without_provider_po
     assert result["outputAssets"][0]["assetId"] == "asset_s3_output"
     assert job["outputsSaved"] is True
     assert recorded
+
+
+def test_completed_runpod_status_is_persisted_when_output_save_fails():
+    recorded = []
+    job = {
+        "taskId": "task_completed_output_failure",
+        "runpodJobId": "runpod-completed-output-failure",
+        "executionMode": "runpod",
+        "workflowId": "1-images.json",
+        "status": "IN_PROGRESS",
+        "progress": 45,
+        "createdAt": 1_000_000.0,
+        "startedAt": "2026-09-10 08:47:00",
+        "runpodStatus": {"status": "IN_PROGRESS", "id": "runpod-completed-output-failure"},
+        "outputsSaved": False,
+        "outputAssets": [],
+    }
+
+    runtime = _runtime_with_job(job)
+    runtime.runpod_request = lambda *_args, **_kwargs: {
+        "status": "COMPLETED",
+        "id": "runpod-completed-output-failure",
+        "output": {"images": [{"data": "video", "filename": "result.mp4"}]},
+    }
+    runtime.save_runpod_outputs = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("S3 write failed"))
+    runtime.record_job = lambda stored_job: recorded.append(stored_job.copy())
+
+    result, _elapsed, progress = job_service.poll_runpod_job(runtime, job)
+
+    assert result["status"] == "COMPLETED"
+    assert progress == 100
+    assert job["status"] == "COMPLETED"
+    assert job["outputsSaved"] is False
+    assert job["outputSaveError"] == "S3 write failed"
+    assert recorded[0]["status"] == "COMPLETED"
+    assert recorded[-1]["runpodStatus"]["outputSaveError"] == "S3 write failed"
