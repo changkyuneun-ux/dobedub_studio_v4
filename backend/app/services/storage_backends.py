@@ -158,6 +158,10 @@ class S3AssetStorage:
         response = self.client.get_object(Bucket=self.bucket, Key=storage_key)
         return closing(response["Body"])
 
+    def open_read_range(self, storage_key: str, *, start: int, end: int):
+        response = self.client.get_object(Bucket=self.bucket, Key=storage_key, Range=f"bytes={start}-{end}")
+        return closing(response["Body"])
+
     def _key(self, key: str) -> str:
         cleaned = str(key or "").strip().lstrip("/")
         if not cleaned:

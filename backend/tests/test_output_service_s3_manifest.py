@@ -287,6 +287,69 @@ def test_studio_save_runpod_outputs_uses_zip_source_name_for_s3_manifest(monkeyp
     )
 
 
+def test_studio_save_runpod_outputs_reuses_renamed_s3_manifest_output(monkeypatch):
+    class ManifestBody:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "outputs": [{
+                    "type": "video",
+                    "assetId": "asset_output_001",
+                    "bucket": "dobedub-studio",
+                    "key": "prod/batches/batch_1/items/item_0003/jobs/task_1/outputs/asset_output_001/final.mp4",
+                    "filename": "final.mp4",
+                    "contentType": "video/mp4",
+                    "sizeBytes": 123,
+                }],
+            }).encode("utf-8")
+
+    class FakeStorage:
+        def open_read(self, _storage_key):
+            return ManifestBody()
+
+        def copy_stored_object(self, _source_key, _target_key):
+            raise FileNotFoundError("final.mp4 was already removed")
+
+        def stat(self, target_key):
+            return StoredObject(
+                storage_backend="s3",
+                storage_key=target_key,
+                file_name=Path(target_key).name,
+                mime_type="video/mp4",
+                size_bytes=123,
+                public_url=f"s3://dobedub-studio/{target_key}",
+                bucket="dobedub-studio",
+            )
+
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "dobedub-studio")
+    monkeypatch.setenv("S3_PREFIX", "prod")
+    monkeypatch.setattr(studio_api_service, "s3_asset_storage", lambda: FakeStorage())
+
+    saved = studio_api_service.save_runpod_outputs(
+        {"status": "COMPLETED", "output": {}},
+        {
+            "taskId": "task_1",
+            "payload": {
+                "batchJobId": "batch_1",
+                "requestItemId": "item_0003",
+                "sourceRelativePath": "Test/제목 없음-4.jpg",
+                "keyframes": [{"fileName": "-4.jpg"}],
+            },
+        },
+    )
+
+    assert saved["assets"][0]["fileName"] == "제목_없음-4.mp4"
+    assert saved["assets"][0]["storageKey"] == (
+        "prod/batches/batch_1/items/item_0003/jobs/task_1/outputs/asset_output_001/제목_없음-4.mp4"
+    )
+
+
 def test_studio_save_runpod_outputs_marks_missing_s3_manifest_retryable(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "dobedub-studio")

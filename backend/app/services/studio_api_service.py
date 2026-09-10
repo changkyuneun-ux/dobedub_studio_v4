@@ -1004,8 +1004,15 @@ def _manifest_output_with_source_filename(storage: S3AssetStorage, item: dict, f
     target_key = str(PurePosixPath(storage_key).with_name(safe_name))
     if target_key == storage_key and item.get("filename") == safe_name:
         return item
-    stored = storage.copy_stored_object(storage_key, target_key)
-    storage.delete(storage_key)
+    try:
+        stored = storage.copy_stored_object(storage_key, target_key)
+    except Exception as copy_exc:
+        try:
+            stored = storage.stat(target_key)
+        except Exception as stat_exc:
+            raise copy_exc from stat_exc
+    else:
+        storage.delete(storage_key)
     return {
         **item,
         "key": stored.storage_key,
