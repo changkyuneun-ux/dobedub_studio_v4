@@ -16,6 +16,8 @@ SUPPORTED_WORKFLOW_IDS = frozenset({
 LEGACY_WORKFLOW_ID_MAP = {
     "1-images.json": "1-images_81.json",
     "1-images_10s_chain.json": "1-images_10s_chain_81.json",
+    "Wan22_default.json": "wan22_default_81.json",
+    "wan22_default.json": "wan22_default_81.json",
 }
 
 TEN_SECOND_CHAIN_WORKFLOW_IDS = frozenset({

@@ -51,6 +51,8 @@ def test_unapproved_workflow_cannot_be_used_by_a_direct_request():
     [
         ("1-images.json", "1-images_81.json"),
         ("1-images_10s_chain.json", "1-images_10s_chain_81.json"),
+        ("Wan22_default.json", "wan22_default_81.json"),
+        ("wan22_default.json", "wan22_default_81.json"),
     ],
 )
 def test_legacy_workflow_ids_are_canonicalized_for_existing_requests(legacy_id, canonical_id):
