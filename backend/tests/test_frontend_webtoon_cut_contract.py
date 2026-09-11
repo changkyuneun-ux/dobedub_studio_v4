@@ -56,10 +56,19 @@ def test_webtoon_cut_input_controls_allow_zip_file_selection_and_drop() -> None:
     assert "chooseInputDirectory" in source
     assert ">파일 선택<" in source
     assert ">폴더 선택<" in source
-    assert 'accept="image/*,.pdf,.zip,application/zip,application/x-zip-compressed"' in source
+    assert 'accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip,image/jpeg,image/png,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed"' in source
     file_button_block = source.split("function chooseInputFiles", 1)[1].split("function chooseInputDirectory", 1)[0]
     assert "showDirectoryPicker" not in file_button_block
     assert "fileInput.current?.click()" in file_button_block
     assert "handleDroppedFileSystemHandle" in store
     assert "handle.kind === \"file\"" in store
     assert ".getFile()" in store
+
+
+def test_webtoon_cut_supports_common_uncompressed_image_files() -> None:
+    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+
+    assert '["jpg", "jpeg", "png", "webp", "gif"]' in store
+    assert ".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip" in source
+    assert "PDF · JPG · PNG · WEBP · GIF · ZIP" in source

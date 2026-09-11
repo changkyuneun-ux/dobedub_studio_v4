@@ -50,7 +50,7 @@ type CutBox = {
   height: number;
 };
 
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
 const SUPPORTED_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, "pdf", "zip"]);
 const WHITE_ROW_RATIO = 0.93;
 const WHITE_PIXEL_THRESHOLD = 246;

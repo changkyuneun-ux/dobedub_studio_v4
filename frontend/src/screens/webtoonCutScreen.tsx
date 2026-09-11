@@ -86,10 +86,10 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
               className="v3-batch-hidden-input"
               type="file"
               multiple
-              accept="image/*,.pdf,.zip,application/zip,application/x-zip-compressed"
+              accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip,image/jpeg,image/png,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed"
               onChange={(event) => void chooseFiles(event.target.files)}
             />
-            <small>파일 또는 폴더 선택 / 끌어놓기. PDF · JPG · PNG · WEBP · ZIP · 폴더. 폴더 선택은 출력 권한까지 함께 확보합니다.</small>
+            <small>파일 또는 폴더 선택 / 끌어놓기. PDF · JPG · PNG · WEBP · GIF · ZIP · 폴더. 폴더 선택은 출력 권한까지 함께 확보합니다.</small>
           </div>
 
           <div className="v3-webtoon-cut-action">
