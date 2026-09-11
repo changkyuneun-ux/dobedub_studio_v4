@@ -34,7 +34,7 @@ function summaryRow() {
     width: 100,
     height: 100,
     confidence: 0.1,
-    flag: "fullpage review_required",
+    flag: "fullpage",
     elapsed_ms: 1,
     status: "completed",
     error: ""

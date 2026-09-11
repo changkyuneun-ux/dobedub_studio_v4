@@ -1,7 +1,7 @@
 import { ENGINE_VERSION, MANIFEST_SCHEMA_VERSION, PAGE_POLICY, PDF_RENDER_SCALE, STRIP_POLICY, TRANSITION_POLICY } from "./constants";
 import { detectCuts } from "./detector";
 import { writeAtomically, type DirectoryPort } from "./filesystem";
-import { fileStem } from "./naming";
+import { fileStem, safeOutputName } from "./naming";
 import { encodeCut, serializeSummary, verifyPngOutput } from "./artifacts";
 import { buildSourceInventory, iterateSource, type SourceInputCollection, type SourceInputItem } from "./inputSources";
 import type { InputKind, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest } from "./types";
@@ -42,6 +42,9 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
 
   for (const input of inputs) {
     for await (const source of iterateSource(input, signal)) {
+      if (signal.aborted) {
+        return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
+      }
       const startedAt = performance.now();
       const previous = previousLedger.get(source.unitId);
       if (previous && await completedOutputsExist(ports.output, previous)) {
@@ -59,6 +62,9 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
           generatedCuts: generatedCutCount,
           message: "manifest와 PNG가 유효해 완료 단위를 건너뜁니다."
         });
+        if (signal.aborted) {
+          return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
+        }
         continue;
       }
 
@@ -71,6 +77,9 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
         generatedCuts: generatedCutCount,
         message: "페이지/이미지 렌더링 완료"
       });
+      if (signal.aborted) {
+        return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
+      }
       const cuts = detectCuts(source.image, "auto", source.sourceKind === "pdf-page" ? "pdf" : "image");
       ports.onProgress?.({
         stage: "detect",
@@ -81,6 +90,9 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
         generatedCuts: generatedCutCount,
         message: `${cuts.length}개 컷 후보 감지`
       });
+      if (signal.aborted) {
+        return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
+      }
       const ledger: UnitLedgerEntry = {
         unitId: source.unitId,
         sourcePath: source.sourcePath,
@@ -154,14 +166,28 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
         generatedCuts: generatedCutCount,
         message: "처리 단위 완료"
       });
+      if (signal.aborted) {
+        return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
+      }
     }
   }
 
+  return finalizeManifest(manifest, ports, summaryRows, null, completedUnitCount, generatedCutCount);
+}
+
+async function finalizeManifest(
+  manifest: WebtoonCutManifest,
+  ports: RunnerPorts,
+  summaryRows: SummaryRow[],
+  forcedStatus: "paused" | null,
+  completedUnitCount: number,
+  generatedCutCount: number
+) {
   await writeAtomically(ports.output, "summary.csv", serializeSummary(summaryRows));
   const reviewRequired = manifest.ledger.some((unit) => unit.flags.includes("review_required"));
-  manifest.status = reviewRequired ? "completed_with_review" : "completed";
+  manifest.status = forcedStatus || (reviewRequired ? "completed_with_review" : "completed");
   manifest.updatedAt = new Date().toISOString();
-  manifest.completedAt = manifest.updatedAt;
+  manifest.completedAt = forcedStatus ? null : manifest.updatedAt;
   manifest.totals = {
     expectedUnitCount: manifest.expectedUnitCount,
     completedUnitCount: manifest.ledger.filter((unit) => unit.status === "completed").length,
@@ -176,7 +202,7 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
     completed: completedUnitCount,
     total: manifest.expectedUnitCount,
     generatedCuts: generatedCutCount,
-    message: "manifest.json과 summary.csv 저장 완료"
+    message: forcedStatus ? "중단 시점까지의 manifest.json과 summary.csv 저장 완료" : "manifest.json과 summary.csv 저장 완료"
   });
   return manifest;
 }
@@ -190,7 +216,7 @@ function createManifest(request: RunnerJobRequest, expectedUnitCount: number): W
     status: "running",
     inputKind: request.inputKind,
     inputName: request.inputName,
-    outputRoot: `${fileStem(request.inputName)}_cuts`,
+    outputRoot: `${safeOutputName(fileStem(request.inputName))}_cuts`,
     expectedUnitCount,
     createdAt: now,
     updatedAt: now,
@@ -218,13 +244,14 @@ function createManifest(request: RunnerJobRequest, expectedUnitCount: number): W
   };
 }
 
-function outputFileName(sourcePath: string, page: number | null, cutIndex: number) {
-  const parts = sourcePath.split("/").filter(Boolean);
+export function outputFileName(sourcePath: string, page: number | null, cutIndex: number) {
+  const parts = sourcePath.normalize("NFC").split("/").filter(Boolean).map(safeOutputName);
   const fileName = parts.pop() || sourcePath;
-  const sourceStem = fileStem(fileName);
-  const parents = parts.length ? `${parts.join("/")}/${sourceStem}/` : "";
-  if (page !== null) return `${parents}${String(page).padStart(3, "0")}-${String(cutIndex).padStart(2, "0")}.png`;
-  return `${parents}${sourceStem}-${String(cutIndex).padStart(2, "0")}.png`;
+  const sourceStem = safeOutputName(fileStem(fileName));
+  const parents = parts.length ? `${parts.join("/")}/` : "";
+  const sourceDirectory = `${parents}${sourceStem}/`;
+  if (page !== null) return `${sourceDirectory}${String(page).padStart(3, "0")}-${String(cutIndex).padStart(2, "0")}.png`;
+  return `${sourceDirectory}${sourceStem}-${String(cutIndex).padStart(2, "0")}.png`;
 }
 
 async function writePathAtomically(root: DirectoryPort | FileSystemDirectoryHandle, path: string, blob: Blob) {

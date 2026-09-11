@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { memoryDirectory, validPng } from "./__fixtures__/memoryDirectory";
 import { borderlessInfographic } from "./__fixtures__/synthetic";
-import { runWebtoonCutJob } from "./runner";
+import { outputFileName, runWebtoonCutJob } from "./runner";
 import type { WebtoonCutManifest } from "./types";
 import type { SourceInputCollection, SourceInputItem } from "./inputSources";
 
@@ -13,18 +13,37 @@ describe("webtoon cut runner", () => {
     expect(output.files()).toEqual([]);
   });
 
-  it("surfaces a fullpage fallback as completed_with_review", async () => {
+  it("stores a fullpage fallback as a completed output without review", async () => {
     const result = await runWebtoonCutJob(singleBorderlessImageJob(), { output: memoryDirectory({}) }, neverAborted());
 
-    expect(result.status).toBe("completed_with_review");
-    expect(result.ledger[0].flags).toEqual(expect.arrayContaining(["fullpage", "review_required"]));
-    expect(result.ledger[0].outputs[0].flags).toEqual(expect.arrayContaining(["fullpage", "review_required"]));
+    expect(result.status).toBe("completed");
+    expect(result.ledger[0].flags).toEqual(["fullpage"]);
+    expect(result.ledger[0].outputs[0].flags).toEqual(["fullpage"]);
+    expect(result.totals.reviewRequiredUnitCount).toBe(0);
+  });
+
+  it("places a root image source under its filename directory", async () => {
+    const result = await runWebtoonCutJob(singleBorderlessImageJob(), { output: memoryDirectory({}) }, neverAborted());
+
+    expect(result.ledger[0].outputs[0].path).toBe("page/page-01.png");
   });
 
   it("preserves nested source parents and source stems in output paths", async () => {
     const result = await runWebtoonCutJob(nestedImageJob(), { output: memoryDirectory({}) }, neverAborted());
 
     expect(result.ledger[0].outputs[0].path).toBe("scene-a/page-001/page-001-01.png");
+  });
+
+  it("places pdf page cut sequences under the pdf filename directory", () => {
+    expect(outputFileName("book.pdf", 1, 2)).toBe("book/001-02.png");
+    expect(outputFileName("scene-b/page-002.pdf", 12, 3)).toBe("scene-b/page-002/012-03.png");
+  });
+
+  it("normalizes decomposed Korean source names before writing output paths", () => {
+    const decomposed = "과학사 100 원본".normalize("NFD");
+
+    expect(outputFileName(`${decomposed}.jpg`, null, 1)).toBe("과학사 100 원본/과학사 100 원본-01.png");
+    expect(outputFileName(`묶음/${decomposed}.pdf`, 3, 2)).toBe("묶음/과학사 100 원본/003-02.png");
   });
 
   it("reports stage-level progress while a source unit is processed", async () => {
@@ -53,7 +72,9 @@ describe("webtoon cut runner", () => {
   it("resumes from an existing manifest and skips units whose PNG outputs are already valid", async () => {
     const existingManifest = completedOneOfTwoManifest();
     const output = memoryDirectory({
-      "page-001-01.png": validPng(400, 400),
+      "page-001": {
+        "page-001-01.png": validPng(400, 400)
+      },
       "manifest.json": new TextEncoder().encode(JSON.stringify(existingManifest))
     });
     const progress: Array<{ stage: string; unitId?: string; completed: number }> = [];
@@ -67,7 +88,38 @@ describe("webtoon cut runner", () => {
       expect.objectContaining({ stage: "resume-skip", unitId: "image:page-001.jpg", completed: 1 })
     ]));
     expect(result.ledger.map((unit) => unit.unitId)).toEqual(["image:page-001.jpg", "image:page-002.jpg"]);
-    expect(output.files()).toEqual(expect.arrayContaining(["page-001-01.png", "page-002-01.png", "manifest.json"]));
+    expect(output.files()).toEqual(expect.arrayContaining(["page-001", "page-002", "manifest.json"]));
+  });
+
+  it("returns a paused manifest with completed outputs when aborted after a unit completes", async () => {
+    const controller = new AbortController();
+    const output = memoryDirectory({});
+
+    const result = await runWebtoonCutJob(twoImageJob(), {
+      output,
+      onProgress: (event) => {
+        if (event.stage === "unit-complete" && event.completed === 1) {
+          controller.abort(new DOMException("중단 요청", "AbortError"));
+        }
+      }
+    }, controller.signal);
+
+    expect(result.status).toBe("paused");
+    expect(result.ledger.map((unit) => unit.unitId)).toEqual(["image:page-001.jpg"]);
+    expect(result.totals).toMatchObject({
+      expectedUnitCount: 2,
+      completedUnitCount: 1,
+      generatedCutCount: 1
+    });
+    expect(output.files()).toEqual(expect.arrayContaining(["page-001", "manifest.json", "summary.csv"]));
+    await expect(readJsonFile<WebtoonCutManifest>(output, "manifest.json")).resolves.toMatchObject({
+      status: "paused",
+      totals: {
+        expectedUnitCount: 2,
+        completedUnitCount: 1,
+        generatedCutCount: 1
+      }
+    });
   });
 });
 
@@ -157,7 +209,7 @@ function twoImageJob() {
 function completedOneOfTwoManifest(): WebtoonCutManifest {
   return {
     schemaVersion: 1,
-    engineVersion: "webtoon-cut-1",
+    engineVersion: "webtoon-cut-3",
     jobId: "job-two-images",
     status: "running",
     inputKind: "directory",
@@ -179,10 +231,10 @@ function completedOneOfTwoManifest(): WebtoonCutManifest {
         status: "completed",
         attempts: 1,
         flags: [],
-        outputs: [{ path: "page-001-01.png", width: 400, height: 400 }]
+        outputs: [{ path: "page-001/page-001-01.png", width: 400, height: 400 }]
       }
     ],
-    generatedFiles: ["page-001-01.png"],
+    generatedFiles: ["page-001/page-001-01.png"],
     totals: {
       expectedUnitCount: 2,
       completedUnitCount: 1,
@@ -196,4 +248,9 @@ function completedOneOfTwoManifest(): WebtoonCutManifest {
 
 function neverAborted() {
   return new AbortController().signal;
+}
+
+async function readJsonFile<T>(directory: { getFileHandle(name: string): Promise<{ getFile(): Promise<File> }> }, name: string): Promise<T> {
+  const handle = await directory.getFileHandle(name);
+  return JSON.parse(await (await handle.getFile()).text()) as T;
 }

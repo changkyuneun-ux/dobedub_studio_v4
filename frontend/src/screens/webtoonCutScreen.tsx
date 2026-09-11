@@ -129,8 +129,13 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
           </div>
 
           <div className="v3-webtoon-cut-action">
-            <button className="v3-primary-button" type="button" disabled={!snapshot.totalUnits || !snapshot.outputReady || snapshot.status === "running"} onClick={() => void webtoonCutJobStore.processSelectedInputs()}>
-              작업 요청
+            <button
+              className="v3-primary-button"
+              type="button"
+              disabled={!snapshot.totalUnits || !snapshot.outputReady}
+              onClick={() => snapshot.status === "running" ? webtoonCutJobStore.cancelRunningJob() : void webtoonCutJobStore.processSelectedInputs()}
+            >
+              {snapshot.status === "running" ? "작업 중단" : "작업 요청"}
             </button>
             <small>{snapshot.totalUnits ? `${snapshot.totalUnits}개 원본 · PNG · 원본 해상도 crop` : "입력 선택 후 처리정보 표시"}</small>
           </div>

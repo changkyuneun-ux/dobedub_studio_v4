@@ -1,4 +1,4 @@
-import React, { useEffect, useSyncExternalStore } from "react";
+import { createElement, Fragment, useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { ENGINE_VERSION, MANIFEST_SCHEMA_VERSION, PAGE_POLICY, PDF_RENDER_SCALE, STRIP_POLICY, TRANSITION_POLICY } from "./constants";
 import { discoverInputs, type FilePort } from "./filesystem";
 import { classifySourceName, sourceUnitId, type SourceInputItem } from "./inputSources";
@@ -48,7 +48,7 @@ export type WebtoonCutSnapshot = {
   outputReady: boolean;
   defaultWorkspaceReady: boolean;
   defaultWorkspaceName: string;
-  status: "idle" | "ready" | "running" | "completed" | "completed_with_review" | "failed";
+  status: "idle" | "ready" | "running" | "paused" | "completed" | "completed_with_review" | "failed";
   notice: string;
   units: WebtoonCutUnit[];
   totalUnits: number;
@@ -135,6 +135,7 @@ let snapshot = createInitialSnapshot();
 let selectedInputs: SelectedInput[] = [];
 let outputRootHandle: FileSystemDirectoryHandle | null = null;
 let running = false;
+let activeAbortController: AbortController | null = null;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -180,6 +181,7 @@ export const webtoonCutJobStore = {
     selectedInputs = [];
     outputRootHandle = null;
     running = false;
+    activeAbortController = null;
     emit();
   },
   disposeForSessionEnd(sessionOwnerId: string) {
@@ -190,6 +192,8 @@ export const webtoonCutJobStore = {
     selectedInputs = [];
     outputRootHandle = null;
     running = false;
+    activeAbortController?.abort(new DOMException("화면 세션 종료", "AbortError"));
+    activeAbortController = null;
     emit();
   },
   async selectDirectory(directoryHandle: FileSystemDirectoryHandle) {
@@ -319,6 +323,8 @@ export const webtoonCutJobStore = {
   async processSelectedInputs() {
     if (!selectedInputs.length || running) return;
     running = true;
+    const controller = new AbortController();
+    activeAbortController = controller;
     try {
       if (!outputRootHandle) {
         setSnapshot({
@@ -345,21 +351,9 @@ export const webtoonCutJobStore = {
             notice: message || stageNotice(stage)
           });
         }
-      }, new AbortController().signal);
+      }, controller.signal);
       releasePreviewUrls(snapshot.units);
-      const units = await Promise.all(manifest.ledger.map(async (unit) => ({
-        id: unit.unitId,
-        fileName: unit.sourcePath.split("/").pop() || unit.sourcePath,
-        sourcePath: unit.page ? `${unit.sourcePath}#${String(unit.page).padStart(3, "0")}` : unit.sourcePath,
-        outputDirName: safeBaseName(unit.sourcePath),
-        outputs: await loadOutputPreviews(unit.outputs),
-        width: unit.outputs[0]?.width,
-        height: unit.outputs[0]?.height,
-        status: unit.flags.includes("review_required") ? "review_required" as const : "completed" as const,
-        flag: unit.flags.includes("review_continuous") ? "continuous_sequence" as const : unit.flags.includes("fullpage") ? "fullpage" as const : "ok" as const,
-        cutCount: unit.outputs.length,
-        message: unit.flags.includes("review_required") ? "검수 필요 플래그가 있는 결과입니다." : `${unit.outputs.length}개 컷을 PNG로 저장했습니다.`
-      })));
+      const units = await unitsFromManifest(manifest);
       snapshot = {
         ...snapshot,
         units,
@@ -367,21 +361,31 @@ export const webtoonCutJobStore = {
         reviewUnits: units.filter((unit) => unit.status === "review_required").length,
         failedUnits: 0,
         generatedCuts: units.reduce((sum, unit) => sum + unit.cutCount, 0),
-        totalUnits: units.length,
+        totalUnits: manifest.expectedUnitCount,
         selectedReviewUnitId: units.find((unit) => unit.status === "review_required")?.id || "",
         selectedReviewOutputPath: firstReviewOutputPath(units)
       };
       const hasReview = units.some((unit) => unit.status === "review_required");
       const hasFailed = false;
       setSnapshot({
-        status: hasReview ? "completed_with_review" : hasFailed ? "completed_with_review" : "completed",
-        notice: hasReview ? "컷 분할이 끝났습니다. 검수 필요 항목을 선택해 재처리 유형을 적용하세요." : "컷 분할이 끝났습니다."
+        status: manifest.status === "paused" ? "paused" : hasReview ? "completed_with_review" : hasFailed ? "completed_with_review" : "completed",
+        notice: manifest.status === "paused"
+          ? "작업을 중단했습니다. 중단 시점까지 저장된 결과를 표시합니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다."
+          : hasReview ? "컷 분할이 끝났습니다. 검수 필요 항목을 선택해 재처리 유형을 적용하세요." : "컷 분할이 끝났습니다."
       });
     } catch (error) {
       setSnapshot({ status: "failed", notice: error instanceof Error ? error.message : "컷 분할 중 오류가 발생했습니다." });
     } finally {
       running = false;
+      if (activeAbortController === controller) {
+        activeAbortController = null;
+      }
     }
+  },
+  cancelRunningJob() {
+    if (!running || !activeAbortController || activeAbortController.signal.aborted) return;
+    activeAbortController.abort(new DOMException("중단 요청", "AbortError"));
+    setSnapshot({ notice: "중단 요청을 보냈습니다. 중단 시점까지 완료된 결과를 저장 중입니다." });
   },
   async reprocessReviewUnit(unitId: string, mode: WebtoonCutReprocessMode, outputPath?: string) {
     if (!outputRootHandle || running) return;
@@ -445,13 +449,13 @@ async function selectFilesInternal(files: File[], preservePersistedInput: boolea
   });
 }
 
-export function WebtoonCutJobProvider({ sessionOwnerId, children }: { sessionOwnerId: string; children: React.ReactNode }) {
+export function WebtoonCutJobProvider({ sessionOwnerId, children }: { sessionOwnerId: string; children: ReactNode }) {
   useEffect(() => {
     webtoonCutJobStore.initialize(sessionOwnerId);
     void webtoonCutJobStore.restorePersistedSession();
     return () => webtoonCutJobStore.disposeForSessionEnd(sessionOwnerId);
   }, [sessionOwnerId]);
-  return React.createElement(React.Fragment, null, children);
+  return createElement(Fragment, null, children);
 }
 
 export function useWebtoonCutJob() {
@@ -521,8 +525,24 @@ function buildReadySnapshot({
   emit();
 }
 
+async function unitsFromManifest(manifest: WebtoonCutManifest): Promise<WebtoonCutUnit[]> {
+  return Promise.all(manifest.ledger.map(async (unit) => ({
+    id: unit.unitId,
+    fileName: unit.sourcePath.split("/").pop() || unit.sourcePath,
+    sourcePath: unit.page ? `${unit.sourcePath}#${String(unit.page).padStart(3, "0")}` : unit.sourcePath,
+    outputDirName: safeBaseName(unit.sourcePath),
+    outputs: await loadOutputPreviews(unit.outputs),
+    width: unit.outputs[0]?.width,
+    height: unit.outputs[0]?.height,
+    status: unit.flags.includes("review_required") ? "review_required" as const : "completed" as const,
+    flag: unit.flags.includes("review_continuous") ? "continuous_sequence" as const : unit.flags.includes("fullpage") ? "fullpage" as const : "ok" as const,
+    cutCount: unit.outputs.length,
+    message: unit.flags.includes("review_required") ? "검수 필요 플래그가 있는 결과입니다." : `${unit.outputs.length}개 컷을 PNG로 저장했습니다.`
+  })));
+}
+
 async function runJobWithWorkerFallback(request: RunnerJobRequest, ports: RunnerPorts, signal: AbortSignal): Promise<WebtoonCutManifest> {
-  if (typeof Worker === "undefined" || typeof window === "undefined") {
+  if (typeof Worker === "undefined" || typeof window === "undefined" || !canRunWebtoonCutInWorker(request)) {
     return runWebtoonCutJob(request, ports, signal);
   }
 
@@ -539,7 +559,7 @@ async function runJobWithWorkerFallback(request: RunnerJobRequest, ports: Runner
     }
 
     function abort() {
-      finish(() => reject(signal.reason || new DOMException("Aborted", "AbortError")));
+      worker.postMessage({ type: "pause", jobId: request.jobId });
     }
 
     signal.addEventListener("abort", abort, { once: true });
@@ -550,6 +570,10 @@ async function runJobWithWorkerFallback(request: RunnerJobRequest, ports: Runner
         return;
       }
       if (message.type === "completed") {
+        finish(() => resolve(message.manifest));
+        return;
+      }
+      if (message.type === "paused") {
         finish(() => resolve(message.manifest));
         return;
       }
@@ -567,7 +591,22 @@ async function runJobWithWorkerFallback(request: RunnerJobRequest, ports: Runner
         outputRoot: ports.output
       }
     });
+    if (signal.aborted) abort();
   });
+}
+
+export function canRunWebtoonCutInWorker(request: Pick<RunnerJobRequest, "inputs">): boolean {
+  const inputs = Array.isArray(request.inputs) ? request.inputs : request.inputs.inputs;
+  return inputs.every((input) => sourceInputCanRunInWorker(input));
+}
+
+function sourceInputCanRunInWorker(input: SourceInputItem): boolean {
+  const kind = classifySourceName(input.relativePath) || input.kind;
+  if (kind === "image") return true;
+  if (kind === "zip" && input.archiveEntries) {
+    return input.archiveEntries.every((entry) => sourceInputCanRunInWorker(entry));
+  }
+  return false;
 }
 
 async function processInput(input: SelectedInput, mode: "default" | WebtoonCutReprocessMode, unitId = input.id) {
@@ -614,7 +653,7 @@ async function processInput(input: SelectedInput, mode: "default" | WebtoonCutRe
       width: canvas.width,
       height: canvas.height,
       outputs: await loadOutputPreviews(outputs),
-      status: flag === "ok" ? "completed" : "review_required",
+      status: flag === "continuous_sequence" ? "review_required" : "completed",
       flag,
       cutCount: finalBoxes.length,
       message: flag === "continuous_sequence"
@@ -1114,5 +1153,5 @@ function stripPngExtension(path: string) {
 }
 
 function safeFileName(value: string) {
-  return value.trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ");
+  return value.normalize("NFC").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ");
 }

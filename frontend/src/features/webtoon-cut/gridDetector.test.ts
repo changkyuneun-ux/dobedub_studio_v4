@@ -21,6 +21,6 @@ describe("webtoon cut page/grid detector", () => {
 
     expect(cuts).toHaveLength(1);
     expect(cuts[0].mode).toBe("fullpage");
-    expect(cuts[0].flags).toEqual(expect.arrayContaining(["fullpage", "review_required"]));
+    expect(cuts[0].flags).toEqual(["fullpage"]);
   });
 });

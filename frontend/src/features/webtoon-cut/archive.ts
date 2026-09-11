@@ -188,7 +188,38 @@ export async function* iterateArchive(file: File, signal: AbortSignal): AsyncIte
 }
 
 function normalizeArchivePath(path: string): string {
-  return normalizeForComparison(path.replace(/\\/g, "/"));
+  return normalizeForComparison(repairMojibakePath(path).replace(/\\/g, "/"));
+}
+
+function repairMojibakePath(path: string): string {
+  if (!looksLikeMojibake(path)) return path;
+  const bytes = Uint8Array.from(path, (char) => char.charCodeAt(0) & 0xff);
+  const candidates = ["utf-8", "euc-kr"]
+    .map((encoding) => decodeMojibakeCandidate(bytes, encoding))
+    .filter((candidate): candidate is string => Boolean(candidate));
+  return candidates.reduce((best, candidate) => (
+    readabilityScore(candidate) > readabilityScore(best) ? candidate : best
+  ), path);
+}
+
+function decodeMojibakeCandidate(bytes: Uint8Array, encoding: string): string | null {
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeMojibake(value: string): boolean {
+  return /[ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ][\u0080-\u00bf]/.test(value)
+    || /[êëìíîï][\u0080-\u00bf]/i.test(value)
+    || /[°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]{3,}/.test(value);
+}
+
+function readabilityScore(value: string): number {
+  const hangul = (value.match(/[가-힣]/g) || []).length;
+  const mojibakeMarkers = (value.match(/[°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]/g) || []).length;
+  return hangul * 10 - mojibakeMarkers;
 }
 
 function assertSafeArchivePath(path: string) {

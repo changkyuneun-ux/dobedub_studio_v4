@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = "webtoon-cut-1";
+export const ENGINE_VERSION = "webtoon-cut-3";
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 

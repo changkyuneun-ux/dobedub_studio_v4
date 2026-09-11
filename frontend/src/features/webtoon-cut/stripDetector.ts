@@ -96,6 +96,6 @@ function fullpageCut(width: number, height: number): DetectedCut {
     index: 1,
     mode: "fullpage",
     confidence: 0.1,
-    flags: ["fullpage", "review_required"]
+    flags: ["fullpage"]
   };
 }

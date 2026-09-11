@@ -45,7 +45,7 @@ function completedPdfManifest(pageCount: number): WebtoonCutManifest {
   });
   return {
     schemaVersion: 1,
-    engineVersion: "webtoon-cut-1",
+    engineVersion: "webtoon-cut-3",
     jobId: "job",
     status: "completed",
     inputKind: "pdf",

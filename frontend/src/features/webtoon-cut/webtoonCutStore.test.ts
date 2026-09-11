@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bytes, MemoryDirectory } from "./__fixtures__/memoryDirectory";
-import { findSelectedInputIndexForUnitId, outputsAfterReviewReplacement, resolveReviewTargetOutput, reviewTargetOutputs, webtoonCutJobStore, type WebtoonCutOutput, type WebtoonCutUnit } from "./webtoonCutStore";
+import { canRunWebtoonCutInWorker, findSelectedInputIndexForUnitId, outputsAfterReviewReplacement, resolveReviewTargetOutput, reviewTargetOutputs, webtoonCutJobStore, type WebtoonCutOutput, type WebtoonCutUnit } from "./webtoonCutStore";
 
 describe("webtoon cut UI store", () => {
   it("keeps file jobs disabled until a non-system work folder is connected", async () => {
@@ -90,5 +90,19 @@ describe("webtoon cut UI store", () => {
       ],
       deletePaths: ["page-02.png"]
     });
+  });
+
+  it("keeps pdf and archive inputs on the main browser path because PDF rendering depends on DOM APIs", () => {
+    expect(canRunWebtoonCutInWorker({
+      inputs: { inputs: [{ kind: "image", relativePath: "page.png", fileName: "page.png", extension: "png" }] }
+    })).toBe(true);
+
+    expect(canRunWebtoonCutInWorker({
+      inputs: { inputs: [{ kind: "pdf", relativePath: "book.pdf", fileName: "book.pdf", extension: "pdf" }] }
+    })).toBe(false);
+
+    expect(canRunWebtoonCutInWorker({
+      inputs: { inputs: [{ kind: "zip", relativePath: "episode.zip", fileName: "episode.zip", extension: "zip" }] }
+    })).toBe(false);
   });
 });

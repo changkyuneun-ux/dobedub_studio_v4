@@ -84,8 +84,18 @@ def test_webtoon_cut_does_not_prompt_for_output_directory_on_job_request() -> No
 
     assert "requestDefaultWebtoonWorkspace" not in store
     assert "requestDefaultWebtoonWorkspace" not in filesystem
-    assert 'disabled={!snapshot.totalUnits || !snapshot.outputReady || snapshot.status === "running"}' in source
+    assert 'disabled={!snapshot.totalUnits || !snapshot.outputReady}' in source
+    assert 'snapshot.status === "running" ? webtoonCutJobStore.cancelRunningJob() : void webtoonCutJobStore.processSelectedInputs()' in source
+    assert '{snapshot.status === "running" ? "작업 중단" : "작업 요청"}' in source
     assert "작업 요청 시 출력 폴더를 다시 묻지 않습니다" in source
     assert "작업 폴더 연결" in source
     assert "시스템 폴더가 아닌 별도 작업 폴더" in source
     assert "webtoon-cut 기본 작업 폴더" not in source
+
+
+def test_webtoon_cut_provider_does_not_depend_on_react_default_import() -> None:
+    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
+
+    assert 'import React' not in store
+    assert "React.createElement" not in store
+    assert "createElement(Fragment, null, children)" in store
