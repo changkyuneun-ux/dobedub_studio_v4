@@ -79,6 +79,7 @@ import { GrokWorkspaceScreen } from "./screens/grokWorkspaceScreen";
 import { PromptManagementScreen } from "./screens/promptManagementScreen";
 import { BatchJobScreen } from "./screens/batchJobScreen";
 import { RunpodRequestScreen } from "./screens/runpodRequestScreen";
+import { WebtoonCutScreen } from "./screens/webtoonCutScreen";
 import {
   Create3aScreen,
   Create4cScreen,
@@ -110,6 +111,7 @@ import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 // (screens/accessScreens.tsx의 AccessDeniedScreen)을 구현해, 직접 URL 진입 시
 // 아래 deniedRoute 계산으로 그 화면을 본문에 그린다.
 export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
+  "webtoonCuts": "jobs:run",
   "create.promptManagement": "prompts:build",
   "create.runpodRequests": "jobs:run",
   "review.history": "history:read",
@@ -165,6 +167,7 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 }
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
+  "webtoonCuts": "이미지 컷 분할",
   "create.promptManagement": "Grok 프롬프트 생성",
   "create.batchJobs": "Batch 처리",
   "create.runpodRequests": "Runpod ComfyUI 요청",
@@ -2024,6 +2027,8 @@ export function StudioShell({
         error={manualError}
         onGoTo={onNavigate}
       />
+    ) : route === "webtoonCuts" ? (
+      <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} />
     ) : route === "create.load" || route === "create.promptManagement" ? (
       <PromptManagementScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.batchJobs" ? (

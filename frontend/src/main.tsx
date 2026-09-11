@@ -10,6 +10,7 @@ import { SESSION_USER_STORAGE_KEY, loadAuthSession, clearLoginSession } from "./
 import { StudioShell } from "./StudioShell";
 import { AppShellChromeContext } from "./components/AppShell";
 import { LoginScreen, SessionExpiryBanner } from "./screens/accessScreens";
+import { WebtoonCutJobProvider } from "./features/webtoon-cut/webtoonCutStore";
 
 function App() {
   const initialSession = useMemo(() => loadAuthSession(), []);
@@ -165,12 +166,14 @@ function App() {
       <AppShellChromeContext.Provider
         value={{ health, healthError, onLogout: handleLogout, onNavigateRoute: navigate }}
       >
-        <StudioShell
-          user={user}
-          health={health}
-          route={route}
-          onNavigate={navigate}
-        />
+        <WebtoonCutJobProvider key={user.id} sessionOwnerId={user.id}>
+          <StudioShell
+            user={user}
+            health={health}
+            route={route}
+            onNavigate={navigate}
+          />
+        </WebtoonCutJobProvider>
       </AppShellChromeContext.Provider>
     </div>
   );
