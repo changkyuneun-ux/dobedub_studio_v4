@@ -1,4 +1,11 @@
 import React, { useEffect, useSyncExternalStore } from "react";
+import { ENGINE_VERSION, MANIFEST_SCHEMA_VERSION, PAGE_POLICY, PDF_RENDER_SCALE, STRIP_POLICY, TRANSITION_POLICY } from "./constants";
+import { discoverInputs, type FilePort } from "./filesystem";
+import { classifySourceName, sourceUnitId, type SourceInputItem } from "./inputSources";
+import { runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
+import { clearPersistedInputs, hasHandlePermission, loadPersistedWebtoonCutSession, persistInputDirectoryHandle, persistInputFileHandles, persistWorkspaceHandle } from "./persistence";
+import { serializeSummary } from "./artifacts";
+import type { GeneratedOutput, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WorkerEvent } from "./types";
 
 export type WebtoonCutUnitStatus = "pending" | "processing" | "completed" | "review_required" | "unsupported" | "failed";
 export type WebtoonCutUnitFlag = "ok" | "fullpage" | "continuous_sequence" | "unsupported" | "failed";
@@ -9,12 +16,27 @@ export type WebtoonCutUnit = {
   fileName: string;
   sourcePath: string;
   outputDirName: string;
+  outputs: WebtoonCutOutput[];
   width?: number;
   height?: number;
   status: WebtoonCutUnitStatus;
   flag: WebtoonCutUnitFlag;
   cutCount: number;
   message: string;
+};
+
+export type WebtoonCutOutput = {
+  path: string;
+  width?: number;
+  height?: number;
+  x0?: number;
+  y0?: number;
+  x1?: number;
+  y1?: number;
+  mode?: string;
+  confidence?: number;
+  flags?: string[];
+  previewUrl?: string;
 };
 
 export type WebtoonCutSnapshot = {
@@ -24,6 +46,8 @@ export type WebtoonCutSnapshot = {
   workLocation: string;
   outputLocation: string;
   outputReady: boolean;
+  defaultWorkspaceReady: boolean;
+  defaultWorkspaceName: string;
   status: "idle" | "ready" | "running" | "completed" | "completed_with_review" | "failed";
   notice: string;
   units: WebtoonCutUnit[];
@@ -33,6 +57,7 @@ export type WebtoonCutSnapshot = {
   failedUnits: number;
   generatedCuts: number;
   selectedReviewUnitId: string;
+  selectedReviewOutputPath: string;
 };
 
 type SelectedInput = {
@@ -40,6 +65,7 @@ type SelectedInput = {
   file: File;
   sourcePath: string;
   outputDirName: string;
+  sourceItem: SourceInputItem;
 };
 
 type CutBox = {
@@ -61,6 +87,26 @@ const STRONG_TRANSITION_DELTA = 34;
 const STRONG_COLOR_DELTA = 28;
 export const FULL_WIDTH_TRANSITION_RATIO = 0.95;
 export const MIN_STRONG_TRANSITION_CUT_HEIGHT = 240;
+const DISALLOWED_WORK_FOLDER_NAMES = new Set([
+  "",
+  "/",
+  "Applications",
+  "Library",
+  "System",
+  "Users",
+  "Volumes",
+  "bin",
+  "dev",
+  "etc",
+  "opt",
+  "private",
+  "sbin",
+  "tmp",
+  "usr",
+  "var"
+]);
+
+let defaultWorkspaceHandle: FileSystemDirectoryHandle | null = null;
 
 function createInitialSnapshot(sessionOwnerId = ""): WebtoonCutSnapshot {
   return {
@@ -70,6 +116,8 @@ function createInitialSnapshot(sessionOwnerId = ""): WebtoonCutSnapshot {
     workLocation: "",
     outputLocation: "",
     outputReady: false,
+    defaultWorkspaceReady: Boolean(defaultWorkspaceHandle),
+    defaultWorkspaceName: defaultWorkspaceHandle?.name || "",
     status: "idle",
     notice: "",
     units: [],
@@ -78,7 +126,8 @@ function createInitialSnapshot(sessionOwnerId = ""): WebtoonCutSnapshot {
     reviewUnits: 0,
     failedUnits: 0,
     generatedCuts: 0,
-    selectedReviewUnitId: ""
+    selectedReviewUnitId: "",
+    selectedReviewOutputPath: ""
   };
 }
 
@@ -125,6 +174,8 @@ export const webtoonCutJobStore = {
   },
   initialize(sessionOwnerId: string) {
     if (snapshot.sessionOwnerId === sessionOwnerId) return;
+    releasePreviewUrls(snapshot.units);
+    defaultWorkspaceHandle = null;
     snapshot = createInitialSnapshot(sessionOwnerId);
     selectedInputs = [];
     outputRootHandle = null;
@@ -133,6 +184,8 @@ export const webtoonCutJobStore = {
   },
   disposeForSessionEnd(sessionOwnerId: string) {
     if (snapshot.sessionOwnerId !== sessionOwnerId) return;
+    releasePreviewUrls(snapshot.units);
+    defaultWorkspaceHandle = null;
     snapshot = createInitialSnapshot();
     selectedInputs = [];
     outputRootHandle = null;
@@ -140,39 +193,104 @@ export const webtoonCutJobStore = {
     emit();
   },
   async selectDirectory(directoryHandle: FileSystemDirectoryHandle) {
-    const files = await collectFilesFromDirectoryHandle(directoryHandle);
-    selectedInputs = files.map((entry, index) => ({
-      id: `${index + 1}-${entry.sourcePath}`,
-      file: entry.file,
-      sourcePath: entry.sourcePath,
-      outputDirName: safeBaseName(entry.file.name)
+    await persistInputDirectoryHandle(directoryHandle);
+    const discovered = await discoverInputs(directoryHandle);
+    const files = await Promise.all(discovered.map(async (entry) => {
+      const handle = entry.handle as FilePort | undefined;
+      const file = handle ? await handle.getFile() : new File([], entry.fileName);
+      return { entry, file };
+    }));
+    selectedInputs = files.map(({ entry, file }, index) => ({
+      id: `${index + 1}-${entry.relativePath}`,
+      file,
+      sourcePath: entry.relativePath,
+      outputDirName: safeBaseName(entry.fileName),
+      sourceItem: { ...entry, file }
     }));
     const outputName = `${safeFileName(directoryHandle.name)}_cuts`;
-    outputRootHandle = await directoryHandle.getDirectoryHandle(outputName, { create: true });
+    const output = await prepareOutputDirectory(outputName);
     buildReadySnapshot({
       inputName: directoryHandle.name,
       workLocation: directoryHandle.name,
-      outputLocation: `${directoryHandle.name}/${outputName}`,
-      outputReady: true
+      outputLocation: output.outputLocation,
+      outputReady: output.outputReady,
+      notice: output.notice
     });
   },
   async selectFiles(files: File[]) {
-    const supported = files.filter((file) => SUPPORTED_EXTENSIONS.has(fileExtension(file.name)));
-    selectedInputs = supported.map((file, index) => ({
-      id: `${index + 1}-${file.name}`,
-      file,
-      sourcePath: file.webkitRelativePath || file.name,
-      outputDirName: safeBaseName(file.name)
-    }));
-    outputRootHandle = null;
-    const inputName = supported.length === 1 ? safeBaseName(supported[0].name) : "selected_files";
-    buildReadySnapshot({
-      inputName,
-      workLocation: "브라우저 선택 파일",
-      outputLocation: `${inputName}_cuts`,
-      outputReady: false,
-      notice: "개별 파일 선택은 부모 폴더 쓰기 권한을 자동으로 얻을 수 없어, 작업 요청 시 출력 폴더 권한을 한 번 더 요청합니다."
+    await selectFilesInternal(files, false);
+  },
+  async selectFileHandles(fileHandles: FileSystemFileHandle[]) {
+    await persistInputFileHandles(fileHandles);
+    const files = await Promise.all(fileHandles.map((handle) => handle.getFile()));
+    await selectFilesInternal(files, true);
+  },
+  async connectDefaultWorkspace(directoryHandle: FileSystemDirectoryHandle) {
+    if (DISALLOWED_WORK_FOLDER_NAMES.has(directoryHandle.name)) {
+      setSnapshot({
+        defaultWorkspaceReady: Boolean(defaultWorkspaceHandle),
+        defaultWorkspaceName: defaultWorkspaceHandle?.name || "",
+        outputReady: Boolean(outputRootHandle),
+        notice: "시스템 폴더 또는 상위 기본 폴더는 작업 폴더로 지정할 수 없습니다. 사용자가 만든 별도 작업 폴더를 선택하세요."
+      });
+      return;
+    }
+
+    defaultWorkspaceHandle = directoryHandle;
+    await persistWorkspaceHandle(directoryHandle);
+    const update: Partial<WebtoonCutSnapshot> = {
+      defaultWorkspaceReady: true,
+      defaultWorkspaceName: directoryHandle.name,
+      notice: ""
+    };
+
+    if (selectedInputs.length && snapshot.inputName) {
+      const outputName = `${safeFileName(snapshot.inputName)}_cuts`;
+      outputRootHandle = await defaultWorkspaceHandle.getDirectoryHandle(outputName, { create: true });
+      update.outputReady = true;
+      update.outputLocation = `${defaultWorkspaceHandle.name}/${outputName}`;
+      update.notice = "";
+    }
+
+    setSnapshot(update);
+  },
+  async restorePersistedSession() {
+    const persisted = await loadPersistedWebtoonCutSession();
+    if (!persisted?.workspaceHandle) return;
+    const workspaceGranted = await hasHandlePermission(persisted.workspaceHandle, "readwrite");
+    if (!workspaceGranted) {
+      setSnapshot({
+        defaultWorkspaceReady: false,
+        outputReady: false,
+        notice: "저장된 작업 폴더 권한이 만료되었습니다. 작업 폴더를 다시 연결하세요."
+      });
+      return;
+    }
+    defaultWorkspaceHandle = persisted.workspaceHandle;
+    setSnapshot({
+      defaultWorkspaceReady: true,
+      defaultWorkspaceName: persisted.workspaceHandle.name,
+      notice: "저장된 작업 폴더를 복원했습니다."
     });
+    if (persisted.inputMode === "directory" && persisted.inputDirectoryHandle) {
+      const inputGranted = await hasHandlePermission(persisted.inputDirectoryHandle, "read");
+      if (!inputGranted) {
+        setSnapshot({ notice: "이전 입력 폴더 권한이 만료되었습니다. 입력 폴더를 다시 선택하면 manifest 기준으로 재개됩니다." });
+        return;
+      }
+      await this.selectDirectory(persisted.inputDirectoryHandle);
+      setSnapshot({ notice: "이전 폴더 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+      return;
+    }
+    if (persisted.inputMode === "files" && persisted.fileHandles?.length) {
+      const granted = await Promise.all(persisted.fileHandles.map((handle) => hasHandlePermission(handle, "read")));
+      if (!granted.every(Boolean)) {
+        setSnapshot({ notice: "이전 입력 파일 권한이 만료되었습니다. 입력 파일을 다시 선택하면 manifest 기준으로 재개됩니다." });
+        return;
+      }
+      await this.selectFileHandles(persisted.fileHandles);
+      setSnapshot({ notice: "이전 파일 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+    }
   },
   async selectDroppedItems(items: DataTransferItemList) {
     const handles = await Promise.all([...items].map((item) => item.getAsFileSystemHandle?.() || Promise.resolve(null)));
@@ -189,29 +307,72 @@ export const webtoonCutJobStore = {
     await this.selectFiles(files);
   },
   selectReviewUnit(unitId: string) {
-    setSnapshot({ selectedReviewUnitId: unitId });
+    const unit = snapshot.units.find((entry) => entry.id === unitId);
+    setSnapshot({
+      selectedReviewUnitId: unitId,
+      selectedReviewOutputPath: unit ? reviewTargetOutputs(unit)[0]?.path || "" : ""
+    });
+  },
+  selectReviewOutput(path: string) {
+    setSnapshot({ selectedReviewOutputPath: path });
   },
   async processSelectedInputs() {
     if (!selectedInputs.length || running) return;
     running = true;
     try {
       if (!outputRootHandle) {
-        const fallback = await window.showDirectoryPicker?.({ mode: "readwrite" });
-        if (!fallback) {
-          setSnapshot({ notice: "출력 폴더 권한을 얻을 수 없습니다.", status: "failed" });
-          return;
-        }
-        outputRootHandle = await fallback.getDirectoryHandle(`${safeFileName(snapshot.inputName || "selected_files")}_cuts`, { create: true });
-        setSnapshot({ outputReady: true, outputLocation: `${fallback.name}/${safeFileName(snapshot.inputName || "selected_files")}_cuts` });
+        setSnapshot({
+          status: "ready",
+          notice: "작업 폴더가 연결되지 않아 작업을 시작할 수 없습니다. 시스템 폴더가 아닌 별도 작업 폴더를 먼저 연결하세요."
+        });
+        return;
       }
       setSnapshot({ status: "running", notice: "브라우저 로컬에서 컷 분할 중입니다. 원본은 서버로 전송하지 않습니다." });
       await ensureDirectory(outputRootHandle, "_debug");
-      for (const input of selectedInputs) {
-        await processInput(input, "default");
-      }
-      await writeSummaryFiles();
-      const hasReview = snapshot.units.some((unit) => unit.status === "review_required");
-      const hasFailed = snapshot.units.some((unit) => unit.status === "failed" || unit.status === "unsupported");
+      const request: RunnerJobRequest = {
+        jobId: snapshot.jobId,
+        inputKind: selectedInputs.length === 1 ? selectedInputs[0].sourceItem.kind : "directory",
+        inputName: snapshot.inputName || "selected_files",
+        inputs: { inputs: selectedInputs.map((input) => input.sourceItem) }
+      };
+      const manifest = await runJobWithWorkerFallback(request, {
+        output: outputRootHandle,
+        onProgress: ({ completed, total, generatedCuts, stage, message }) => {
+          setSnapshot({
+            completedUnits: completed,
+            totalUnits: total,
+            generatedCuts,
+            notice: message || stageNotice(stage)
+          });
+        }
+      }, new AbortController().signal);
+      releasePreviewUrls(snapshot.units);
+      const units = await Promise.all(manifest.ledger.map(async (unit) => ({
+        id: unit.unitId,
+        fileName: unit.sourcePath.split("/").pop() || unit.sourcePath,
+        sourcePath: unit.page ? `${unit.sourcePath}#${String(unit.page).padStart(3, "0")}` : unit.sourcePath,
+        outputDirName: safeBaseName(unit.sourcePath),
+        outputs: await loadOutputPreviews(unit.outputs),
+        width: unit.outputs[0]?.width,
+        height: unit.outputs[0]?.height,
+        status: unit.flags.includes("review_required") ? "review_required" as const : "completed" as const,
+        flag: unit.flags.includes("review_continuous") ? "continuous_sequence" as const : unit.flags.includes("fullpage") ? "fullpage" as const : "ok" as const,
+        cutCount: unit.outputs.length,
+        message: unit.flags.includes("review_required") ? "검수 필요 플래그가 있는 결과입니다." : `${unit.outputs.length}개 컷을 PNG로 저장했습니다.`
+      })));
+      snapshot = {
+        ...snapshot,
+        units,
+        completedUnits: units.length,
+        reviewUnits: units.filter((unit) => unit.status === "review_required").length,
+        failedUnits: 0,
+        generatedCuts: units.reduce((sum, unit) => sum + unit.cutCount, 0),
+        totalUnits: units.length,
+        selectedReviewUnitId: units.find((unit) => unit.status === "review_required")?.id || "",
+        selectedReviewOutputPath: firstReviewOutputPath(units)
+      };
+      const hasReview = units.some((unit) => unit.status === "review_required");
+      const hasFailed = false;
       setSnapshot({
         status: hasReview ? "completed_with_review" : hasFailed ? "completed_with_review" : "completed",
         notice: hasReview ? "컷 분할이 끝났습니다. 검수 필요 항목을 선택해 재처리 유형을 적용하세요." : "컷 분할이 끝났습니다."
@@ -222,16 +383,25 @@ export const webtoonCutJobStore = {
       running = false;
     }
   },
-  async reprocessReviewUnit(unitId: string, mode: WebtoonCutReprocessMode) {
+  async reprocessReviewUnit(unitId: string, mode: WebtoonCutReprocessMode, outputPath?: string) {
     if (!outputRootHandle || running) return;
-    const input = selectedInputs.find((entry) => entry.id === unitId);
-    if (!input) return;
     running = true;
     try {
-      replaceUnit(unitId, { status: "processing", message: "수평 장면 전환 후보로 재처리 중입니다." });
-      await processInput(input, mode);
+      const unit = snapshot.units.find((entry) => entry.id === unitId);
+      const target = unit ? resolveReviewTargetOutput(unit, outputPath || snapshot.selectedReviewOutputPath) : undefined;
+      if (!unit || !target) {
+        setSnapshot({ notice: "재처리할 컷을 먼저 선택하세요." });
+        return;
+      }
+      if (!target.flags?.includes("review_continuous")) {
+        setSnapshot({ notice: "선택한 컷은 수평 장면 전환 재처리 대상이 아닙니다." });
+        return;
+      }
+      setSnapshot({ selectedReviewOutputPath: target.path, notice: "선택한 컷을 재처리 중입니다." });
+      replaceUnit(unitId, { status: "processing", message: "선택한 컷을 수평 장면 전환 후보로 재처리 중입니다." });
+      await processReviewOutput(unit, target, mode);
       await writeSummaryFiles();
-      setSnapshot({ status: "completed_with_review", notice: "선택 항목을 수평 장면 전환 기준으로 재처리했습니다." });
+      setSnapshot({ status: "completed_with_review", notice: "선택한 컷을 수평 장면 전환 기준으로 재처리했습니다." });
     } catch (error) {
       replaceUnit(unitId, { status: "failed", flag: "failed", message: error instanceof Error ? error.message : "재처리에 실패했습니다." });
     } finally {
@@ -240,9 +410,45 @@ export const webtoonCutJobStore = {
   }
 };
 
+async function selectFilesInternal(files: File[], preservePersistedInput: boolean) {
+  if (!preservePersistedInput) {
+    await clearPersistedInputs();
+  }
+  const supported = files.filter((file) => SUPPORTED_EXTENSIONS.has(fileExtension(file.name)));
+  selectedInputs = supported.map((file, index) => ({
+    id: `${index + 1}-${file.name}`,
+    file,
+    sourcePath: file.webkitRelativePath || file.name,
+    outputDirName: safeBaseName(file.name),
+    sourceItem: {
+      kind: classifySourceName(file.name) || "image",
+      relativePath: file.webkitRelativePath || file.name,
+      fileName: file.name,
+      extension: fileExtension(file.name),
+      fingerprint: {
+        name: file.name,
+        size: file.size,
+        lastModified: file.lastModified
+      },
+      file
+    }
+  }));
+  const inputName = supported.length === 1 ? safeBaseName(supported[0].name) : "selected_files";
+  const outputName = `${inputName}_cuts`;
+  const output = await prepareOutputDirectory(outputName);
+  buildReadySnapshot({
+    inputName,
+    workLocation: "브라우저 선택 파일",
+    outputLocation: output.outputLocation,
+    outputReady: output.outputReady,
+    notice: output.notice
+  });
+}
+
 export function WebtoonCutJobProvider({ sessionOwnerId, children }: { sessionOwnerId: string; children: React.ReactNode }) {
   useEffect(() => {
     webtoonCutJobStore.initialize(sessionOwnerId);
+    void webtoonCutJobStore.restorePersistedSession();
     return () => webtoonCutJobStore.disposeForSessionEnd(sessionOwnerId);
   }, [sessionOwnerId]);
   return React.createElement(React.Fragment, null, children);
@@ -250,6 +456,25 @@ export function WebtoonCutJobProvider({ sessionOwnerId, children }: { sessionOwn
 
 export function useWebtoonCutJob() {
   return useSyncExternalStore(webtoonCutJobStore.subscribe, webtoonCutJobStore.getSnapshot, webtoonCutJobStore.getSnapshot);
+}
+
+async function prepareOutputDirectory(outputName: string): Promise<{ outputLocation: string; outputReady: boolean; notice: string }> {
+  const safeOutputName = safeFileName(outputName);
+  if (!defaultWorkspaceHandle) {
+      outputRootHandle = null;
+    return {
+      outputLocation: `작업 폴더/${safeOutputName}`,
+      outputReady: false,
+      notice: "시스템 폴더가 아닌 별도 작업 폴더를 연결해야 작업 요청을 시작할 수 있습니다."
+    };
+  }
+
+  outputRootHandle = await defaultWorkspaceHandle.getDirectoryHandle(safeOutputName, { create: true });
+  return {
+    outputLocation: `${defaultWorkspaceHandle.name}/${safeOutputName}`,
+    outputReady: true,
+    notice: ""
+  };
 }
 
 function buildReadySnapshot({
@@ -270,13 +495,13 @@ function buildReadySnapshot({
     fileName: input.file.name,
     sourcePath: input.sourcePath,
     outputDirName: input.outputDirName,
-    status: IMAGE_EXTENSIONS.has(fileExtension(input.file.name)) ? "pending" : "unsupported",
-    flag: IMAGE_EXTENSIONS.has(fileExtension(input.file.name)) ? "ok" : "unsupported",
+    outputs: [],
+    status: "pending",
+    flag: "ok",
     cutCount: 0,
-    message: IMAGE_EXTENSIONS.has(fileExtension(input.file.name))
-      ? "처리 대기"
-      : "PDF/ZIP 렌더러는 후속 구현 대상입니다. 누락 방지를 위해 검수 필요 항목으로 기록합니다."
+    message: "처리 대기"
   }));
+  releasePreviewUrls(snapshot.units);
   snapshot = {
     ...createInitialSnapshot(snapshot.sessionOwnerId),
     jobId: `CUT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String(Date.now()).slice(-4)}`,
@@ -288,17 +513,67 @@ function buildReadySnapshot({
     notice,
     units,
     totalUnits: units.length,
-    reviewUnits: units.filter((unit) => unit.status === "unsupported").length,
-    failedUnits: units.filter((unit) => unit.status === "unsupported").length,
-    selectedReviewUnitId: units.find((unit) => unit.status === "unsupported")?.id || ""
+    reviewUnits: 0,
+    failedUnits: 0,
+    selectedReviewUnitId: "",
+    selectedReviewOutputPath: ""
   };
   emit();
 }
 
-async function processInput(input: SelectedInput, mode: "default" | WebtoonCutReprocessMode) {
+async function runJobWithWorkerFallback(request: RunnerJobRequest, ports: RunnerPorts, signal: AbortSignal): Promise<WebtoonCutManifest> {
+  if (typeof Worker === "undefined" || typeof window === "undefined") {
+    return runWebtoonCutJob(request, ports, signal);
+  }
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+    let settled = false;
+
+    function finish(callback: () => void) {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      worker.terminate();
+      callback();
+    }
+
+    function abort() {
+      finish(() => reject(signal.reason || new DOMException("Aborted", "AbortError")));
+    }
+
+    signal.addEventListener("abort", abort, { once: true });
+    worker.onmessage = (event: MessageEvent<WorkerEvent>) => {
+      const message = event.data;
+      if (message.type === "progress") {
+        ports.onProgress?.(message as RunnerProgressEvent);
+        return;
+      }
+      if (message.type === "completed") {
+        finish(() => resolve(message.manifest));
+        return;
+      }
+      if (message.type === "failed") {
+        finish(() => reject(new Error(message.message)));
+      }
+    };
+    worker.onerror = (event) => {
+      finish(() => reject(new Error(event.message || "컷 분할 Worker 오류가 발생했습니다.")));
+    };
+    worker.postMessage({
+      type: "start",
+      request: {
+        ...request,
+        outputRoot: ports.output
+      }
+    });
+  });
+}
+
+async function processInput(input: SelectedInput, mode: "default" | WebtoonCutReprocessMode, unitId = input.id) {
   const extension = fileExtension(input.file.name);
   if (!IMAGE_EXTENSIONS.has(extension)) {
-    replaceUnit(input.id, {
+    replaceUnit(unitId, {
       status: "unsupported",
       flag: "unsupported",
       cutCount: 0,
@@ -307,7 +582,7 @@ async function processInput(input: SelectedInput, mode: "default" | WebtoonCutRe
     return;
   }
 
-  replaceUnit(input.id, { status: "processing", message: "이미지를 분석 중입니다." });
+  replaceUnit(unitId, { status: "processing", message: "이미지를 분석 중입니다." });
   const bitmap = await createImageBitmap(input.file);
   try {
     const canvas = document.createElement("canvas");
@@ -322,15 +597,23 @@ async function processInput(input: SelectedInput, mode: "default" | WebtoonCutRe
       : splitByWhitespaceGutters(imageData, canvas.width, canvas.height);
     const finalBoxes = boxes.length ? boxes : [{ index: 1, x: 0, y: 0, width: canvas.width, height: canvas.height }];
     const unitDir = await ensureDirectory(outputRootHandle!, input.outputDirName);
+    const outputs: WebtoonCutOutput[] = [];
     for (const box of finalBoxes) {
       const blob = await cropPng(canvas, box);
-      await writeBlob(unitDir, `${input.outputDirName}-${String(box.index).padStart(2, "0")}.png`, blob);
+      const fileName = `${input.outputDirName}-${String(box.index).padStart(2, "0")}.png`;
+      await writeBlob(unitDir, fileName, blob);
+      outputs.push({
+        path: `${input.outputDirName}/${fileName}`,
+        width: box.width,
+        height: box.height
+      });
     }
     await writeDebugOverlay(input, canvas, finalBoxes);
     const flag: WebtoonCutUnitFlag = finalBoxes.length === 1 && canvas.height > canvas.width * 3 ? "continuous_sequence" : finalBoxes.length === 1 ? "fullpage" : "ok";
-    replaceUnit(input.id, {
+    replaceUnit(unitId, {
       width: canvas.width,
       height: canvas.height,
+      outputs: await loadOutputPreviews(outputs),
       status: flag === "ok" ? "completed" : "review_required",
       flag,
       cutCount: finalBoxes.length,
@@ -460,6 +743,139 @@ function luminance(r: number, g: number, b: number) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+export function findSelectedInputIndexForUnitId(inputs: Array<Pick<SelectedInput, "sourcePath"> & { sourceItem?: SourceInputItem }>, unitId: string) {
+  return inputs.findIndex((input) => {
+    const relativePath = input.sourceItem?.relativePath || input.sourcePath;
+    return sourceUnitId("image", relativePath, null) === unitId;
+  });
+}
+
+export function reviewTargetOutputs(unit: WebtoonCutUnit) {
+  return unit.outputs.filter((output) => output.flags?.includes("review_required"));
+}
+
+export function resolveReviewTargetOutput(unit: WebtoonCutUnit, outputPath?: string) {
+  const targets = reviewTargetOutputs(unit);
+  if (outputPath) {
+    const explicit = targets.find((output) => output.path === outputPath);
+    if (explicit) return explicit;
+  }
+  return targets.find((output) => output.flags?.includes("review_continuous")) || targets[0];
+}
+
+function firstReviewOutputPath(units: WebtoonCutUnit[]) {
+  for (const unit of units) {
+    const target = reviewTargetOutputs(unit)[0];
+    if (target) return target.path;
+  }
+  return "";
+}
+
+async function loadOutputPreviews(outputs: GeneratedOutput[] | WebtoonCutOutput[]): Promise<WebtoonCutOutput[]> {
+  return Promise.all(outputs.map(async (output) => ({
+    ...output,
+    previewUrl: await createPreviewUrl(output.path)
+  })));
+}
+
+async function createPreviewUrl(path: string) {
+  if (!outputRootHandle || !URL.createObjectURL) return undefined;
+  try {
+    const file = await readOutputFile(path);
+    return URL.createObjectURL(file);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOutputFile(path: string) {
+  if (!outputRootHandle) throw new Error("출력 폴더가 연결되지 않았습니다.");
+  const parts = path.split("/").filter(Boolean);
+  const fileName = parts.pop();
+  if (!fileName) throw new Error("출력 파일명이 비어 있습니다.");
+  let directory = outputRootHandle;
+  for (const part of parts) {
+    directory = await directory.getDirectoryHandle(part);
+  }
+  const fileHandle = await directory.getFileHandle(fileName);
+  return fileHandle.getFile();
+}
+
+function releasePreviewUrls(units: WebtoonCutUnit[]) {
+  units.forEach((unit) => {
+    unit.outputs.forEach((output) => {
+      if (output.previewUrl) URL.revokeObjectURL?.(output.previewUrl);
+    });
+  });
+}
+
+async function processReviewOutput(unit: WebtoonCutUnit, target: WebtoonCutOutput, mode: WebtoonCutReprocessMode) {
+  if (mode !== "strong-horizontal-transition") return;
+  const targetFile = await readOutputFile(target.path);
+  const bitmap = await createImageBitmap(targetFile);
+  try {
+    const region = document.createElement("canvas");
+    region.width = bitmap.width;
+    region.height = bitmap.height;
+    const regionContext = region.getContext("2d", { willReadFrequently: true });
+    if (!regionContext) throw new Error("재처리 Canvas 컨텍스트를 만들 수 없습니다.");
+    regionContext.drawImage(bitmap, 0, 0);
+
+    const imageData = regionContext.getImageData(0, 0, region.width, region.height);
+    const boxes = splitByStrongHorizontalTransitions(imageData, region.width, region.height);
+    const finalBoxes = boxes.length ? boxes : [{ index: 1, x: 0, y: 0, width: region.width, height: region.height }];
+    const basePath = stripPngExtension(target.path);
+    const replacementOutputs: WebtoonCutOutput[] = [];
+
+    for (const box of finalBoxes) {
+      const blob = await cropPng(region, box);
+      const outputPath = finalBoxes.length === 1 ? target.path : `${basePath}-${String(box.index).padStart(2, "0")}.png`;
+      await writeBlobPath(outputRootHandle!, outputPath, blob);
+      replacementOutputs.push({
+        path: outputPath,
+        width: box.width,
+        height: box.height,
+        x0: (target.x0 || 0) + box.x,
+        y0: (target.y0 || 0) + box.y,
+        x1: (target.x0 || 0) + box.x + box.width,
+        y1: (target.y0 || 0) + box.y + box.height,
+        mode: "transition",
+        confidence: finalBoxes.length > 1 ? 0.88 : 0.45,
+        flags: []
+      });
+    }
+
+    const replacement = outputsAfterReviewReplacement(unit.outputs, target.path, replacementOutputs);
+    for (const deletePath of replacement.deletePaths) {
+      await removeOutputPath(outputRootHandle!, deletePath);
+    }
+    const nextOutputs = replacement.outputs;
+    const reviewOutputs = nextOutputs.filter((output) => output.flags?.includes("review_required"));
+    const continuousOutputs = nextOutputs.filter((output) => output.flags?.includes("review_continuous"));
+    const nextFlag: WebtoonCutUnitFlag = continuousOutputs.length ? "continuous_sequence" : reviewOutputs.length ? unit.flag : "ok";
+    replaceUnit(unit.id, {
+      outputs: await loadOutputPreviews(nextOutputs),
+      status: reviewOutputs.length ? "review_required" : "completed",
+      flag: nextFlag,
+      cutCount: nextOutputs.length,
+      message: reviewOutputs.length
+        ? `${reviewOutputs.length}개 컷이 아직 검수 필요입니다.`
+        : "선택 컷 재처리가 끝났습니다."
+    });
+    setSnapshot({ selectedReviewOutputPath: reviewOutputs[0]?.path || "" });
+  } finally {
+    bitmap.close();
+  }
+}
+
+export function outputsAfterReviewReplacement(existing: WebtoonCutOutput[], targetPath: string, replacementOutputs: WebtoonCutOutput[]) {
+  const shouldDeleteOriginal = replacementOutputs.length > 1 || replacementOutputs[0]?.path !== targetPath;
+  return {
+    outputs: existing.flatMap((output) => output.path === targetPath ? replacementOutputs : [output]),
+    deletePaths: shouldDeleteOriginal ? [targetPath] : []
+  };
+}
+
 async function cropPng(source: HTMLCanvasElement, box: CutBox): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = box.width;
@@ -495,34 +911,120 @@ async function writeDebugOverlay(input: SelectedInput, source: HTMLCanvasElement
 
 async function writeSummaryFiles() {
   if (!outputRootHandle) return;
-  const summary = [
-    "source_path,file_name,status,flag,width,height,cut_count,message",
-    ...snapshot.units.map((unit) => [
-      csvCell(unit.sourcePath),
-      csvCell(unit.fileName),
-      unit.status,
-      unit.flag,
-      unit.width || "",
-      unit.height || "",
-      unit.cutCount,
-      csvCell(unit.message)
-    ].join(","))
-  ].join("\n");
-  const manifest = {
+  const ledger = snapshot.units.map(unitToLedgerEntry);
+  const summaryRows = ledger.flatMap(unitToSummaryRows);
+  const now = new Date().toISOString();
+  const manifest: WebtoonCutManifest = {
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
+    engineVersion: ENGINE_VERSION,
     jobId: snapshot.jobId,
+    status: snapshot.reviewUnits ? "completed_with_review" : snapshot.failedUnits ? "completed_with_errors" : "completed",
+    inputKind: selectedInputs.length === 1 ? selectedInputs[0].sourceItem.kind : "directory",
     inputName: snapshot.inputName,
-    outputLocation: snapshot.outputLocation,
-    createdAt: new Date().toISOString(),
-    purpose: "future_i2v_input",
-    outputFormat: "png",
-    units: snapshot.units
+    outputRoot: snapshot.outputLocation.split("/").pop() || `${safeFileName(snapshot.inputName)}_cuts`,
+    expectedUnitCount: snapshot.totalUnits,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: now,
+    options: {
+      mode: "auto",
+      pdfScale: PDF_RENDER_SCALE,
+      outputFormat: "png",
+      pagePolicy: PAGE_POLICY,
+      stripPolicy: STRIP_POLICY,
+      transitionPolicy: TRANSITION_POLICY
+    },
+    inputs: selectedInputs.map((input) => ({
+      inputId: input.id,
+      kind: input.sourceItem.kind,
+      relativePath: input.sourceItem.relativePath,
+      fingerprint: input.sourceItem.fingerprint || null
+    })),
+    inventory: ledger.map((unit) => ({
+      unitId: unit.unitId,
+      sourcePath: unit.sourcePath,
+      sourceKind: unit.sourceKind,
+      page: unit.page
+    })),
+    ledger,
+    generatedFiles: ledger.flatMap((unit) => unit.outputs.map((output) => output.path)),
+    totals: {
+      expectedUnitCount: snapshot.totalUnits,
+      completedUnitCount: ledger.filter((unit) => unit.status === "completed").length,
+      errorUnitCount: ledger.filter((unit) => unit.status === "error").length,
+      reviewRequiredUnitCount: ledger.filter((unit) => unit.flags.includes("review_required")).length,
+      generatedCutCount: ledger.reduce((sum, unit) => sum + unit.outputs.length, 0),
+      flags: countUnitFlags(ledger)
+    }
   };
-  await writeBlob(outputRootHandle, "summary.csv", new Blob([summary], { type: "text/csv;charset=utf-8" }));
+  const summaryBytes = serializeSummary(summaryRows);
+  const summaryBuffer = new ArrayBuffer(summaryBytes.byteLength);
+  new Uint8Array(summaryBuffer).set(summaryBytes);
+  await writeBlob(outputRootHandle, "summary.csv", new Blob([summaryBuffer], { type: "text/csv;charset=utf-8" }));
   await writeBlob(outputRootHandle, "manifest.json", new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }));
 }
 
-function csvCell(value: string) {
-  return `"${String(value).replace(/"/g, '""')}"`;
+function unitToLedgerEntry(unit: WebtoonCutUnit): UnitLedgerEntry {
+  const { sourcePath, page } = splitUnitSourcePath(unit.sourcePath);
+  const outputFlags = [...new Set(unit.outputs.flatMap((output) => output.flags || []))];
+  const flags = [...new Set([
+    ...outputFlags,
+    ...(unit.status === "review_required" ? ["review_required"] : []),
+    ...(unit.flag === "fullpage" ? ["fullpage"] : []),
+    ...(unit.flag === "continuous_sequence" ? ["review_continuous"] : []),
+    ...(unit.status === "failed" ? ["error"] : [])
+  ])];
+  return {
+    unitId: unit.id,
+    sourcePath,
+    sourceKind: unit.id.startsWith("pdf:") ? "pdf-page" : "image",
+    page,
+    status: unit.status === "failed" ? "error" : "completed",
+    attempts: 1,
+    flags,
+    outputs: unit.outputs.map(({ previewUrl: _previewUrl, ...output }) => output as GeneratedOutput),
+    error: unit.status === "failed" ? unit.message : undefined
+  };
+}
+
+function unitToSummaryRows(unit: UnitLedgerEntry): SummaryRow[] {
+  return unit.outputs.map((output, index) => ({
+    unit_id: unit.unitId,
+    source_path: unit.sourcePath,
+    page: unit.page ?? "",
+    cut: index + 1,
+    filename: output.path,
+    mode: output.mode || "",
+    x0: output.x0 ?? "",
+    y0: output.y0 ?? "",
+    x1: output.x1 ?? "",
+    y1: output.y1 ?? "",
+    width: output.width || "",
+    height: output.height || "",
+    confidence: output.confidence ?? "",
+    flag: output.flags?.join(" ") || unit.flags.join(" "),
+    elapsed_ms: "",
+    status: unit.status,
+    error: unit.error || ""
+  }));
+}
+
+function splitUnitSourcePath(value: string) {
+  const match = value.match(/^(.*)#(\d{3})$/);
+  return {
+    sourcePath: match ? match[1] : value,
+    page: match ? Number(match[2]) : null
+  };
+}
+
+function countUnitFlags(ledger: UnitLedgerEntry[]) {
+  const flags: Record<string, number> = {};
+  ledger.forEach((unit) => {
+    unit.flags.forEach((flag) => {
+      flags[flag] = (flags[flag] || 0) + 1;
+    });
+  });
+  return flags;
 }
 
 async function writeBlob(directory: FileSystemDirectoryHandle, name: string, blob: Blob) {
@@ -530,6 +1032,28 @@ async function writeBlob(directory: FileSystemDirectoryHandle, name: string, blo
   const writable = await handle.createWritable();
   await writable.write(blob);
   await writable.close();
+}
+
+async function writeBlobPath(root: FileSystemDirectoryHandle, path: string, blob: Blob) {
+  const parts = path.split("/").filter(Boolean);
+  const fileName = parts.pop();
+  if (!fileName) throw new Error("출력 파일명이 비어 있습니다.");
+  let directory = root;
+  for (const part of parts) {
+    directory = await directory.getDirectoryHandle(part, { create: true });
+  }
+  await writeBlob(directory, fileName, blob);
+}
+
+async function removeOutputPath(root: FileSystemDirectoryHandle, path: string) {
+  const parts = path.split("/").filter(Boolean);
+  const fileName = parts.pop();
+  if (!fileName) return;
+  let directory = root;
+  for (const part of parts) {
+    directory = await directory.getDirectoryHandle(part);
+  }
+  await directory.removeEntry(fileName).catch(() => undefined);
 }
 
 async function ensureDirectory(root: FileSystemDirectoryHandle, name: string) {
@@ -571,8 +1095,22 @@ function fileExtension(name: string) {
   return name.split(".").pop()?.toLowerCase() || "";
 }
 
+function stageNotice(stage: string) {
+  if (stage === "inventory") return "입력 파일과 PDF 페이지 수를 확인 중입니다.";
+  if (stage === "resume-skip") return "manifest 기준으로 완료된 산출물을 건너뛰고 있습니다.";
+  if (stage === "render") return "페이지/이미지를 렌더링 중입니다.";
+  if (stage === "detect") return "컷 경계를 감지 중입니다.";
+  if (stage === "write") return "PNG 컷 파일을 저장 중입니다.";
+  if (stage === "manifest") return "summary.csv와 manifest.json을 저장 중입니다.";
+  return "브라우저 로컬에서 컷 분할 중입니다.";
+}
+
 function safeBaseName(name: string) {
   return safeFileName(name.replace(/\.[^.]+$/, "")) || "source";
+}
+
+function stripPngExtension(path: string) {
+  return path.replace(/\.png$/i, "");
 }
 
 function safeFileName(value: string) {

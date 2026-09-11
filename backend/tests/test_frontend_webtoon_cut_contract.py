@@ -59,16 +59,33 @@ def test_webtoon_cut_input_controls_allow_zip_file_selection_and_drop() -> None:
     assert 'accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip,image/jpeg,image/png,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed"' in source
     file_button_block = source.split("function chooseInputFiles", 1)[1].split("function chooseInputDirectory", 1)[0]
     assert "showDirectoryPicker" not in file_button_block
+    assert "showOpenFilePicker" in file_button_block
     assert "fileInput.current?.click()" in file_button_block
+    directory_button_block = source.split("function chooseInputDirectory", 1)[1].split("function connectDefaultWorkspace", 1)[0]
+    assert 'showDirectoryPicker({ mode: "read" })' in directory_button_block
     assert "handleDroppedFileSystemHandle" in store
     assert "handle.kind === \"file\"" in store
     assert ".getFile()" in store
 
 
-def test_webtoon_cut_supports_common_uncompressed_image_files() -> None:
+def test_webtoon_cut_supports_specified_raster_image_files() -> None:
     store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
 
     assert '["jpg", "jpeg", "png", "webp", "gif"]' in store
     assert ".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip" in source
     assert "PDF · JPG · PNG · WEBP · GIF · ZIP" in source
+
+
+def test_webtoon_cut_does_not_prompt_for_output_directory_on_job_request() -> None:
+    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
+    filesystem = Path("frontend/src/features/webtoon-cut/filesystem.ts").read_text(encoding="utf-8")
+
+    assert "requestDefaultWebtoonWorkspace" not in store
+    assert "requestDefaultWebtoonWorkspace" not in filesystem
+    assert 'disabled={!snapshot.totalUnits || !snapshot.outputReady || snapshot.status === "running"}' in source
+    assert "작업 요청 시 출력 폴더를 다시 묻지 않습니다" in source
+    assert "작업 폴더 연결" in source
+    assert "시스템 폴더가 아닌 별도 작업 폴더" in source
+    assert "webtoon-cut 기본 작업 폴더" not in source
