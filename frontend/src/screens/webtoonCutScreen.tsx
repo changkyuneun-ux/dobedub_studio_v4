@@ -18,7 +18,11 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
   const progress = snapshot.totalUnits ? Math.round((snapshot.completedUnits / snapshot.totalUnits) * 100) : 0;
   const unsupportedCount = useMemo(() => snapshot.units.filter((unit) => unit.status === "unsupported").length, [snapshot.units]);
 
-  async function chooseFileOrDirectory() {
+  function chooseInputFiles() {
+    fileInput.current?.click();
+  }
+
+  async function chooseInputDirectory() {
     if (window.showDirectoryPicker) {
       try {
         const directory = await window.showDirectoryPicker({ mode: "readwrite" });
@@ -28,7 +32,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
         if (error instanceof DOMException && error.name === "AbortError") return;
       }
     }
-    fileInput.current?.click();
+    setDragging(false);
   }
 
   async function chooseFiles(files: FileList | null) {
@@ -73,18 +77,19 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
             onDrop={(event) => void handleDrop(event)}
           >
             <label>입력 선택</label>
-            <button className="v3-secondary-button" type="button" onClick={() => void chooseFileOrDirectory()}>
-              파일 또는 폴더 선택 / 끌어놓기
-            </button>
+            <div className="v3-webtoon-cut-input-actions">
+              <button className="v3-secondary-button" type="button" onClick={chooseInputFiles}>파일 선택</button>
+              <button className="v3-secondary-button" type="button" onClick={() => void chooseInputDirectory()} disabled={!window.showDirectoryPicker}>폴더 선택</button>
+            </div>
             <input
               ref={fileInput}
               className="v3-batch-hidden-input"
               type="file"
               multiple
-              accept="image/*,.pdf,.zip"
+              accept="image/*,.pdf,.zip,application/zip,application/x-zip-compressed"
               onChange={(event) => void chooseFiles(event.target.files)}
             />
-            <small>PDF · JPG · PNG · WEBP · ZIP · 폴더. 폴더 선택은 출력 권한까지 함께 확보합니다.</small>
+            <small>파일 또는 폴더 선택 / 끌어놓기. PDF · JPG · PNG · WEBP · ZIP · 폴더. 폴더 선택은 출력 권한까지 함께 확보합니다.</small>
           </div>
 
           <div className="v3-webtoon-cut-action">

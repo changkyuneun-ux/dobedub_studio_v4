@@ -6930,6 +6930,7 @@ button {
 .v3-webtoon-cut-good { color: var(--v3-accent-text); font-size: 11px; font-weight: 800; }
 .v3-webtoon-cut-dropzone { border-style: dashed; min-height: 116px; place-content: center; text-align: center; }
 .v3-webtoon-cut-dropzone.is-dragging { background: var(--v3-accent-bg); border-color: var(--v3-accent); }
+.v3-webtoon-cut-input-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .v3-webtoon-cut-action { background: var(--v3-accent-bg); border-color: #c8e5d6; place-content: center; text-align: center; }
 .v3-webtoon-cut-action .v3-primary-button { min-height: 48px; min-width: 160px; }
 .v3-webtoon-cut-info-grid { border-top: 1px solid var(--v3-border-inner); display: grid; gap: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 0 16px 16px; }

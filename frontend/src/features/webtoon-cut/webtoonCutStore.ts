@@ -181,7 +181,11 @@ export const webtoonCutJobStore = {
       await this.selectDirectory(directoryHandle);
       return;
     }
-    const files = await collectFilesFromDataTransferItems(items);
+    const handleFiles = await Promise.all(handles.map((handle) => handleDroppedFileSystemHandle(handle)));
+    const files = handleFiles.filter((file): file is File => Boolean(file));
+    if (!files.length) {
+      files.push(...await collectFilesFromDataTransferItems(items));
+    }
     await this.selectFiles(files);
   },
   selectReviewUnit(unitId: string) {
@@ -555,6 +559,12 @@ async function collectFilesFromDataTransferItems(items: DataTransferItemList): P
     if (file) files.push(file);
   }
   return files;
+}
+
+async function handleDroppedFileSystemHandle(handle: FileSystemHandle | null): Promise<File | null> {
+  if (!handle || handle.kind !== "file") return null;
+  const file = await (handle as FileSystemFileHandle).getFile();
+  return SUPPORTED_EXTENSIONS.has(fileExtension(file.name)) ? file : null;
 }
 
 function fileExtension(name: string) {

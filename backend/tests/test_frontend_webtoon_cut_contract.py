@@ -46,3 +46,20 @@ def test_webtoon_cut_screen_uses_browser_local_png_outputs_and_review_reprocess(
     assert "MIN_STRONG_TRANSITION_CUT_HEIGHT" in store
     assert "수평 장면 전환" in source
     assert "apiClient" not in source
+
+
+def test_webtoon_cut_input_controls_allow_zip_file_selection_and_drop() -> None:
+    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
+
+    assert "chooseInputFiles" in source
+    assert "chooseInputDirectory" in source
+    assert ">파일 선택<" in source
+    assert ">폴더 선택<" in source
+    assert 'accept="image/*,.pdf,.zip,application/zip,application/x-zip-compressed"' in source
+    file_button_block = source.split("function chooseInputFiles", 1)[1].split("function chooseInputDirectory", 1)[0]
+    assert "showDirectoryPicker" not in file_button_block
+    assert "fileInput.current?.click()" in file_button_block
+    assert "handleDroppedFileSystemHandle" in store
+    assert "handle.kind === \"file\"" in store
+    assert ".getFile()" in store
