@@ -48,6 +48,13 @@ class Settings:
     sandbox_pod_graphql_url: str = "https://api.runpod.io/graphql"
     sandbox_pod_graphql_api_key: str = ""
     sandbox_pod_timeout: int = 20
+    # Multi-pod / GPU fallback (spec 2026-09-11 §5.1). Empty fallback list
+    # keeps the legacy single-GPU create behaviour.
+    sandbox_pod_gpu_fallback_type_ids: tuple[str, ...] = ()
+    sandbox_pod_start_retry_count: int = 1
+    sandbox_pod_create_attempt_delay_seconds: float = 2.0
+    sandbox_pod_min_vram_gb: int = 24
+    sandbox_pod_stop_wait_seconds: int = 60
     prompt_llm_provider: str = "mock"
     prompt_llm_api_key: str = ""
     prompt_llm_endpoint_id: str = ""
@@ -101,6 +108,29 @@ def get_settings() -> Settings:
         sandbox_pod_gpu_count = max(1, int(os.environ.get("RUNPOD_SANDBOX_GPU_COUNT", "1")))
     except ValueError:
         sandbox_pod_gpu_count = 1
+    sandbox_pod_gpu_fallback_type_ids = tuple(
+        item.strip()
+        for item in os.environ.get("RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS", "").split(",")
+        if item.strip()
+    )
+    try:
+        sandbox_pod_start_retry_count = max(0, int(os.environ.get("RUNPOD_SANDBOX_START_RETRY_COUNT", "1")))
+    except ValueError:
+        sandbox_pod_start_retry_count = 1
+    try:
+        sandbox_pod_create_attempt_delay_seconds = max(
+            0.0, float(os.environ.get("RUNPOD_SANDBOX_CREATE_ATTEMPT_DELAY_SECONDS", "2"))
+        )
+    except ValueError:
+        sandbox_pod_create_attempt_delay_seconds = 2.0
+    try:
+        sandbox_pod_min_vram_gb = max(0, int(os.environ.get("RUNPOD_SANDBOX_MIN_VRAM_GB", "24")))
+    except ValueError:
+        sandbox_pod_min_vram_gb = 24
+    try:
+        sandbox_pod_stop_wait_seconds = max(0, int(os.environ.get("RUNPOD_SANDBOX_STOP_WAIT_SECONDS", "60")))
+    except ValueError:
+        sandbox_pod_stop_wait_seconds = 60
     try:
         prompt_llm_timeout = int(os.environ.get("PROMPT_LLM_TIMEOUT", "45"))
     except ValueError:
@@ -200,6 +230,11 @@ def get_settings() -> Settings:
         sandbox_pod_graphql_url=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_URL", "https://api.runpod.io/graphql"),
         sandbox_pod_graphql_api_key=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_API_KEY", ""),
         sandbox_pod_timeout=sandbox_pod_timeout,
+        sandbox_pod_gpu_fallback_type_ids=sandbox_pod_gpu_fallback_type_ids,
+        sandbox_pod_start_retry_count=sandbox_pod_start_retry_count,
+        sandbox_pod_create_attempt_delay_seconds=sandbox_pod_create_attempt_delay_seconds,
+        sandbox_pod_min_vram_gb=sandbox_pod_min_vram_gb,
+        sandbox_pod_stop_wait_seconds=sandbox_pod_stop_wait_seconds,
         prompt_llm_provider=os.environ.get("PROMPT_LLM_PROVIDER", "mock").strip().lower() or "mock",
         prompt_llm_api_key=os.environ.get("PROMPT_LLM_API_KEY", ""),
         prompt_llm_endpoint_id=os.environ.get("PROMPT_LLM_ENDPOINT_ID", ""),

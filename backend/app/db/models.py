@@ -249,6 +249,26 @@ class TaskExecutionPolicy(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
 
+class SandboxPodSetting(Base):
+    """Singleton Sandbox Pod selection / switch preferences (spec 2026-09-11 §5.1).
+
+    The selected Pod and switch policy must survive redeploys and be shared by
+    every admin, so they live here rather than in environment variables.
+    """
+
+    __tablename__ = "sandbox_pod_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    selected_pod_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    auto_switch_on_start_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    pod_priority_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    # Policy A (2026-09-12): after a successful create, delete stopped Pods of the same GPU.
+    replace_same_gpu_pods: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
 class TaskInputAsset(Base):
     __tablename__ = "task_input_assets"
 

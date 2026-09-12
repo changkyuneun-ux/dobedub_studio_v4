@@ -41,6 +41,11 @@ RUNPOD_SANDBOX_TEMPLATE_ID=<sandbox-template-id>
 RUNPOD_SANDBOX_GPU_TYPE_ID=NVIDIA GeForce RTX 5090
 RUNPOD_SANDBOX_GPU_COUNT=1
 RUNPOD_SANDBOX_DEPLOY_NAME=dobedub_comfyUI_Sandbox
+RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS=NVIDIA RTX PRO 4500 Blackwell,NVIDIA RTX PRO 6000 Blackwell Workstation Edition,NVIDIA GeForce RTX 4090
+RUNPOD_SANDBOX_START_RETRY_COUNT=1
+RUNPOD_SANDBOX_CREATE_ATTEMPT_DELAY_SECONDS=2
+RUNPOD_SANDBOX_MIN_VRAM_GB=24
+RUNPOD_SANDBOX_STOP_WAIT_SECONDS=60
 RUNPOD_SANDBOX_POD_API_KEY=<secret>
 RUNPOD_SANDBOX_POD_REST_URL=https://rest.runpod.io/v1
 RUNPOD_SANDBOX_POD_TIMEOUT=20
@@ -65,7 +70,7 @@ RUN_SERVER_SKIP_ENV_LOAD=1
 
 `RUNPOD_API_KEY`, `PROMPT_LLM_API_KEY`, `DATABASE_URL`, `AUTH_JWT_SECRET`는 Secrets Manager 또는 SSM Parameter Store 참조로 주입합니다. `PROMPT_LLM_API_KEY`가 같은 RunPod key를 쓰는 경우에도 별도 secret으로 분리해 두면 endpoint 교체가 쉽습니다. `DATABASE_SSL_CA`는 AWS RDS 콘솔이 안내하는 `global-bundle.pem` 경로를 container 안의 실제 파일 위치로 지정합니다. `DATABASE_SSL_VERIFY_IDENTITY=1`은 RDS 권장 접속 방식과 맞춥니다. `RUN_SERVER_AUTO_MIGRATE=0`으로 두고, migration은 one-off task로 분리합니다.
 
-Sandbox Pod 운영을 사용할 때는 `RUNPOD_SANDBOX_POD_API_KEY`를 Secrets Manager 참조로 주입합니다. 현재 RunPod API key와 같은 키를 사용하더라도 별도 환경변수 이름으로 주입해야 하며, Pod ID나 Pod 이름은 migration에 따라 바뀔 수 있으므로 고정 selector로 사용하지 않습니다. `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`를 기본 selector로, `RUNPOD_SANDBOX_TEMPLATE_ID`를 보조 selector로 사용합니다.
+Sandbox Pod 운영을 사용할 때는 `RUNPOD_SANDBOX_POD_API_KEY`를 Secrets Manager 참조로 주입합니다. 현재 RunPod API key와 같은 키를 사용하더라도 별도 환경변수 이름으로 주입해야 하며, Pod ID나 Pod 이름은 migration에 따라 바뀔 수 있으므로 고정 selector로 사용하지 않습니다. `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`가 Pod의 유일한 식별자이며, `RUNPOD_SANDBOX_TEMPLATE_ID`·`RUNPOD_SANDBOX_GPU_TYPE_ID`는 새 Pod를 만들 때의 사양으로만 쓰입니다(볼륨 selector가 없을 때만 legacy 필터). 같은 볼륨에 붙은 Pod는 전부 관리자 화면 목록에 나타나고, 실행 중 Pod는 서버가 최대 1개로 강제합니다. 선택 Pod·자동 전환 옵션·우선순위는 DB(`sandbox_pod_settings`)에 저장되므로 `RUNPOD_SANDBOX_POD_ID`는 DB 선택값이 있으면 무시됩니다. `RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS`는 처음에는 빈 값으로 배포하고(동작 변화 없음), 설계 문서 §6 검증 후 설정합니다.
 
 인증은 `Authorization: Bearer <JWT>`만 허용합니다. `AUTH_TRUST_PROXY_HEADERS` 및 `X-User-*` 헤더 기반 인증은 지원하지 않으므로, ECS task definition에서도 해당 환경변수를 제거합니다.
 

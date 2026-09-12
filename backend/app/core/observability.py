@@ -140,6 +140,87 @@ def observe_asset_stream(request: Request, *, duration_ms: float, bytes_sent: in
     OBSERVABILITY_LOGGER.info(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
 
 
+def observe_sandbox_pod_attempt(
+    *,
+    stage: str,
+    pod_id: str | None,
+    gpu_type_id: str | None,
+    ok: bool,
+    error: str | None,
+    skipped: str | None,
+) -> None:
+    """One EMF record per Sandbox Pod start/switch/create attempt (spec 2026-09-11 §5.7)."""
+    settings = get_settings()
+    if not settings.observability_enabled:
+        return
+    gpu = gpu_type_id or "-"
+    ok_value = "true" if ok else "false"
+    payload = {
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [
+                {
+                    "Namespace": "DOBEDUB/Studio",
+                    "Dimensions": [["Environment", "Stage", "GpuTypeId", "Ok"]],
+                    "Metrics": [{"Name": "SandboxPodStartAttemptCount", "Unit": "Count"}],
+                }
+            ],
+        },
+        "event": "sandbox_pod.attempt",
+        "environment": settings.observability_environment,
+        "stage": stage,
+        "podId": pod_id,
+        "gpu": gpu_type_id,
+        "ok": ok,
+        "error": error,
+        "skipped": skipped,
+        "Environment": settings.observability_environment,
+        "Stage": stage,
+        "GpuTypeId": gpu,
+        "Ok": ok_value,
+        "SandboxPodStartAttemptCount": 1,
+    }
+    OBSERVABILITY_LOGGER.info(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+
+
+_SANDBOX_EVENT_METRICS = {
+    "switch": "SandboxPodSwitchCount",
+    "fallback": "SandboxPodFallbackCount",
+    "conflict": "SandboxPodConflictCount",
+    "terminate": "SandboxPodTerminateCount",
+}
+
+
+def observe_sandbox_pod_event(*, kind: str, pod_id: str | None, gpu_type_id: str | None) -> None:
+    settings = get_settings()
+    if not settings.observability_enabled:
+        return
+    metric = _SANDBOX_EVENT_METRICS.get(kind)
+    if metric is None:
+        return
+    gpu = gpu_type_id or "-"
+    payload = {
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [
+                {
+                    "Namespace": "DOBEDUB/Studio",
+                    "Dimensions": [["Environment", "GpuTypeId"]],
+                    "Metrics": [{"Name": metric, "Unit": "Count"}],
+                }
+            ],
+        },
+        "event": f"sandbox_pod.{kind}",
+        "environment": settings.observability_environment,
+        "podId": pod_id,
+        "gpu": gpu_type_id,
+        "Environment": settings.observability_environment,
+        "GpuTypeId": gpu,
+        metric: 1,
+    }
+    OBSERVABILITY_LOGGER.info(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+
+
 def _request_emf_payload(
     *,
     environment: str,
