@@ -1,6 +1,6 @@
 # Sandbox Pod 다중 보유·선택 실행 및 GPU fallback 설계
 
-- 작성일: 2026-09-11 (v2 — 다중 파드 선택 반영)
+- 작성일: 2026-09-11 (v2 — 다중 파드 선택 반영, 2026-09-12 이름 규칙 추가)
 - 대상 화면: 스튜디오 → ADMIN → **Sandbox Pod** (`admin.sandbox`)
 - 대상 코드: `backend/app/services/sandbox_pod_service.py`, `backend/app/api/v1/sandbox_pod.py`, `backend/app/core/config.py`, `backend/app/db/models.py`(설정 1건), `frontend/src/screens/adminScreens.tsx`(Sandbox 패널), `frontend/src/api/client.ts`
 - 관련 문서: `docs/aws-ecs-deployment.md` §1 환경변수, `runpod mcp/운영가이드-RunPod-ComfyUI-Wan.md`
@@ -34,6 +34,21 @@
 |---|---|---|---|---|
 | `caiuvooekq9qqw` | RTX 5090 | 32 GB / 60 GB | $0.99 | 기본. 재고 부족 시 기동 불가할 수 있음 |
 | `3i50u1x4pyz0vr` | RTX PRO 6000 Blackwell WK | 96 GB / 262 GB | $2.19 | 대용량·OOM 회피용. Jupyter 비밀번호 있음 |
+
+#### 파드 이름 규칙 (2026-09-12 확정)
+
+파드 이름은 RunPod 콘솔에서 **`dobedub_comfyUI_Sandbox_<GPU 표시명>`** 으로 고정하고, dobedub-studio는 이 이름을 **그대로 표시**한다(로컬 별칭 매핑 없음).
+
+| Pod ID | RunPod 이름 |
+|---|---|
+| `caiuvooekq9qqw` | `dobedub_comfyUI_Sandbox_RTX 5090` |
+| `3i50u1x4pyz0vr` | `dobedub_comfyUI_Sandbox_RTX PRO 6000` |
+
+- 이름은 **표시용**이며 식별에는 쓰지 않는다. 식별은 볼륨 ID(§5.2), 선택 저장은 Pod ID(`selected_pod_id`). 파드가 migration으로 ID가 바뀌면 화면의 선택값은 "찾을 수 없음"으로 표시되고 관리자가 다시 고른다 — 이름은 RunPod가 migration 시 유지하므로 운영자는 같은 이름을 다시 고르면 된다.
+- 접두사 `dobedub_comfyUI_Sandbox`는 유지한다(legacy `RUNPOD_SANDBOX_POD_NAME` prefix 매칭 호환).
+- 서버가 자동 생성하는 파드(§5.3 ③④)도 같은 규칙으로 이름을 붙인다: `RUNPOD_SANDBOX_DEPLOY_NAME + "_" + <GPU 표시명>`. GPU 표시명은 RunPod 카탈로그 `displayName`(예: `RTX 5090`, `RTX PRO 6000 WK`, `RTX 4090`)을 쓴다. 따라서 `RUNPOD_SANDBOX_DEPLOY_NAME`은 접두사 역할만 하며 기본값 `dobedub_comfyUI_Sandbox` 유지.
+- 화면의 파드 목록·상태 카드·전환 확인 대화상자·오류 배너·audit log의 사람이 읽는 문구는 모두 이 이름을 우선 사용하고 Pod ID는 보조로 표기한다(예: `dobedub_comfyUI_Sandbox_RTX 5090 (caiuvooekq9qqw)`).
+- 이름은 매 조회마다 RunPod API에서 읽는다. 콘솔에서 바꾸면 다음 새로고침에 반영되며 앱 재배포가 필요 없다.
 
 동시 실행은 하지 않는다. 두 ComfyUI가 같은 `/workspace/runpod-slim/ComfyUI`의 `user/`, 내부 SQLite, `filebrowser.db`, `output/`에 동시에 쓰면 손상 위험이 있기 때문이다. (동시 실행이 필요해지면 파드별 `--user-directory`/`--output-directory` 분리와 시작 스크립트 수정이 선행돼야 하며, 이 문서 범위 밖이다.)
 
@@ -105,7 +120,19 @@ DB 설정 (신규, `task_execution_policies`와 같은 단일 행 설정 패턴)
 
 ### 5.2 파드 목록 해석 (`_resolve_pods`, 기존 `_resolve_pod` 대체)
 
-- `GET /pods?includeNetworkVolume=true`에서 `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`(필수) 일치 파드를 **전부** 반환. `templateId` 필터는 선택 사항으로 완화한다 — `3i50u1x4pyz0vr`처럼 REST create로 만든 파드는 `template`이 null이므로 템플릿 필터를 강제하면 누락된다.
+**식별자 역할 분리 원칙** — 환경변수는 모두 유지하되 쓰임을 나눈다:
+
+| 변수 | 파드 찾기 | 파드 생성 |
+|---|---|---|
+| `RUNPOD_SANDBOX_NETWORK_VOLUME_ID` | **유일 식별자** (파드 ID·이름이 migration으로 바뀌어도 불변) | 필수 |
+| `RUNPOD_SANDBOX_TEMPLATE_ID` | 사용하지 않음 (볼륨 selector가 없을 때만 legacy 필터) | **필수** — 새 파드 사양 |
+| `RUNPOD_SANDBOX_GPU_TYPE_ID` 등 | 사용하지 않음 | 필수 |
+
+템플릿 ID는 파드를 특정하지 못한다: 같은 템플릿으로 다른 볼륨에 만든 파드도 통과하고, 콘솔·REST v2·Pod migration 경로로 만든 파드는 `template`이 null이라 탈락한다(2026-09-11 `3i50u1x4pyz0vr` 사례). "파드 ID가 바뀌는 문제"는 볼륨 ID가 해결하며, 템플릿 ID는 `_deploy_sandbox_pod`에서 동일 사양의 파드를 다시 만드는 데 쓰인다.
+
+> **적용 완료 (2026-09-11, 0단계)**: `sandbox_pod_service._resolve_pod`의 템플릿 필터를 `if template_id and not volume_id:`로 변경, `resolved_by` 표기 동일 조정. 테스트 `SandboxPodResolutionTests` 3건 추가(볼륨 일치 + template null 파드 선택 / 템플릿만 설정 시 기존 동작 유지 / 전부 EXITED면 최근 파드). 이 패치만으로 현재 관리자 페이지가 `3i50u1x4pyz0vr`를 인식한다.
+
+- `GET /pods?includeNetworkVolume=true`에서 `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`(필수) 일치 파드를 **전부** 반환.
 - TERMINATED는 제외. 각 파드에 `gpuTypeId`, `vramGb`, `ramGb`, `pricePerHr`, `desiredStatus`, `lastStartedAt`, `httpServices`를 붙인다(`_present_pod` 재사용).
 - **불변식 검사**: RUNNING/STARTING 파드가 2개 이상이면 응답에 `conflict: true`와 해당 ID를 넣고, 화면은 경고 배너와 "나머지 정지" 버튼을 보여준다. start/create는 conflict 상태에서 거부(409).
 - 기존 `sandbox_pod_status()`는 `pods[]` + `selectedPodId` + `activePodId`(RUNNING인 것)를 반환하도록 확장. 기존 단일 필드(`podId`, `desiredStatus`, `httpServices` …)는 `activePodId` 기준으로 그대로 채워 하위 호환을 유지한다.
@@ -135,7 +162,9 @@ if conflict: 409
 
 ③ create 기본 GPU / ④ create fallback GPU
    후보 = [GPU_TYPE_ID] + FALLBACK_TYPE_IDS, VRAM < MIN_VRAM_GB 는 skipped:"vram"
-   각 후보: POST /pods {name: DEPLOY_NAME, templateId, networkVolumeId, gpuTypeIds:[후보], gpuCount, startJupyter:true, startSsh:true}
+   각 후보: POST /pods {name: <이름 규칙>, templateId, networkVolumeId, gpuTypeIds:[후보], gpuCount}
+     ※ REST v1 PodCreateInput은 알 수 없는 키를 400 "Extra input keys provided in request body"로 거부한다.
+       startJupyter/startSsh는 REST v2·GraphQL 전용이므로 v1 본문에 넣지 않는다 (2026-09-12 장애).
      성공 → selected_pod_id = 새 파드, resolvedBy="create:<후보>"
      5xx / "no instances" → 다음 후보 (delay 후)
      400·401·403·422 → 즉시 중단 (설정/권한 오류)
@@ -144,8 +173,8 @@ if conflict: 409
 stop_sandbox_pod(pod_id: str | None): 지정 파드(없으면 activePodId) stop. 다른 파드에 영향 없음.
 ```
 
-- create로 생긴 파드는 `templateId`가 남지 않으므로(§5.2) 볼륨 ID로만 찾는다. 이름은 `RUNPOD_SANDBOX_DEPLOY_NAME` 그대로.
-- `startJupyter:true`로 생성하면 RunPod가 `JUPYTER_PASSWORD`를 주입해 Jupyter가 토큰 인증을 요구한다. 응답의 `httpServices[8888]`에 `authRequired: true`를 넣어 화면에 표시한다(토큰 값은 노출하지 않음).
+- create로 생긴 파드는 `templateId`가 남지 않으므로(§5.2) 볼륨 ID로만 찾는다. 이름은 `RUNPOD_SANDBOX_DEPLOY_NAME + "_" + <GPU displayName>` (§2.1 이름 규칙).
+- Jupyter·SSH 노출은 템플릿의 `ports`/`env`에서 온다. 자동 생성 파드에도 Jupyter 인증을 두려면 템플릿 `nh1d177m2w`의 env에 `JUPYTER_PASSWORD`를 설정한다(REST v1 create 본문의 `startJupyter`로는 불가). 파드 env에 `JUPYTER_PASSWORD`가 있으면 응답의 `httpServices[8888]`에 `authRequired: true`를 넣어 화면에 표시한다(토큰 값은 노출하지 않음).
 
 ### 5.4 API
 
@@ -166,8 +195,8 @@ stop_sandbox_pod(pod_id: str | None): 지정 파드(없으면 activePodId) stop.
   "activePodId": "3i50u1x4pyz0vr",
   "conflict": false,
   "pods": [
-    {"podId": "caiuvooekq9qqw", "name": "dobedub_comfyUI_Sandbox2", "gpuTypeId": "NVIDIA GeForce RTX 5090", "vramGb": 32, "ramGb": 60, "pricePerHr": 0.99, "desiredStatus": "EXITED", "lastStartedAt": "…", "httpServices": []},
-    {"podId": "3i50u1x4pyz0vr", "name": "dobedub_comfyUI_Sandbox2", "gpuTypeId": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "vramGb": 96, "ramGb": 262, "pricePerHr": 2.19, "desiredStatus": "RUNNING", "runtimeStatus": "READY", "httpServices": [{"internalPort": 8188, "url": "…"}, {"internalPort": 8888, "url": "…", "authRequired": true}]}
+    {"podId": "caiuvooekq9qqw", "name": "dobedub_comfyUI_Sandbox_RTX 5090", "gpuTypeId": "NVIDIA GeForce RTX 5090", "vramGb": 32, "ramGb": 60, "pricePerHr": 0.99, "desiredStatus": "EXITED", "lastStartedAt": "…", "httpServices": []},
+    {"podId": "3i50u1x4pyz0vr", "name": "dobedub_comfyUI_Sandbox_RTX PRO 6000", "gpuTypeId": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "vramGb": 96, "ramGb": 262, "pricePerHr": 2.19, "desiredStatus": "RUNNING", "runtimeStatus": "READY", "httpServices": [{"internalPort": 8188, "url": "…"}, {"internalPort": 8888, "url": "…", "authRequired": true}]}
   ],
   "settings": {"autoSwitchOnStartFailure": true, "podPriority": ["caiuvooekq9qqw", "3i50u1x4pyz0vr"]},
   "attempts": [
@@ -241,6 +270,7 @@ stop_sandbox_pod(pod_id: str | None): 지정 파드(없으면 activePodId) stop.
 
 ## 8. 롤아웃
 
+0. **(적용됨, 배포 대기)** `_resolve_pod` 템플릿 필터 완화 + 테스트 3건. 환경변수 변경 없음. 이 배포만으로 관리자 페이지가 현재 PRO 6000 파드를 인식하고 Start/Stop이 정상 동작한다.
 1. 백엔드: `_resolve_pods` + `pods[]` 응답 확장만 배포(기존 필드 호환) → 화면에 목록이 보이는지 확인.
 2. `/select`, `/settings`, 전환 로직 배포. `FALLBACK_TYPE_IDS`는 빈 값.
 3. §6 검증 후 `RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS` 설정, `autoSwitchOnStartFailure` 기본 on.
@@ -251,5 +281,5 @@ stop_sandbox_pod(pod_id: str | None): 지정 파드(없으면 activePodId) stop.
 - 실행 중: `3i50u1x4pyz0vr` (RTX PRO 6000 WK, $2.19/h) — ComfyUI v0.30.0, SageAttention 정상 로드, 커스텀 노드 전부 import 성공 확인. Jupyter 토큰 인증 있음.
 - 정지: `caiuvooekq9qqw` (RTX 5090, $0.99/h, RAM 60 GB) — 5090 재고 회복 시 복귀 대상. 복귀 전 `--cache-none` 추가 권장.
 - 제거됨: `s2lqjdfpdoyqa0`, `r1ks9kbquwsda4`.
-- 두 파드 모두 이름이 `dobedub_comfyUI_Sandbox2`이므로 이름으로 구분하지 말고 Pod ID·GPU로 구분한다. 현행 `_resolve_pod`는 RUNNING이 1개인 동안은 정상 동작하므로, 이 설계가 배포되기 전까지는 **반드시 한 파드만 켜 둔다**.
+- 파드 이름은 2026-09-12에 `dobedub_comfyUI_Sandbox_RTX 5090` / `dobedub_comfyUI_Sandbox_RTX PRO 6000`으로 고정(§2.1). 식별은 여전히 볼륨 ID + Pod ID. 현행 `_resolve_pod`는 RUNNING이 1개인 동안은 정상 동작하므로, 이 설계가 배포되기 전까지는 **반드시 한 파드만 켜 둔다**.
 - 전환(현행 수동 절차): RunPod 콘솔 또는 MCP에서 실행 중 파드 `stop` → EXITED 확인 → 대상 파드 `start`. 5090 start 실패 시 재고 확인 후 재시도.
