@@ -9,6 +9,10 @@ import {
   AdminWorkflow,
   TaskExecutionPolicy,
   SandboxPodStatus,
+  SandboxPodSummary,
+  SandboxPodAttempt,
+  SandboxPodStartFailure,
+  ApiError,
   MetadataStatusResponse,
   WorkflowWidgetMetadata,
   ModelMetadataResponse,
@@ -464,43 +468,248 @@ function formatSandboxCapacity(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? `${value} GB` : "-";
 }
 
-// E-04 · 5b "Sandbox Pod" — 구버전 AdminConsoleModal의 Sandbox 탭은 관리자
-// 전용 상태(users/roles/workflows 등)를 전부 한 컴포넌트 안에 갖고 있어 그대로
-// 재사용할 수 없다. 그 탭이 쓰던 sandboxPod/sandboxPodLoading/
-// sandboxPodPendingAction 상태와 loadSandboxPod/controlSandboxPod 로직만 이
-// 화면 자체의 상태로 옮겨 왔다 - 계산식·API 호출은 한 글자도 바꾸지 않았다.
+// E-04 · 5b "Sandbox Pod" — 다중 파드 보유·선택 실행 (spec 2026-09-11).
+// 같은 네트워크 볼륨에 붙은 파드를 전부 목록으로 보여주고 관리자가 기동 대상을
+// 고른다. "실행 중 파드 최대 1개"는 서버가 강제하며(409), 화면은 전환 확인·
+// conflict 배너·단계별 attempts·fallback 배지·503 카운트다운을 담당한다.
+// 실패 응답에서는 마지막으로 성공한 상태(sandboxPod)를 지우지 않는다.
+
+type SandboxPendingAction =
+  | { kind: "start"; podId: string | null; switchFrom?: SandboxPodSummary | null }
+  | { kind: "stop"; podId: string | null }
+  | { kind: "terminate"; podId: string }
+  | { kind: "stopOthers"; keepPodId: string | null; podIds: string[] };
+
+const SANDBOX_ACTIVE_STATES = ["RUNNING", "STARTING", "PENDING", "CREATED", "RESTARTING"];
+
+function sandboxGpuLabel(pod?: { gpuLabel?: string; gpuTypeId?: string | null } | null) {
+  if (!pod) return "GPU";
+  if (pod.gpuLabel) return pod.gpuLabel;
+  return String(pod.gpuTypeId || "GPU")
+    .replace("NVIDIA GeForce ", "")
+    .replace("NVIDIA ", "")
+    .replace(" Blackwell Workstation Edition", " WK")
+    .replace(" Blackwell Server Edition", " Server")
+    .replace(" Blackwell", "");
+}
+
+// 스펙 §2.1 이름 규칙: 사람이 읽는 문구는 RunPod 이름을 우선, Pod ID는 보조.
+function sandboxPodName(pod?: { name?: string | null; gpuLabel?: string; gpuTypeId?: string | null } | null) {
+  if (!pod) return "Sandbox Pod";
+  return pod.name || sandboxGpuLabel(pod);
+}
+
+function sandboxPodDisplay(pod?: { podId?: string; name?: string | null; gpuLabel?: string; gpuTypeId?: string | null } | null) {
+  if (!pod) return "Sandbox Pod";
+  return pod.podId ? `${sandboxPodName(pod)} (${pod.podId})` : sandboxPodName(pod);
+}
+
+function sandboxShortId(value?: string | null) {
+  if (!value) return "-";
+  return value.length > 5 ? `${value.slice(0, 5)}…` : value;
+}
+
+function sandboxPrice(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "-";
+}
+
+function sandboxAttemptTarget(attempt: SandboxPodAttempt) {
+  if (attempt.stage === "create") return sandboxGpuLabel({ gpuTypeId: attempt.gpuTypeId });
+  if (attempt.podName) return attempt.podName.replace(/^dobedub_comfyUI_Sandbox_?/, "") || attempt.podName;
+  return sandboxShortId(attempt.podId);
+}
+
+function sandboxAttemptReason(attempt: SandboxPodAttempt) {
+  if (attempt.ok) return attempt.stage === "create" ? sandboxShortId(attempt.podId) : "완료";
+  if (attempt.skipped === "vram") return "VRAM 부족";
+  const error = (attempt.error || "").toLowerCase();
+  if (
+    error.includes("no instances") ||
+    error.includes("not enough") ||
+    error.includes("not available") ||
+    error.includes("no longer available")
+  ) return "재고 없음";
+  if (error.includes("stayed exited")) return "GPU 미배정";
+  if (error.includes("not exited")) return "정지 대기 초과";
+  if (error.includes("404")) return "파드 없음";
+  return attempt.error ? attempt.error.slice(0, 40) : "실패";
+}
+
+function sandboxStatusBadgeClass(status?: string) {
+  const value = (status || "").toUpperCase();
+  if (value === "RUNNING" || value === "READY") return "is-running";
+  if (["STARTING", "PENDING", "CREATED", "RESTARTING", "INITIALIZING"].includes(value)) return "is-pending";
+  if (value === "EXITED" || value === "TERMINATED" || value === "NONE") return "is-muted";
+  return "is-muted";
+}
+
+function SandboxAttemptsStrip({ attempts }: { attempts: SandboxPodAttempt[] }) {
+  if (!attempts.length) return null;
+  return (
+    <div className="v3-sandbox-attempts">
+      {attempts.map((attempt, index) => (
+        <React.Fragment key={`${attempt.stage}-${attempt.at || index}-${index}`}>
+          {index > 0 ? <span className="v3-sandbox-attempt-arrow" aria-hidden="true">→</span> : null}
+          <span className={`v3-sandbox-attempt ${attempt.ok ? "is-ok" : "is-fail"}`} title={attempt.error || attempt.at || ""}>
+            <strong>{attempt.stage}</strong>
+            <span className="v3-sandbox-attempt-target">{sandboxAttemptTarget(attempt)}</span>
+            <span className="v3-sandbox-attempt-mark" aria-hidden="true">{attempt.ok ? "✓" : "✗"}</span>
+            <span>{sandboxAttemptReason(attempt)}</span>
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: StudioRoute) => void }) {
   const canControl = canUse(user, "sandbox:control");
   const [sandboxPod, setSandboxPod] = useState<SandboxPodStatus | null>(null);
   const [sandboxPodLoading, setSandboxPodLoading] = useState(false);
-  const [sandboxPodPendingAction, setSandboxPodPendingAction] = useState<"start" | "stop" | null>(null);
+  const [sandboxPodPendingAction, setSandboxPodPendingAction] = useState<SandboxPendingAction | null>(null);
   const [notice, setNotice] = useState("");
+  const [noticeTone, setNoticeTone] = useState<"info" | "warning" | "danger">("info");
+  // 마지막 start 요청의 실패 상세(409/503). 상태 카드는 건드리지 않고 배너만 갱신한다.
+  const [startFailure, setStartFailure] = useState<SandboxPodStartFailure | null>(null);
+  const [retryAfterUntil, setRetryAfterUntil] = useState<number | null>(null);
+  const [retryCountdown, setRetryCountdown] = useState(0);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const autoLoadAttempted = useRef(false);
+
+  const pods = sandboxPod?.pods || [];
+  const selectedPodId = sandboxPod?.selectedPodId || null;
+  const activePodId = sandboxPod?.activePodId || null;
+  const selectedPod = pods.find((pod) => pod.podId === selectedPodId) || null;
+  const activePod = pods.find((pod) => pod.podId === activePodId) || null;
+  const selectedPodMissing = Boolean(sandboxPod?.selectedPodMissing);
+  const conflict = Boolean(sandboxPod?.conflict);
+  const conflictPodIds = sandboxPod?.conflictPodIds || [];
+  const settings = sandboxPod?.settings || { autoSwitchOnStartFailure: true, podPriority: [], replaceSameGpuPods: true };
+  const replaceSameGpu = settings.replaceSameGpuPods !== false;
+  // 정책 A: create가 성공하면 같은 GPU의 정지 파드가 삭제된다 — 확인 모달에 미리 알린다.
+  const replaceCandidates = replaceSameGpu
+    ? pods.filter((pod) => pod.podId !== selectedPodId && (pod.desiredStatus || "").toUpperCase() === "EXITED")
+    : [];
+  const isSwitch = Boolean(activePodId && selectedPodId && activePodId !== selectedPodId);
+  const selectedIsActive = Boolean(selectedPodId && activePodId === selectedPodId);
+  const startDisabled =
+    sandboxPodLoading || !sandboxPod || sandboxPod.configured === false || conflict || selectedIsActive || selectedPodMissing || retryCountdown > 0;
+  const startLabel = retryCountdown > 0
+    ? `Start (${Math.floor(retryCountdown / 60)}:${String(retryCountdown % 60).padStart(2, "0")})`
+    : isSwitch
+      ? "전환 후 시작"
+      : pods.length
+        ? "Start"
+        : "Deploy Sandbox Pod";
+  const displayedAttempts = startFailure?.attempts?.length ? startFailure.attempts : sandboxPod?.attempts || [];
+
+  function showError(error: unknown, fallback: string) {
+    setNoticeTone("danger");
+    setNotice(error instanceof Error ? error.message : fallback);
+  }
 
   async function loadSandboxPod() {
     setSandboxPodLoading(true);
     setNotice("");
     try {
-      setSandboxPod(await apiClient.sandboxPodStatus());
+      const response = await apiClient.sandboxPodStatus();
+      setSandboxPod(response);
+      setStartFailure(null);
+      if (response.conflict) {
+        setNoticeTone("danger");
+        setNotice(response.message || "실행 중인 Sandbox Pod가 2개입니다.");
+      }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Sandbox Pod status load failed");
+      showError(error, "Sandbox Pod status load failed");
     } finally {
       setSandboxPodLoading(false);
     }
   }
 
-  async function controlSandboxPod(action: "start" | "stop") {
+  async function selectPod(podId: string) {
+    if (!canControl || podId === selectedPodId) return;
     setSandboxPodLoading(true);
-    setNotice("");
     try {
-      const response = action === "start" ? await apiClient.startSandboxPod() : await apiClient.stopSandboxPod();
-      setSandboxPod(response);
-      setNotice(response.message || (action === "start" ? "Sandbox Pod 시작을 요청했습니다." : "Sandbox Pod 중지를 요청했습니다."));
+      setSandboxPod(await apiClient.selectSandboxPod(podId));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Sandbox Pod control failed");
+      showError(error, "Sandbox Pod 선택에 실패했습니다.");
     } finally {
       setSandboxPodLoading(false);
     }
+  }
+
+  async function controlSandboxPod(action: SandboxPendingAction) {
+    setSandboxPodLoading(true);
+    setNotice("");
+    setStartFailure(null);
+    try {
+      let response: SandboxPodStatus;
+      if (action.kind === "start") {
+        response = await apiClient.startSandboxPod(action.podId);
+      } else if (action.kind === "stop") {
+        response = await apiClient.stopSandboxPod(action.podId);
+      } else if (action.kind === "terminate") {
+        response = await apiClient.terminateSandboxPod(action.podId);
+      } else {
+        // conflict 해소: 선택 파드만 남기고 나머지를 순차 정지한다.
+        response = sandboxPod as SandboxPodStatus;
+        for (const podId of action.podIds) {
+          response = await apiClient.stopSandboxPod(podId);
+        }
+        response = await apiClient.sandboxPodStatus();
+      }
+      // 성공 응답에서만 상태 카드·HTTP Services를 갱신한다.
+      setSandboxPod(response);
+      setNoticeTone(response.switched || response.createdBy ? "warning" : "info");
+      setNotice(response.message || (action.kind === "start" ? "Sandbox Pod 시작을 요청했습니다." : "Sandbox Pod 중지를 요청했습니다."));
+    } catch (error) {
+      // 실패 시 이전 상태(sandboxPod)는 그대로 유지한다.
+      const detail = error instanceof ApiError && error.detail && typeof error.detail === "object"
+        ? (error.detail as SandboxPodStartFailure)
+        : null;
+      if (action.kind === "start" && detail) {
+        setStartFailure(detail);
+        if (detail.retryAfterSeconds && detail.retryAfterSeconds > 0) {
+          setRetryAfterUntil(Date.now() + detail.retryAfterSeconds * 1000);
+        }
+      }
+      showError(error, action.kind === "start" ? "Sandbox Pod 시작에 실패했습니다." : "Sandbox Pod control failed");
+    } finally {
+      setSandboxPodLoading(false);
+    }
+  }
+
+  async function saveSettings(next: { autoSwitchOnStartFailure: boolean; podPriority: string[]; replaceSameGpuPods?: boolean }) {
+    if (!canControl) return;
+    setSettingsSaving(true);
+    try {
+      const saved = await apiClient.updateSandboxPodSettings(next);
+      setSandboxPod((current) => (current ? { ...current, settings: { ...current.settings, ...saved } } : current));
+    } catch (error) {
+      showError(error, "Sandbox Pod 설정 저장에 실패했습니다.");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  function movePriority(podId: string, direction: -1 | 1) {
+    const ordered = priorityOrder();
+    const index = ordered.indexOf(podId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ordered.length) return;
+    const next = [...ordered];
+    [next[index], next[target]] = [next[target], next[index]];
+    void saveSettings({ autoSwitchOnStartFailure: settings.autoSwitchOnStartFailure, podPriority: next, replaceSameGpuPods: replaceSameGpu });
+  }
+
+  function priorityOrder(): string[] {
+    // 저장된 우선순위 → 나머지는 시간당 요금 오름차순(서버 기본과 동일).
+    const stored = (settings.podPriority || []).filter((podId) => pods.some((pod) => pod.podId === podId));
+    const rest = pods
+      .filter((pod) => !stored.includes(pod.podId))
+      .sort((a, b) => (a.pricePerHr ?? Number.POSITIVE_INFINITY) - (b.pricePerHr ?? Number.POSITIVE_INFINITY))
+      .map((pod) => pod.podId);
+    return [...stored, ...rest];
   }
 
   useEffect(() => {
@@ -509,6 +718,38 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
       void loadSandboxPod();
     }
   }, []);
+
+  useEffect(() => {
+    if (!retryAfterUntil) {
+      setRetryCountdown(0);
+      return undefined;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((retryAfterUntil - Date.now()) / 1000));
+      setRetryCountdown(remaining);
+      if (remaining <= 0) setRetryAfterUntil(null);
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAfterUntil]);
+
+  function requestStart() {
+    if (!selectedPodId && pods.length) return;
+    setSandboxPodPendingAction({ kind: "start", podId: selectedPodId, switchFrom: isSwitch ? activePod : null });
+  }
+
+  const pendingTitle = sandboxPodPendingAction?.kind === "stop"
+    ? "Sandbox Pod 중지"
+    : sandboxPodPendingAction?.kind === "terminate"
+    ? "Sandbox Pod 삭제"
+    : sandboxPodPendingAction?.kind === "stopOthers"
+      ? "선택 파드만 남기고 정지"
+      : sandboxPodPendingAction?.switchFrom
+        ? "파드를 전환할까요?"
+        : pods.length
+          ? "Sandbox Pod 시작"
+          : "Sandbox Pod 배포";
 
   return (
     <AppShell
@@ -521,54 +762,258 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
       headerActions={
         <>
           <button className="v3-secondary-button" type="button" disabled={sandboxPodLoading} onClick={() => void loadSandboxPod()}>Refresh Status</button>
-          {canControl && ["EXITED", "TERMINATED"].includes(sandboxPod?.desiredStatus || "") ? (
-            <button className="v3-primary-button" type="button" disabled={sandboxPodLoading || !sandboxPod || sandboxPod.configured === false} onClick={() => setSandboxPodPendingAction("start")}>Deploy Sandbox Pod</button>
-          ) : null}
           {canControl ? (
-            <button className="v3-danger-button" style={{ background: "var(--v3-danger)", color: "#fff", borderColor: "var(--v3-danger)" }} type="button" disabled={sandboxPodLoading || !sandboxPod || sandboxPod.configured === false || sandboxPod.desiredStatus === "EXITED" || sandboxPod.desiredStatus === "TERMINATED"} onClick={() => setSandboxPodPendingAction("stop")}>Stop Pod</button>
+            <button className="v3-primary-button" type="button" disabled={startDisabled} onClick={requestStart}>{startLabel}</button>
           ) : null}
         </>
       }
-      sidebarFooter={<p className="v3-muted-text">일상적인 영상 생성용 Serverless와 분리된 전용 Pod입니다. 여기서는 Pod 상태와 노출된 HTTP 서비스만 관리합니다.</p>}
+      sidebarFooter={<p className="v3-muted-text">일상적인 영상 생성용 Serverless와 분리된 전용 Pod입니다. 여기서는 Pod 목록·선택·전환과 노출된 HTTP 서비스만 관리합니다.</p>}
     >
-      {notice ? <p className="v3-inline-notice">{notice}</p> : null}
+      {conflict ? (
+        <div className="v3-sandbox-banner is-danger">
+          <div className="v3-sandbox-banner-body">
+            <strong>실행 중인 Sandbox Pod가 {conflictPodIds.length}개입니다. 볼륨 손상 위험</strong>
+            <span>두 ComfyUI가 같은 네트워크 볼륨에 동시에 쓰고 있습니다. 해소 전까지 Start·전환은 거부됩니다(409).</span>
+          </div>
+          {canControl ? (
+            <button
+              className="v3-danger-button v3-sandbox-banner-action"
+              style={{ background: "var(--v3-danger)", color: "#fff", borderColor: "var(--v3-danger)" }}
+              type="button"
+              disabled={sandboxPodLoading}
+              onClick={() => setSandboxPodPendingAction({
+                kind: "stopOthers",
+                keepPodId: selectedPodId,
+                podIds: conflictPodIds.filter((podId) => podId !== selectedPodId)
+              })}
+            >
+              선택 파드만 남기고 정지
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {startFailure || notice ? (
+        <div className={`v3-sandbox-banner ${startFailure ? "is-danger" : noticeTone === "warning" ? "is-warning" : noticeTone === "danger" ? "is-danger" : "is-info"}`}>
+          <div className="v3-sandbox-banner-body">
+            <strong>{startFailure?.message || notice}</strong>
+            {startFailure && retryCountdown > 0 ? (
+              <span>마지막으로 확인된 상태를 그대로 표시합니다. {Math.floor(retryCountdown / 60)}분 {retryCountdown % 60}초 후 다시 시도할 수 있습니다.</span>
+            ) : null}
+            {startFailure?.runningPodIds?.length ? <span>실행 중: {startFailure.runningPodIds.map((podId) => sandboxPodDisplay(pods.find((pod) => pod.podId === podId) || { podId })).join(", ")}</span> : null}
+          </div>
+          {displayedAttempts.length ? <SandboxAttemptsStrip attempts={displayedAttempts} /> : null}
+        </div>
+      ) : displayedAttempts.length ? (
+        <div className="v3-sandbox-banner is-info"><SandboxAttemptsStrip attempts={displayedAttempts} /></div>
+      ) : null}
+
       <div className="v3-card">
         <div className="v3-card-header">
-          <div className="v3-card-header-title">Pod 상태</div>
-          <span className="v3-status-badge is-ready">{sandboxPod?.runtimeStatus || sandboxPod?.desiredStatus || "NOT CHECKED"}</span>
+          <div className="v3-card-header-title">Sandbox Pod 목록</div>
+          <span className="v3-card-header-meta">
+            {sandboxPod?.systemStatus?.storage?.networkVolumeId ? `volume ${sandboxPod.systemStatus.storage.networkVolumeId} · ` : ""}실행 중 최대 1개
+          </span>
         </div>
         {!sandboxPod && sandboxPodLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>Sandbox Pod 상태를 확인 중입니다.</p> : null}
-        {sandboxPod ? (
-          <div className="v3-summary-card" style={{ padding: 16 }}>
-            <div className="v3-summary-row"><span>Pod ID</span><strong>{sandboxPod.podId || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Pod Name</span><strong>{sandboxPod.podName || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Resolved By</span><strong>{sandboxPod.resolvedBy || "Pod ID (legacy)"}</strong></div>
-            <div className="v3-summary-row"><span>Status</span><strong>{sandboxPod.desiredStatus || "UNKNOWN"}</strong></div>
-            <div className="v3-summary-row"><span>Service Status</span><strong>{sandboxPod.runtimeStatus || "NOT CHECKED"}</strong></div>
-            <div className="v3-summary-row"><span>Last Started</span><strong>{formatTimestamp(sandboxPod.lastStartedAtKst || sandboxPod.lastStartedAt, sandboxPod.lastStartedAtUtc).replace(/\n/g, " ")}</strong></div>
-            <div className="v3-summary-row"><span>Lifecycle Event Time</span><strong>{formatTimestamp(sandboxPod.lastStatusChangeKst || sandboxPod.lastStatusChange, sandboxPod.lastStatusChangeUtc).replace(/\n/g, " ")}</strong></div>
-            <div className="v3-summary-row"><span>Last Lifecycle Event</span><strong>{sandboxPod.lastLifecycleEvent || "-"}</strong></div>
-            <div className="v3-summary-row"><span>Status Checked</span><strong>{formatTimestamp(sandboxPod.checkedAtKst || sandboxPod.checkedAt, sandboxPod.checkedAtUtc).replace(/\n/g, " ")}</strong></div>
+        {sandboxPod && !pods.length ? (
+          <p className="v3-muted-text" style={{ padding: 16 }}>{sandboxPod.message || "Sandbox 볼륨에 연결된 Pod가 없습니다. Start를 누르면 새 Pod를 생성합니다."}</p>
+        ) : null}
+        {pods.length ? (
+          <div className="v3-sandbox-pod-table" role="table">
+            <div className="v3-sandbox-pod-row is-head" role="row">
+              <span></span><span>GPU · POD</span><span>VRAM / RAM</span><span>$/H</span><span>STATUS</span><span>LAST STARTED</span><span className="is-right">ACTION</span>
+            </div>
+            {pods.map((pod) => {
+              const isSelected = pod.podId === selectedPodId;
+              const isActive = SANDBOX_ACTIVE_STATES.includes((pod.desiredStatus || "").toUpperCase());
+              const isConflicting = conflictPodIds.includes(pod.podId);
+              return (
+                <label
+                  className={`v3-sandbox-pod-row${isSelected ? " is-selected" : ""}${isConflicting ? " is-conflict" : ""}`}
+                  role="row"
+                  key={pod.podId}
+                >
+                  <span>
+                    <input
+                      type="radio"
+                      name="sandbox-pod-select"
+                      checked={isSelected}
+                      disabled={!canControl || sandboxPodLoading}
+                      onChange={() => void selectPod(pod.podId)}
+                      aria-label={`${sandboxPodName(pod)} 파드 선택`}
+                    />
+                  </span>
+                  <span className="v3-sandbox-pod-gpu">
+                    <span className="v3-sandbox-pod-gpu-name">
+                      <strong>{sandboxPodName(pod)}</strong>
+                      {pod.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}
+                      {pod.gpuTier === "primary" ? <span className="v3-status-badge is-ready">primary</span> : null}
+                    </span>
+                    <span className="v3-sandbox-pod-id">{pod.podId} · {pod.gpuTypeId || sandboxGpuLabel(pod)}</span>
+                  </span>
+                  <span><strong>{formatSandboxCapacity(pod.vramGb)}</strong><span className="v3-sandbox-pod-dim"> / {formatSandboxCapacity(pod.ramGb)}</span></span>
+                  <span className="v3-sandbox-pod-mono">{sandboxPrice(pod.pricePerHr)}</span>
+                  <span><span className={`v3-status-badge ${sandboxStatusBadgeClass(pod.desiredStatus)}`}>{pod.desiredStatus || "UNKNOWN"}</span></span>
+                  <span className="v3-sandbox-pod-dim">
+                    {pod.lastStartedAtKst || pod.lastStartedAt
+                      ? formatTimestamp(pod.lastStartedAtKst || pod.lastStartedAt, pod.lastStartedAtUtc).replace(/\n/g, " ")
+                      : "-"}
+                  </span>
+                  <span className="is-right">
+                    {canControl && isActive ? (
+                      <button
+                        className="v3-danger-button v3-sandbox-pod-stop"
+                        type="button"
+                        disabled={sandboxPodLoading}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setSandboxPodPendingAction({ kind: "stop", podId: pod.podId });
+                        }}
+                      >
+                        Stop
+                      </button>
+                    ) : canControl && (pod.desiredStatus || "").toUpperCase() === "EXITED" ? (
+                      <button
+                        className="v3-secondary-button v3-sandbox-pod-terminate"
+                        type="button"
+                        disabled={sandboxPodLoading}
+                        title="파드를 RunPod에서 삭제합니다. /workspace 볼륨은 유지됩니다."
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setSandboxPodPendingAction({ kind: "terminate", podId: pod.podId });
+                        }}
+                      >
+                        삭제
+                      </button>
+                    ) : <span className="v3-sandbox-pod-dim">—</span>}
+                  </span>
+                </label>
+              );
+            })}
+            <p className="v3-muted-text v3-sandbox-pod-note">
+              {selectedPodMissing
+                ? <>선택했던 파드 <code>{selectedPodId}</code>를 찾을 수 없습니다(migration으로 ID가 바뀌었을 수 있음). 같은 이름의 파드를 다시 선택하세요.</>
+                : conflict
+                ? "실행 중 파드가 1개가 될 때까지 Start 버튼은 비활성화됩니다. 정지할 파드를 행의 Stop으로 직접 고를 수도 있습니다."
+                : isSwitch
+                  ? <>라디오로 기동 대상을 선택합니다. 다른 파드가 실행 중이면 Start가 <strong>전환 후 시작</strong>으로 바뀌며, 서버가 실행 중 파드를 먼저 정지한 뒤 선택 파드를 시작합니다.</>
+                  : activePodId
+                    ? "라디오로 기동 대상을 선택합니다. 실행 중 파드는 항상 최대 1개입니다."
+                    : "실행 중인 파드가 없습니다. 상태 카드는 선택 파드의 마지막 확인 값입니다."}
+            </p>
           </div>
         ) : null}
       </div>
-      {sandboxPod ? (
-        <div className="v3-card">
-          <div className="v3-card-header">
-            <div className="v3-card-header-title">HTTP Services</div>
-            <span className="v3-card-header-meta">{sandboxPod.httpServices.length}</span>
+
+      <div className="v3-sandbox-columns">
+        <div className="v3-sandbox-column">
+          <div className="v3-card">
+            <div className="v3-card-header">
+              <div className="v3-card-header-title">Pod 상태 <span className="v3-sandbox-pod-dim">· {activePod ? `실행 중 · ${sandboxPodName(activePod)}` : selectedPod ? `선택 · ${sandboxPodName(selectedPod)}` : "파드"}</span></div>
+              <span className={`v3-status-badge ${conflict ? "is-failed" : sandboxStatusBadgeClass(sandboxPod?.runtimeStatus || sandboxPod?.desiredStatus)}`}>
+                {conflict ? "CONFLICT" : sandboxPod?.runtimeStatus || sandboxPod?.desiredStatus || "NOT CHECKED"}
+              </span>
+            </div>
+            {sandboxPod ? (
+              <div className="v3-summary-card" style={{ padding: 16 }}>
+                <div className="v3-summary-row"><span>Pod ID</span><strong>{sandboxPod.podId || "-"}</strong></div>
+                <div className="v3-summary-row"><span>Pod Name</span><strong>{sandboxPod.podName || "-"}</strong></div>
+                <div className="v3-summary-row"><span>Resolved By</span><strong>{sandboxPod.resolvedBy || "Pod ID (legacy)"}</strong></div>
+                <div className="v3-summary-row"><span>Status</span><strong>{sandboxPod.desiredStatus || "UNKNOWN"}</strong></div>
+                <div className="v3-summary-row"><span>Service Status</span><strong>{sandboxPod.runtimeStatus || "NOT CHECKED"}</strong></div>
+                <div className="v3-summary-row"><span>Last Started</span><strong>{formatTimestamp(sandboxPod.lastStartedAtKst || sandboxPod.lastStartedAt, sandboxPod.lastStartedAtUtc).replace(/\n/g, " ")}</strong></div>
+                <div className="v3-summary-row"><span>Lifecycle Event Time</span><strong>{formatTimestamp(sandboxPod.lastStatusChangeKst || sandboxPod.lastStatusChange, sandboxPod.lastStatusChangeUtc).replace(/\n/g, " ")}</strong></div>
+                <div className="v3-summary-row"><span>Last Lifecycle Event</span><strong>{sandboxPod.lastLifecycleEvent || "-"}</strong></div>
+                <div className="v3-summary-row"><span>Status Checked</span><strong>{formatTimestamp(sandboxPod.checkedAtKst || sandboxPod.checkedAt, sandboxPod.checkedAtUtc).replace(/\n/g, " ")}</strong></div>
+              </div>
+            ) : null}
           </div>
-          <div className="v3-sandbox-service-list">
-            {sandboxPod.httpServices.length ? sandboxPod.httpServices.map((service) => (
-              <a className="v3-sandbox-service-link" href={service.url} key={service.url} rel="noreferrer" target="_blank">
-                <span className="v3-sandbox-service-name">{service.label || `HTTP ${service.internalPort}`}</span>
-                <span className="v3-sandbox-service-port">HTTP {service.internalPort}</span>
-                <span className="v3-sandbox-service-url">{service.url}</span>
-              </a>
-            )) : <p className="v3-muted-text">{sandboxPod.message || "노출된 HTTP 서비스가 없습니다."}</p>}
+          {sandboxPod ? (
+            <div className="v3-card">
+              <div className="v3-card-header">
+                <div className="v3-card-header-title">HTTP Services</div>
+                <span className="v3-card-header-meta">{sandboxPod.httpServices.length}</span>
+              </div>
+              <div className="v3-sandbox-service-list">
+                {sandboxPod.httpServices.length ? sandboxPod.httpServices.map((service) => (
+                  <a className="v3-sandbox-service-link" href={service.url} key={service.url} rel="noreferrer" target="_blank">
+                    <span className="v3-sandbox-service-name">{service.label || `HTTP ${service.internalPort}`}</span>
+                    <span className="v3-sandbox-service-port">HTTP {service.internalPort}</span>
+                    <span className="v3-sandbox-service-url">{service.url}</span>
+                    {service.authRequired ? <span className="v3-status-badge is-pending" title="RunPod 콘솔 env JUPYTER_PASSWORD">비밀번호 필요</span> : null}
+                  </a>
+                )) : (
+                  <p className="v3-muted-text">
+                    {activePodId ? sandboxPod.message || "노출된 HTTP 서비스가 없습니다." : "실행 중인 파드가 없어 노출된 HTTP 서비스가 없습니다. 이전 파드의 URL은 표시하지 않습니다."}
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="v3-card v3-sandbox-column">
+          <div className="v3-card-header">
+            <div className="v3-card-header-title">Start 실패 대응</div>
+            <span className="v3-card-header-meta">sandbox:control</span>
+          </div>
+          <div className="v3-sandbox-settings">
+            <label className="v3-sandbox-settings-toggle">
+              <span>
+                <strong>선택 파드 기동 실패 시 다른 파드 자동 시작</strong>
+                <span className="v3-sandbox-pod-dim">재고 부족으로 선택 파드를 켜지 못하면 아래 우선순위대로 다른 정지 파드를 대신 시작합니다.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={settings.autoSwitchOnStartFailure}
+                disabled={!canControl || settingsSaving}
+                onChange={(event) => void saveSettings({ autoSwitchOnStartFailure: event.target.checked, podPriority: settings.podPriority || [], replaceSameGpuPods: replaceSameGpu })}
+              />
+            </label>
+            <label className="v3-sandbox-settings-toggle">
+              <span>
+                <strong>새 파드 생성 시 같은 GPU의 정지 파드 삭제</strong>
+                <span className="v3-sandbox-pod-dim">정지 파드는 원래 호스트에 묶여 있어 재시작이 안 되면 새 파드를 만들 수밖에 없습니다. 성공하면 같은 GPU의 정지 파드를 지워 GPU별 파드를 1개로 유지합니다. /workspace 볼륨은 유지됩니다.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={replaceSameGpu}
+                disabled={!canControl || settingsSaving}
+                onChange={(event) => void saveSettings({ autoSwitchOnStartFailure: settings.autoSwitchOnStartFailure, podPriority: settings.podPriority || [], replaceSameGpuPods: event.target.checked })}
+              />
+            </label>
+            <div className="v3-sandbox-settings-group">
+              <span className="v3-label">대체 시작 우선순위</span>
+              {priorityOrder().map((podId, index, list) => {
+                const pod = pods.find((item) => item.podId === podId);
+                return (
+                  <div className="v3-sandbox-priority-row" key={podId}>
+                    <span className="v3-sandbox-priority-name">
+                      <span className="v3-sandbox-pod-mono">{index + 1}</span>
+                      <strong>{sandboxPodName(pod)}</strong>
+                      <span className="v3-sandbox-pod-mono v3-sandbox-pod-dim">{sandboxPrice(pod?.pricePerHr)}/h</span>
+                    </span>
+                    {canControl ? (
+                      <span className="v3-sandbox-priority-actions">
+                        <button type="button" className="v3-secondary-button" disabled={settingsSaving || index === 0} onClick={() => movePriority(podId, -1)} aria-label="위로">▲</button>
+                        <button type="button" className="v3-secondary-button" disabled={settingsSaving || index === list.length - 1} onClick={() => movePriority(podId, 1)} aria-label="아래로">▼</button>
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {!pods.length ? <p className="v3-muted-text">파드 목록을 불러오면 우선순위를 정할 수 있습니다.</p> : null}
+            </div>
+            <div className="v3-sandbox-settings-group">
+              <span className="v3-label">모든 파드 기동 실패 시 새 파드 생성 GPU 순서 (환경변수)</span>
+              <p className="v3-muted-text">1순위 <strong>{sandboxGpuLabel({ gpuTypeId: pods.find((pod) => pod.gpuTier === "primary")?.gpuTypeId || sandboxPod?.gpuTypeId })}</strong> → `RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS` 순서. 결과는 위 attempts 배너와 GPU Type의 fallback 배지로 확인합니다.</p>
+            </div>
           </div>
         </div>
-      ) : null}
+      </div>
+
       {sandboxPod ? (
         <div className="v3-card">
           <div className="v3-card-header">
@@ -589,6 +1034,10 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
                 </strong>
               </div>
               <div className="v3-sandbox-metric v3-sandbox-metric-wide">
+                <span>GPU Type</span>
+                <strong className="v3-sandbox-gpu-type">{sandboxPod.systemStatus.gpuType || sandboxPod.gpuTypeId || "-"}{sandboxPod.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}{sandboxPod.gpuTier === "primary" ? <span className="v3-status-badge is-ready">primary</span> : null}</strong>
+              </div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide">
                 <span>Storage</span>
                 <strong>Container {formatSandboxCapacity(sandboxPod.systemStatus.storage?.containerDiskInGb)} · Volume {formatSandboxCapacity(sandboxPod.systemStatus.storage?.volumeInGb)}</strong>
               </div>
@@ -597,7 +1046,10 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
             <div className="v3-sandbox-metric-grid">
               <div className="v3-sandbox-metric"><span>GPU</span><strong>{sandboxPod.systemStatus?.gpuCount || "-"}</strong></div>
               <div className="v3-sandbox-metric"><span>Memory</span><strong>{formatSandboxCapacity(sandboxPod.systemStatus?.memoryInGb)}</strong></div>
-              <div className="v3-sandbox-metric v3-sandbox-metric-wide"><span>GPU Type</span><strong>{sandboxPod.systemStatus?.gpuType || "-"}</strong></div>
+              <div className="v3-sandbox-metric v3-sandbox-metric-wide">
+                <span>GPU Type</span>
+                <strong className="v3-sandbox-gpu-type">{sandboxPod.systemStatus?.gpuType || sandboxPod.gpuTypeId || "-"}{sandboxPod.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}{sandboxPod.gpuTier === "primary" ? <span className="v3-status-badge is-ready">primary</span> : null}</strong>
+              </div>
               <div className="v3-sandbox-metric v3-sandbox-metric-wide"><span>Storage</span><strong>Container {formatSandboxCapacity(sandboxPod.systemStatus?.storage?.containerDiskInGb)} · Volume {formatSandboxCapacity(sandboxPod.systemStatus?.storage?.volumeInGb)}</strong></div>
               <p className="v3-muted-text v3-sandbox-status-message">{sandboxPod.systemStatus?.message || "RunPod 런타임 상태 정보가 아직 준비되지 않았습니다."}</p>
             </div>
@@ -608,18 +1060,38 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
       {sandboxPodPendingAction ? (
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3SandboxConfirmTitle">
           <div className="v3-modal-panel">
-            <div className="v3-label" style={{ color: sandboxPodPendingAction === "stop" ? "var(--v3-danger)" : undefined }}>SANDBOX:{sandboxPodPendingAction.toUpperCase()}</div>
-            <h2 id="v3SandboxConfirmTitle" className="v3-modal-title">{sandboxPodPendingAction === "stop" ? "Sandbox Pod 중지" : "Sandbox Pod 배포"}</h2>
+            <div className="v3-label" style={{ color: sandboxPodPendingAction.kind !== "start" ? "var(--v3-danger)" : undefined }}>
+              SANDBOX:{sandboxPodPendingAction.kind === "stopOthers" ? "STOP" : sandboxPodPendingAction.kind.toUpperCase()}
+            </div>
+            <h2 id="v3SandboxConfirmTitle" className="v3-modal-title">{pendingTitle}</h2>
             <p className="v3-modal-body-text">
-              {sandboxPodPendingAction === "stop"
-                ? "Sandbox Pod를 중지하시겠습니까? HTTP 서비스가 즉시 사용할 수 없게 됩니다."
-                : "새 Sandbox Pod를 배포하시겠습니까? GPU 할당이 시작되며 비용이 발생할 수 있습니다."}
+              {sandboxPodPendingAction.kind === "stop"
+                ? `${sandboxPodDisplay(pods.find((pod) => pod.podId === sandboxPodPendingAction.podId) || { podId: sandboxPodPendingAction.podId || "" })} 파드를 중지하시겠습니까? HTTP 서비스가 즉시 사용할 수 없게 됩니다.`
+                : sandboxPodPendingAction.kind === "terminate"
+                ? `${sandboxPodDisplay(pods.find((pod) => pod.podId === sandboxPodPendingAction.podId) || { podId: sandboxPodPendingAction.podId })} 파드를 RunPod에서 삭제합니다. 컨테이너 디스크는 사라지고 /workspace 네트워크 볼륨의 데이터는 유지됩니다. 되돌릴 수 없습니다.`
+                : sandboxPodPendingAction.kind === "stopOthers"
+                  ? `${sandboxPodPendingAction.podIds.map((podId) => sandboxPodDisplay(pods.find((pod) => pod.podId === podId) || { podId })).join(", ")} 파드를 정지하고 ${sandboxPodDisplay(selectedPod)}만 남깁니다. 진행 중인 ComfyUI 작업은 중단됩니다.`
+                  : sandboxPodPendingAction.switchFrom
+                    ? `현재 실행 중인 ${sandboxPodDisplay(sandboxPodPendingAction.switchFrom)} 파드를 정지하고 ${sandboxPodDisplay(selectedPod)} 파드를 시작합니다. 진행 중인 ComfyUI 작업은 중단됩니다.`
+                    : pods.length
+                      ? `${sandboxPodDisplay(selectedPod)} 파드를 시작합니다. 재고가 없으면 다른 파드 자동 시작 → 새 파드 생성(GPU fallback) 순으로 진행되며 비용이 발생할 수 있습니다.`
+                      : "새 Sandbox Pod를 배포하시겠습니까? GPU 할당이 시작되며 비용이 발생할 수 있습니다."}
             </p>
+            {sandboxPodPendingAction.kind === "start" && sandboxPodPendingAction.switchFrom ? (
+              <ol className="v3-sandbox-switch-steps">
+                <li>stop {sandboxPodName(sandboxPodPendingAction.switchFrom)} ({sandboxPodPendingAction.switchFrom.podId}) → EXITED 확인</li>
+                <li>start {sandboxPodName(selectedPod)} ({selectedPodId})</li>
+                <li className="v3-sandbox-pod-dim">실패 시 대체 파드 자동 시작 → 새 파드 생성(GPU fallback)</li>
+              </ol>
+            ) : null}
+            {sandboxPodPendingAction.kind === "start" && replaceSameGpu && pods.length ? (
+              <p className="v3-muted-text">재시작이 실패해 새 파드가 만들어지면 같은 GPU의 정지 파드{replaceCandidates.length ? `(${replaceCandidates.map((pod) => sandboxPodName(pod)).join(", ")} 등 해당 시)` : ""}는 자동 삭제됩니다. 설정 카드에서 끌 수 있습니다.</p>
+            ) : null}
             <div className="v3-inline-actions">
               <button className="v3-secondary-button v3-flex-button" type="button" onClick={() => setSandboxPodPendingAction(null)}>취소</button>
               <button
-                className="v3-danger-button v3-flex-button"
-                style={{ background: "var(--v3-danger)", color: "#fff", borderColor: "var(--v3-danger)" }}
+                className={sandboxPodPendingAction.kind === "start" ? "v3-primary-button v3-flex-button" : "v3-danger-button v3-flex-button"}
+                style={sandboxPodPendingAction.kind === "start" ? undefined : { background: "var(--v3-danger)", color: "#fff", borderColor: "var(--v3-danger)" }}
                 type="button"
                 onClick={() => {
                   const action = sandboxPodPendingAction;
@@ -627,7 +1099,7 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
                   void controlSandboxPod(action);
                 }}
               >
-                {sandboxPodPendingAction === "stop" ? "중지" : "배포"}
+                {sandboxPodPendingAction.kind === "stop" ? "중지" : sandboxPodPendingAction.kind === "terminate" ? "삭제" : sandboxPodPendingAction.kind === "stopOthers" ? "정지" : sandboxPodPendingAction.switchFrom ? "전환 후 시작" : pods.length ? "시작" : "배포"}
               </button>
             </div>
           </div>

@@ -6991,3 +6991,104 @@ button {
 .v3-right-panel .v3-summary-row strong { min-width: 0; overflow-wrap: anywhere; }
 .v3-asset-preview-modal { max-height: min(80vh, 760px); max-width: min(900px, 90vw); overflow: auto; width: min(760px, calc(100vw - 32px)); }
 .v3-asset-preview-modal > img, .v3-asset-preview-modal > video { background: #0b0d0f; border-radius: 8px; display: block; max-height: 66vh; max-width: 100%; width: 100%; }
+
+/* ---------------------------------------------------------------------------
+ * Sandbox Pod — 다중 파드 목록·선택·전환 (spec 2026-09-11 §5.5)
+ * ------------------------------------------------------------------------- */
+.v3-sandbox-banner {
+  align-items: center;
+  border: 1px solid var(--v3-border);
+  border-radius: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px 16px;
+}
+.v3-sandbox-banner.is-info { background: var(--v3-accent-bg); border-color: var(--v3-accent-border); }
+.v3-sandbox-banner.is-warning { background: var(--v3-warning-bg); border-color: var(--v3-warning-border); }
+.v3-sandbox-banner.is-danger { background: var(--v3-danger-bg); border-color: var(--v3-danger-border); }
+.v3-sandbox-banner-body { display: flex; flex-direction: column; gap: 3px; }
+.v3-sandbox-banner-body strong { font-size: 12.5px; font-weight: 600; color: var(--v3-text-body); }
+.v3-sandbox-banner-body span { font-size: 11px; }
+.v3-sandbox-banner.is-warning .v3-sandbox-banner-body span { color: var(--v3-warning-text); }
+.v3-sandbox-banner.is-danger .v3-sandbox-banner-body span { color: var(--v3-danger); }
+.v3-sandbox-banner.is-info .v3-sandbox-banner-body span { color: var(--v3-accent-text); }
+.v3-sandbox-banner.is-danger:has(.v3-sandbox-banner-action) { flex-direction: row; align-items: center; justify-content: space-between; }
+.v3-sandbox-banner-action { white-space: nowrap; padding: 7px 14px; font-size: 12px; }
+
+.v3-sandbox-attempts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.v3-sandbox-attempt {
+  align-items: center;
+  border-radius: 6px;
+  display: inline-flex;
+  font-family: var(--v3-font-mono);
+  font-size: 10.5px;
+  gap: 6px;
+  padding: 5px 9px;
+}
+.v3-sandbox-attempt strong { font-weight: 500; }
+.v3-sandbox-attempt-target { color: var(--v3-text-secondary); }
+.v3-sandbox-attempt.is-ok { background: var(--v3-accent-bg); color: var(--v3-accent-text); }
+.v3-sandbox-attempt.is-fail { background: var(--v3-danger-bg); color: var(--v3-danger); }
+.v3-sandbox-attempt-arrow { color: var(--v3-text-label); font-size: 12px; }
+
+.v3-sandbox-pod-table { display: flex; flex-direction: column; }
+.v3-sandbox-pod-row {
+  align-items: center;
+  border-top: 1px solid var(--v3-border-inner);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 36px minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
+  padding: 12px 16px;
+  font-size: 12px;
+}
+.v3-sandbox-pod-row.is-head {
+  background: var(--v3-bg-table);
+  border-top: none;
+  color: var(--v3-text-label);
+  font-family: var(--v3-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--v3-label-letter-spacing);
+  padding: 8px 16px;
+}
+.v3-sandbox-pod-row:not(.is-head) { cursor: pointer; }
+.v3-sandbox-pod-row.is-selected { background: #f3faf6; }
+.v3-sandbox-pod-row.is-conflict { background: #fff6f5; }
+.v3-sandbox-pod-row input[type="radio"] { accent-color: var(--v3-accent); width: 16px; height: 16px; margin: 0; }
+.v3-sandbox-pod-row .is-right { display: flex; justify-content: flex-end; text-align: right; }
+.v3-sandbox-pod-gpu { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.v3-sandbox-pod-gpu-name { display: flex; align-items: center; gap: 8px; }
+.v3-sandbox-pod-gpu-name strong { font-size: 12.5px; font-weight: 700; }
+.v3-sandbox-pod-id { color: var(--v3-text-label); font-family: var(--v3-font-mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-sandbox-pod-dim { color: var(--v3-text-label); font-size: 11.5px; }
+.v3-sandbox-pod-mono { font-family: var(--v3-font-mono); font-size: 11.5px; }
+.v3-sandbox-pod-stop { padding: 6px 12px; font-size: 11.5px; }
+.v3-sandbox-pod-terminate { padding: 6px 12px; font-size: 11.5px; color: var(--v3-danger); border-color: var(--v3-danger-border); }
+.v3-sandbox-pod-note { border-top: 1px solid var(--v3-border-inner); padding: 10px 16px; }
+
+.v3-sandbox-columns { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: start; }
+.v3-sandbox-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (max-width: 1100px) { .v3-sandbox-columns { grid-template-columns: minmax(0, 1fr); } }
+
+.v3-sandbox-settings { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
+.v3-sandbox-settings-toggle { align-items: center; display: flex; gap: 12px; justify-content: space-between; cursor: pointer; }
+.v3-sandbox-settings-toggle > span { display: flex; flex-direction: column; gap: 3px; }
+.v3-sandbox-settings-toggle strong { font-size: 12.5px; font-weight: 600; }
+.v3-sandbox-settings-toggle input[type="checkbox"] { accent-color: var(--v3-accent); width: 34px; height: 20px; margin: 0; flex-shrink: 0; }
+.v3-sandbox-settings-group { display: flex; flex-direction: column; gap: 6px; }
+.v3-sandbox-priority-row {
+  align-items: center;
+  border: 1px solid var(--v3-border-inner);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+.v3-sandbox-priority-name { align-items: center; display: flex; gap: 10px; }
+.v3-sandbox-priority-name strong { font-size: 12px; font-weight: 600; }
+.v3-sandbox-priority-actions { display: flex; gap: 4px; }
+.v3-sandbox-priority-actions .v3-secondary-button { padding: 2px 6px; font-size: 10px; line-height: 1.4; }
+.v3-sandbox-gpu-type { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.v3-sandbox-switch-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-family: var(--v3-font-mono); font-size: 10.5px; color: var(--v3-text-secondary); background: var(--v3-bg-table); border: 1px solid var(--v3-border-inner); border-radius: 8px; padding: 10px 12px 10px 28px; }
+.v3-sandbox-service-link { grid-template-columns: minmax(96px, auto) auto minmax(0, 1fr) auto; }

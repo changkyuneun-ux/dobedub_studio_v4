@@ -184,10 +184,78 @@ export type AdminWorkflowsResponse = {
   metadataManifest?: Record<string, unknown>;
 };
 
+export type SandboxPodAttempt = {
+  stage: "stop" | "start" | "switch" | "create" | string;
+  ok: boolean;
+  at?: string;
+  podId?: string;
+  podName?: string | null;
+  gpuTypeId?: string;
+  error?: string;
+  skipped?: string;
+};
+
+export type SandboxPodHttpService = {
+  internalPort: number;
+  url: string;
+  label?: string;
+  authRequired?: boolean;
+};
+
+export type SandboxPodSummary = {
+  podId: string;
+  name?: string | null;
+  gpuTypeId?: string | null;
+  gpuLabel?: string;
+  gpuTier?: "primary" | "fallback" | "unknown";
+  vramGb?: number | null;
+  ramGb?: number | null;
+  pricePerHr?: number | null;
+  desiredStatus?: string;
+  runtimeStatus?: string;
+  lastStartedAt?: string | null;
+  lastStartedAtUtc?: string | null;
+  lastStartedAtKst?: string | null;
+  httpServices: SandboxPodHttpService[];
+};
+
+export type SandboxPodSettings = {
+  selectedPodId?: string | null;
+  autoSwitchOnStartFailure: boolean;
+  podPriority: string[];
+  replaceSameGpuPods?: boolean;
+};
+
+export type SandboxPodStartFailure = {
+  message: string;
+  attempts?: SandboxPodAttempt[];
+  retryAfterSeconds?: number;
+  runningPodIds?: string[];
+};
+
 export type SandboxPodStatus = {
   configured: boolean;
   message?: string;
-  podId?: string;
+  podId?: string | null;
+  // Multi-pod (spec 2026-09-11): every Pod on the Sandbox volume plus the
+  // selection / single-running invariant state. Legacy single-Pod fields
+  // above/below describe the active Pod.
+  pods?: SandboxPodSummary[];
+  selectedPodId?: string | null;
+  selectedPodMissing?: boolean;
+  activePodId?: string | null;
+  activePodName?: string | null;
+  conflict?: boolean;
+  conflictPodIds?: string[];
+  settings?: SandboxPodSettings;
+  attempts?: SandboxPodAttempt[];
+  switched?: boolean;
+  createdBy?: string | null;
+  gpuTypeId?: string | null;
+  gpuTier?: "primary" | "fallback" | "unknown";
+  stoppedPodId?: string;
+  terminatedPodId?: string;
+  terminatedPodName?: string | null;
   podName?: string | null;
   resolvedBy?: string;
   desiredStatus?: string;
@@ -203,11 +271,7 @@ export type SandboxPodStatus = {
   checkedAtUtc?: string | null;
   checkedAtKst?: string | null;
   locked?: boolean;
-  httpServices: Array<{
-    internalPort: number;
-    url: string;
-    label?: string;
-  }>;
+  httpServices: SandboxPodHttpService[];
   systemStatus?: {
     available: boolean;
     mode?: "live" | "configuration" | "unavailable";
@@ -1090,6 +1154,18 @@ function friendlyApiErrorMessage(rawMessage: string, response: Response, path: s
   return trimmed || `Request failed: ${response.status}`;
 }
 
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -1102,16 +1178,21 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const rawMessage = await response.text();
   if (!response.ok) {
     let message = friendlyApiErrorMessage(rawMessage, response, path);
+    let detail: unknown = undefined;
     try {
       const parsed = JSON.parse(rawMessage) as { detail?: unknown; message?: unknown; error?: unknown };
-      const detail = parsed.detail ?? parsed.message ?? parsed.error;
+      detail = parsed.detail ?? parsed.message ?? parsed.error;
       if (typeof detail === "string" && detail.trim()) {
         message = detail.trim();
+      } else if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+        // Structured failures (e.g. Sandbox Pod 409/503) carry a message plus
+        // machine-readable fields; keep the object for callers that render it.
+        message = (detail as { message: string }).message;
       }
     } catch {
       // Ignore non-JSON bodies and fall back to a safe, readable message.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, detail);
   }
 
   if (!rawMessage.trim()) {
@@ -1135,16 +1216,21 @@ async function requestFormJson<T>(path: string, formData: FormData): Promise<T> 
   const rawMessage = await response.text();
   if (!response.ok) {
     let message = friendlyApiErrorMessage(rawMessage, response, path);
+    let detail: unknown = undefined;
     try {
       const parsed = JSON.parse(rawMessage) as { detail?: unknown; message?: unknown; error?: unknown };
-      const detail = parsed.detail ?? parsed.message ?? parsed.error;
+      detail = parsed.detail ?? parsed.message ?? parsed.error;
       if (typeof detail === "string" && detail.trim()) {
         message = detail.trim();
+      } else if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+        // Structured failures (e.g. Sandbox Pod 409/503) carry a message plus
+        // machine-readable fields; keep the object for callers that render it.
+        message = (detail as { message: string }).message;
       }
     } catch {
       // Ignore non-JSON bodies and fall back to a safe, readable message.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, detail);
   }
   if (!rawMessage.trim()) {
     return undefined as T;
@@ -1587,8 +1673,22 @@ export const apiClient = {
       method: "POST"
     }),
   sandboxPodStatus: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod"),
-  startSandboxPod: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/start", { method: "POST" }),
-  stopSandboxPod: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/stop", { method: "POST" }),
+  selectSandboxPod: (podId: string) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/select", { method: "POST", body: JSON.stringify({ podId }) }),
+  startSandboxPod: (podId?: string | null) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/start", {
+      method: "POST",
+      body: JSON.stringify(podId ? { podId } : {})
+    }),
+  stopSandboxPod: (podId?: string | null) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/stop", {
+      method: "POST",
+      body: JSON.stringify(podId ? { podId } : {})
+    }),
+  terminateSandboxPod: (podId: string) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/terminate", { method: "POST", body: JSON.stringify({ podId }) }),
+  updateSandboxPodSettings: (payload: { autoSwitchOnStartFailure: boolean; podPriority: string[]; replaceSameGpuPods?: boolean }) =>
+    requestJson<SandboxPodSettings>("/api/admin/sandbox-pod/settings", { method: "PUT", body: JSON.stringify(payload) }),
   login: (payload: { id: string; password: string }) =>
     requestJson<AuthSession>("/api/auth/login", {
       method: "POST",
