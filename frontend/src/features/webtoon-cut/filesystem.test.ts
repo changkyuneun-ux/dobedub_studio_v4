@@ -128,3 +128,63 @@ describe("webtoon cut filesystem boundary", () => {
   });
 
 });
+
+// 2026-09-13 회귀: 브라우저의 실제 FileSystemDirectoryHandle은 entries()가
+// [name, handle] 튜플을 내놓고 values()가 핸들을 내놓는다. 이전 isDirectoryPort는
+// entries 존재만 보고 네이티브 핸들을 DirectoryPort로 오인해 폴더 선택이 무반응이었다.
+describe("discoverInputs with a native-like FileSystemDirectoryHandle", () => {
+  function nativeFile(name: string) {
+    return {
+      kind: "file" as const,
+      name,
+      async getFile() {
+        return new File([new Uint8Array([1, 2, 3])], name);
+      },
+      async createWritable() {
+        throw new Error("not used");
+      }
+    };
+  }
+
+  function nativeDirectory(name: string, children: Array<ReturnType<typeof nativeFile> | NativeDirectoryLike>): NativeDirectoryLike {
+    return {
+      kind: "directory" as const,
+      name,
+      async *entries() {
+        for (const child of children) yield [child.name, child] as const;
+      },
+      async *values() {
+        for (const child of children) yield child;
+      },
+      async *keys() {
+        for (const child of children) yield child.name;
+      },
+      async getFileHandle() {
+        throw new Error("not used");
+      },
+      async getDirectoryHandle() {
+        throw new Error("not used");
+      }
+    };
+  }
+
+  type NativeDirectoryLike = {
+    kind: "directory";
+    name: string;
+    entries(): AsyncIterable<readonly [string, unknown]>;
+    values(): AsyncIterable<unknown>;
+    keys(): AsyncIterable<string>;
+    getFileHandle(): Promise<unknown>;
+    getDirectoryHandle(): Promise<unknown>;
+  };
+
+  it("wraps the native handle instead of iterating [name, handle] tuples", async () => {
+    const root = nativeDirectory("수영복", [
+      nativeFile("001.png"),
+      nativeDirectory("chapter2", [nativeFile("002.jpg"), nativeFile("notes.txt")])
+    ]);
+    const discovered = await discoverInputs(root as unknown as FileSystemDirectoryHandle);
+    expect(discovered.map((entry) => entry.relativePath)).toEqual(["001.png", "chapter2/002.jpg"]);
+    expect(discovered.every((entry) => typeof (entry.handle as { getFile?: unknown } | undefined)?.getFile === "function")).toBe(true);
+  });
+});

@@ -160,7 +160,9 @@ export function AppShell({
             최하단(서비스 상태 아래)에 묻혀 있어 눈에 잘 안 띄었다. 로고 바로
             아래·GENERATE/ADMIN 메뉴 라벨 바로 위로 옮겨 영역 전환이라는 중요한
             동작을 더 눈에 띄게 한다. */}
-        {chrome && area === "generate" && canUseAdminConsole(user) ? (
+        {/* 2026-09-13: area="local"(이미지 컷 분할)에서도 전환 버튼이 사라지지 않도록
+            generate 한정 → admin이 아닌 모든 영역으로 완화(사용자 리포트). */}
+        {chrome && area !== "admin" && canUseAdminConsole(user) ? (
           <div className="v3-sidebar-switch-top">
             <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.roles")}>관리자 콘솔 →</button>
           </div>

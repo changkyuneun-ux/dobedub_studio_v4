@@ -43,6 +43,10 @@ export type WebtoonCutSnapshot = {
   sessionOwnerId: string;
   jobId: string;
   inputName: string;
+  /** 화면 표시용 입력 라벨: 폴더명 또는 첫 파일명(확장자 포함) + "외 n개" */
+  inputLabel: string;
+  /** 현재 처리 중인 원본(상대 경로). 진행 중 작업 카드에 job id 대신 표시 */
+  currentSourcePath: string;
   workLocation: string;
   outputLocation: string;
   outputReady: boolean;
@@ -113,6 +117,8 @@ function createInitialSnapshot(sessionOwnerId = ""): WebtoonCutSnapshot {
     sessionOwnerId,
     jobId: "",
     inputName: "",
+    inputLabel: "",
+    currentSourcePath: "",
     workLocation: "",
     outputLocation: "",
     outputReady: false,
@@ -215,10 +221,13 @@ export const webtoonCutJobStore = {
     const output = await prepareOutputDirectory(outputName);
     buildReadySnapshot({
       inputName: directoryHandle.name,
+      inputLabel: inputLabelFor(selectedInputs.map((input) => input.file.name), directoryHandle.name),
       workLocation: directoryHandle.name,
       outputLocation: output.outputLocation,
       outputReady: output.outputReady,
-      notice: output.notice
+      notice: selectedInputs.length
+        ? output.notice
+        : `'${directoryHandle.name}' 폴더에 지원 파일(JPG · PNG · WEBP · GIF · PDF · ZIP)이 없습니다.`
     });
   },
   async selectFiles(files: File[]) {
@@ -310,6 +319,11 @@ export const webtoonCutJobStore = {
     }
     await this.selectFiles(files);
   },
+  /** 화면의 파일/폴더 선택 핸들러가 삼키던 오류를 사용자에게 알린다 */
+  reportInputError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSnapshot({ notice: `입력 선택에 실패했습니다: ${message}` });
+  },
   selectReviewUnit(unitId: string) {
     const unit = snapshot.units.find((entry) => entry.id === unitId);
     setSnapshot({
@@ -343,19 +357,28 @@ export const webtoonCutJobStore = {
       };
       const manifest = await runJobWithWorkerFallback(request, {
         output: outputRootHandle,
-        onProgress: ({ completed, total, generatedCuts, stage, message }) => {
+        onProgress: ({ completed, total, generatedCuts, stage, message, sourcePath }) => {
           setSnapshot({
             completedUnits: completed,
             totalUnits: total,
             generatedCuts,
+            currentSourcePath: stage === "manifest" ? "" : (sourcePath || snapshot.currentSourcePath),
             notice: message || stageNotice(stage)
           });
         }
       }, controller.signal);
+      if (manifest.status === "paused") {
+        // 2026-09-13: 사용자 요청 - 중단하면 입력 영역을 초기화한다(이전 폴더/파일 선택과
+        // 영속 핸들을 지워 재진입 시 복원되지 않게). 출력 폴더의 manifest는 그대로 남아
+        // 같은 입력을 다시 선택해 작업 요청하면 이어서 처리된다.
+        await resetInputsAfterCancel();
+        return;
+      }
       releasePreviewUrls(snapshot.units);
       const units = await unitsFromManifest(manifest);
       snapshot = {
         ...snapshot,
+        currentSourcePath: "",
         units,
         completedUnits: units.length,
         reviewUnits: units.filter((unit) => unit.status === "review_required").length,
@@ -368,13 +391,11 @@ export const webtoonCutJobStore = {
       const hasReview = units.some((unit) => unit.status === "review_required");
       const hasFailed = false;
       setSnapshot({
-        status: manifest.status === "paused" ? "paused" : hasReview ? "completed_with_review" : hasFailed ? "completed_with_review" : "completed",
-        notice: manifest.status === "paused"
-          ? "작업을 중단했습니다. 중단 시점까지 저장된 결과를 표시합니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다."
-          : hasReview ? "컷 분할이 끝났습니다. 검수 필요 항목을 선택해 재처리 유형을 적용하세요." : "컷 분할이 끝났습니다."
+        status: hasReview ? "completed_with_review" : hasFailed ? "completed_with_review" : "completed",
+        notice: hasReview ? "컷 분할이 끝났습니다. 검수 필요 항목을 선택해 재처리 유형을 적용하세요." : "컷 분할이 끝났습니다."
       });
     } catch (error) {
-      setSnapshot({ status: "failed", notice: error instanceof Error ? error.message : "컷 분할 중 오류가 발생했습니다." });
+      setSnapshot({ status: "failed", currentSourcePath: "", notice: error instanceof Error ? error.message : "컷 분할 중 오류가 발생했습니다." });
     } finally {
       running = false;
       if (activeAbortController === controller) {
@@ -414,6 +435,24 @@ export const webtoonCutJobStore = {
   }
 };
 
+async function resetInputsAfterCancel() {
+  await clearPersistedInputs();
+  releasePreviewUrls(snapshot.units);
+  selectedInputs = [];
+  outputRootHandle = null;
+  snapshot = {
+    ...createInitialSnapshot(snapshot.sessionOwnerId),
+    notice: "작업을 중단했습니다. 중단 시점까지 저장된 결과는 출력 폴더에 남아 있습니다. 입력을 다시 선택하면 manifest 기준으로 이어서 처리합니다."
+  };
+  emit();
+}
+
+function inputLabelFor(fileNames: string[], directoryName: string): string {
+  const [first, ...rest] = fileNames;
+  if (!first) return directoryName;
+  return rest.length ? `${first} 외 ${rest.length}개` : first;
+}
+
 async function selectFilesInternal(files: File[], preservePersistedInput: boolean) {
   if (!preservePersistedInput) {
     await clearPersistedInputs();
@@ -442,10 +481,13 @@ async function selectFilesInternal(files: File[], preservePersistedInput: boolea
   const output = await prepareOutputDirectory(outputName);
   buildReadySnapshot({
     inputName,
+    inputLabel: inputLabelFor(supported.map((file) => file.name), ""),
     workLocation: "브라우저 선택 파일",
     outputLocation: output.outputLocation,
     outputReady: output.outputReady,
-    notice: output.notice
+    notice: supported.length
+      ? output.notice
+      : `선택한 ${files.length}개 파일 중 지원 형식(JPG · PNG · WEBP · GIF · PDF · ZIP)이 없습니다.`
   });
 }
 
@@ -483,12 +525,14 @@ async function prepareOutputDirectory(outputName: string): Promise<{ outputLocat
 
 function buildReadySnapshot({
   inputName,
+  inputLabel,
   workLocation,
   outputLocation,
   outputReady,
   notice = ""
 }: {
   inputName: string;
+  inputLabel: string;
   workLocation: string;
   outputLocation: string;
   outputReady: boolean;
@@ -510,6 +554,7 @@ function buildReadySnapshot({
     ...createInitialSnapshot(snapshot.sessionOwnerId),
     jobId: `CUT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String(Date.now()).slice(-4)}`,
     inputName,
+    inputLabel,
     workLocation,
     outputLocation,
     outputReady,
