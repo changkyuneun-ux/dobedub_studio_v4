@@ -8,6 +8,7 @@ import {
   PermissionGovernance,
   AdminWorkflow,
   TaskExecutionPolicy,
+  SandboxPodLive,
   SandboxPodStatus,
   SandboxPodSummary,
   SandboxPodAttempt,
@@ -566,6 +567,7 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
   const canControl = canUse(user, "sandbox:control");
   const [sandboxPod, setSandboxPod] = useState<SandboxPodStatus | null>(null);
   const [sandboxPodLoading, setSandboxPodLoading] = useState(false);
+  const [sandboxLiveLoading, setSandboxLiveLoading] = useState(false);
   const [sandboxPodPendingAction, setSandboxPodPendingAction] = useState<SandboxPendingAction | null>(null);
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<"info" | "warning" | "danger">("info");
@@ -608,21 +610,43 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
     setNotice(error instanceof Error ? error.message : fallback);
   }
 
+  // 2026-09-13 2단계 로딩: 1단계(live=false)는 RunPod 목록 조회만으로 즉시 파드 표·설정을
+  // 그리고, 2단계(/live)가 8188 프로브·runtime 지표를 받아 상태 배지·System Status 카드를 덮어쓴다.
+  // 2단계 실패는 목록을 지우지 않고 카드 메시지로만 알린다.
   async function loadSandboxPod() {
     setSandboxPodLoading(true);
     setNotice("");
+    let listed: SandboxPodStatus | null = null;
     try {
-      const response = await apiClient.sandboxPodStatus();
-      setSandboxPod(response);
+      listed = await apiClient.sandboxPodStatus({ live: false });
+      setSandboxPod(listed);
       setStartFailure(null);
-      if (response.conflict) {
+      if (listed.conflict) {
         setNoticeTone("danger");
-        setNotice(response.message || "실행 중인 Sandbox Pod가 2개입니다.");
+        setNotice(listed.message || "실행 중인 Sandbox Pod가 2개입니다.");
       }
     } catch (error) {
       showError(error, "Sandbox Pod status load failed");
     } finally {
       setSandboxPodLoading(false);
+    }
+    if (!listed || listed.configured === false) return;
+    setSandboxLiveLoading(true);
+    try {
+      const live = await apiClient.sandboxPodLive();
+      setSandboxPod((current) => (current ? mergeSandboxLive(current, live) : current));
+    } catch (error) {
+      setSandboxPod((current) => current ? {
+        ...current,
+        systemStatus: {
+          ...(current.systemStatus || { available: false, gpus: [] }),
+          available: false,
+          mode: "unavailable",
+          message: error instanceof Error ? error.message : "RunPod 런타임 지표를 가져오지 못했습니다."
+        }
+      } : current);
+    } finally {
+      setSandboxLiveLoading(false);
     }
   }
 
@@ -1018,7 +1042,7 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
         <div className="v3-card">
           <div className="v3-card-header">
             <div className="v3-card-header-title">RunPod System Status</div>
-            <span className="v3-card-header-meta">{sandboxPod.systemStatus?.mode === "live" ? "LIVE" : "CONFIGURATION"}</span>
+            <span className="v3-card-header-meta">{sandboxLiveLoading || sandboxPod.systemStatus?.mode === "pending" ? "조회 중…" : sandboxPod.systemStatus?.mode === "live" ? "LIVE" : "CONFIGURATION"}</span>
           </div>
           {sandboxPod.systemStatus?.available ? (
             <div className="v3-sandbox-metric-grid">
@@ -1195,8 +1219,8 @@ export function TaskPolicyScreen({ user, onGoTo }: { user: User; onGoTo: (route:
       area="admin"
       activeItem="adminTaskPolicy"
       onNavigate={(key) => shellNavigateAdmin(key, onGoTo)}
-      headerEyebrow="ADMIN · TASK POLICY"
-      headerTitle="Task Policy"
+      headerEyebrow="ADMIN · RUNPOD WORKER"
+      headerTitle="Runpod Worker 설정"
       sidebarFooter={<p className="v3-muted-text">Serverless 작업 제출량을 제어하는 운영 정책입니다. Sandbox Pod의 시작·중지 상태와는 독립적으로 적용됩니다.</p>}
     >
       <TaskPolicySettings user={user} />
@@ -2026,4 +2050,19 @@ export function GrokInstructionAdminScreen({ user, onGoTo }: { user: User; onGoT
       </div>
     </AppShell>
   );
+}
+
+// 2단계 로딩: /live 응답을 1단계 상태에 덮어쓴다(목록·설정·attempts는 그대로).
+function mergeSandboxLive(current: SandboxPodStatus, live: SandboxPodLive): SandboxPodStatus {
+  const runtimeByPod = new Map(live.pods.map((pod) => [pod.podId, pod.runtimeStatus]));
+  return {
+    ...current,
+    runtimeStatus: live.podId && live.podId === current.podId ? (live.runtimeStatus || current.runtimeStatus) : current.runtimeStatus,
+    systemStatus: live.podId && live.podId === current.podId ? (live.systemStatus || current.systemStatus) : current.systemStatus,
+    message: current.conflict ? current.message : (live.message || current.message),
+    checkedAt: live.checkedAt ?? current.checkedAt,
+    checkedAtUtc: live.checkedAtUtc ?? current.checkedAtUtc,
+    checkedAtKst: live.checkedAtKst ?? current.checkedAtKst,
+    pods: (current.pods || []).map((pod) => ({ ...pod, runtimeStatus: runtimeByPod.get(pod.podId) || pod.runtimeStatus }))
+  };
 }

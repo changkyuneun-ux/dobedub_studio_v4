@@ -5,6 +5,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -82,7 +83,16 @@ def sandbox_pod_is_configured(settings: Settings) -> bool:
     return bool(selector and settings.sandbox_pod_api_key.strip())
 
 
-def sandbox_pod_status(settings: Settings, db=None, *, prefs: SandboxPodPrefs | None = None) -> dict:
+def sandbox_pod_status(
+    settings: Settings,
+    db=None,
+    *,
+    prefs: SandboxPodPrefs | None = None,
+    include_live: bool = True,
+) -> dict:
+    """Full status. ``include_live=False`` skips the 8188 probe and v2 runtime metrics
+    (2단계 로딩의 1단계): ``runtimeStatus``는 desiredStatus, ``systemStatus.mode``는
+    ``"pending"``으로 채워지고 화면이 ``sandbox_pod_live``로 나중에 덮어쓴다."""
     if not sandbox_pod_is_configured(settings):
         return {
             "configured": False,
@@ -97,7 +107,46 @@ def sandbox_pod_status(settings: Settings, db=None, *, prefs: SandboxPodPrefs | 
         }
     prefs = prefs or _load_prefs(db)
     pods = _resolve_pods(settings)
-    return _build_status(settings, pods, prefs, attempts=[])
+    return _build_status(settings, pods, prefs, attempts=[], include_live=include_live)
+
+
+def sandbox_pod_live(settings: Settings, db=None, *, prefs: SandboxPodPrefs | None = None) -> dict:
+    """2단계 로딩의 2단계: 표시 파드의 8188 준비 상태·v2 runtime 지표와 RUNNING 파드별
+    runtimeStatus만 반환한다. 목록·설정은 ``sandbox_pod_status(include_live=False)``가 담당."""
+    if not sandbox_pod_is_configured(settings):
+        return {"configured": False, "podId": None, "runtimeStatus": None, "systemStatus": None, "pods": []}
+    prefs = prefs or _load_prefs(db)
+    pods = _resolve_pods(settings)
+    display = _display_pod(pods, prefs.selected_pod_id)
+    live = _collect_live_info(settings, pods, display)
+    pod_statuses = [
+        {"podId": str(pod.get("id") or ""), "runtimeStatus": live["runtime_status"].get(str(pod.get("id") or ""), _status_of(pod) or "UNKNOWN")}
+        for pod in pods
+    ]
+    if display is None:
+        return {
+            "configured": True,
+            "podId": None,
+            "runtimeStatus": "NONE",
+            "systemStatus": {"available": False, "mode": "configuration", "gpus": []},
+            "message": None,
+            "pods": pod_statuses,
+            **timestamp_fields("checkedAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="ecs-application"),
+        }
+    pod_id = str(display.get("id") or settings.sandbox_pod_id).strip()
+    services = _http_services(pod_id, display.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(display))
+    status = str(display.get("desiredStatus") or display.get("status") or "UNKNOWN").upper()
+    runtime_status = live["runtime_status"].get(pod_id, status)
+    return {
+        "configured": True,
+        "podId": pod_id,
+        "desiredStatus": status,
+        "runtimeStatus": runtime_status,
+        "systemStatus": live["system_status"],
+        "message": _readiness_message(services, status, runtime_status),
+        "pods": pod_statuses,
+        **timestamp_fields("checkedAt", utc_now(), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="ecs-application"),
+    }
 
 
 def start_sandbox_pod(
@@ -375,7 +424,27 @@ def _resolve_pods(settings: Settings) -> list[dict]:
         and _network_volume_id(pod) == volume_id
         and _status_of(pod) != "TERMINATED"
     ]
-    return [_hydrate_pod(settings, pod, strict=False) for pod in matches]
+    if not matches:
+        return []
+    # 2026-09-13 성능: 파드별 상세 조회를 병렬로, 목록 응답에 필요한 필드가 이미
+    # 있으면 생략한다(직렬 N회 → 최대 1회 지연).
+    with ThreadPoolExecutor(max_workers=min(8, len(matches))) as pool:
+        return list(pool.map(lambda pod: _hydrate_pod_if_needed(settings, pod), matches))
+
+
+_HYDRATE_REQUIRED_KEYS = ("ports", "memoryInGb", "costPerHr")
+
+
+def _hydrate_pod_if_needed(settings: Settings, pod: dict) -> dict:
+    ports = pod.get("ports")
+    complete = (
+        isinstance(ports, list) and bool(ports)
+        and all(pod.get(key) is not None for key in _HYDRATE_REQUIRED_KEYS)
+        and bool(_gpu_type_name(pod))
+    )
+    if complete:
+        return pod
+    return _hydrate_pod(settings, pod, strict=False)
 
 
 def _status_of(pod: dict) -> str:
@@ -781,15 +850,26 @@ def _build_status(
     switched: bool = False,
     created_by: str | None = None,
     resolved_by: str | None = None,
+    include_live: bool = True,
 ) -> dict:
-    catalog = _fetch_gpu_catalog(settings) if pods else None
     conflict_ids = _conflict_pod_ids(pods)
     active = _active_pod(pods)
     display = _display_pod(pods, prefs.selected_pod_id)
     volume_id = settings.sandbox_pod_network_volume_id.strip()
     default_resolved_by = "network-volume" if volume_id else "legacy-selector"
+    # 2026-09-13 성능: 카탈로그·RUNNING 파드의 8188 프로브·표시 파드의 v2 runtime 지표를
+    # 한 번에 병렬 조회하고, 아래 _present_pod/_pod_summary에는 결과를 전달해
+    # 같은 파드에 프로브가 두 번 나가지 않게 한다.
+    live = _collect_live_info(settings, pods, display, include_live=include_live)
+    catalog = live["catalog"]
     if display is not None:
-        status = _present_pod(settings, display, resolved_by or default_resolved_by)
+        status = _present_pod(
+            settings,
+            display,
+            resolved_by or default_resolved_by,
+            runtime_status=live["runtime_status"].get(str(display.get("id") or "")),
+            system_status=live["system_status"],
+        )
     else:
         status = {
             "configured": True,
@@ -806,7 +886,7 @@ def _build_status(
     selected_missing = bool(prefs.selected_pod_id) and not any(str(pod.get("id")) == prefs.selected_pod_id for pod in pods)
     status.update(
         {
-            "pods": [_pod_summary(settings, pod, catalog) for pod in pods],
+            "pods": [_pod_summary(settings, pod, catalog, runtime_status=live["runtime_status"].get(str(pod.get("id") or ""))) for pod in pods],
             "selectedPodId": prefs.selected_pod_id,
             "selectedPodMissing": selected_missing,
             "activePodId": str(active.get("id")) if active is not None else None,
@@ -836,7 +916,51 @@ def _build_status(
     return status
 
 
-def _pod_summary(settings: Settings, pod: dict, catalog: dict[str, dict] | None) -> dict:
+_PENDING_SYSTEM_STATUS = {"available": False, "mode": "pending", "gpus": [], "message": "RunPod 런타임 지표를 조회 중입니다."}
+
+
+def _collect_live_info(settings: Settings, pods: list[dict], display: dict | None, *, include_live: bool = True) -> dict:
+    """Fetch catalog, per-RUNNING-pod 8188 probe and the display Pod's v2 runtime metrics concurrently.
+
+    With ``include_live=False`` only the (cached) catalog is fetched; runtime status
+    falls back to the desired status and system status is marked ``pending``."""
+    result: dict = {"catalog": None, "runtime_status": {}, "system_status": None}
+    if not pods:
+        return result
+    if not include_live:
+        result["catalog"] = _fetch_gpu_catalog(settings)
+        result["runtime_status"] = {str(pod.get("id") or ""): (_status_of(pod) or "UNKNOWN") for pod in pods}
+        result["system_status"] = dict(_PENDING_SYSTEM_STATUS) if display is not None else None
+        return result
+    tasks: dict[str, object] = {"catalog": lambda: _fetch_gpu_catalog(settings)}
+    for pod in pods:
+        pod_id = str(pod.get("id") or "").strip()
+        if _status_of(pod) == "RUNNING" and pod_id:
+            services = _http_services(pod_id, pod.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(pod))
+            tasks[f"probe:{pod_id}"] = (lambda pid=pod_id, svc=services: _runtime_status(settings, pid, "RUNNING", svc))
+    if display is not None:
+        display_id = str(display.get("id") or settings.sandbox_pod_id).strip()
+        tasks["metrics"] = lambda: _runtime_metrics(settings, display_id, display)
+    with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
+        futures = {name: pool.submit(fn) for name, fn in tasks.items()}
+        for name, future in futures.items():
+            value = future.result()
+            if name == "catalog":
+                result["catalog"] = value
+            elif name == "metrics":
+                result["system_status"] = value
+            else:
+                result["runtime_status"][name.split(":", 1)[1]] = value
+    return result
+
+
+def _pod_summary(
+    settings: Settings,
+    pod: dict,
+    catalog: dict[str, dict] | None,
+    *,
+    runtime_status: str | None = None,
+) -> dict:
     pod_id = str(pod.get("id") or "").strip()
     status = _status_of(pod) or "UNKNOWN"
     services = _http_services(pod_id, pod.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(pod))
@@ -846,7 +970,8 @@ def _pod_summary(settings: Settings, pod: dict, catalog: dict[str, dict] | None)
         vram = catalog[gpu].get("memoryInGb")
     if vram is None:
         vram = _number_or_none(pod.get("gpuMemoryInGb"))
-    runtime_status = _runtime_status(settings, pod_id, status, services) if status == "RUNNING" else status
+    if runtime_status is None:
+        runtime_status = _runtime_status(settings, pod_id, status, services) if status == "RUNNING" else status
     return {
         "podId": pod_id,
         "name": pod.get("name") or None,
@@ -1024,20 +1149,32 @@ def _request(settings: Settings, method: str, path: str, body: dict | None = Non
         raise SandboxPodApiError(None, f"non-JSON response from {url}: {payload[:120]!r}") from exc
 
 
-def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
+def _readiness_message(services: list[dict], status: str, runtime_status: str) -> str:
+    if not any(service["internalPort"] == 8188 for service in services):
+        return "ComfyUI HTTP 8188 포트가 노출되지 않았습니다. RunPod Pod 설정을 확인하세요."
+    if runtime_status == "READY":
+        return "Sandbox Pod와 ComfyUI HTTP 8188 서비스가 준비되었습니다."
+    if status == "RUNNING":
+        return "Sandbox Pod는 실행 중이며 ComfyUI HTTP 8188 서비스 준비를 확인 중입니다. 잠시 후 Refresh Status를 누르세요."
+    return "Sandbox Pod 상태를 조회했습니다."
+
+
+def _present_pod(
+    settings: Settings,
+    pod: dict,
+    resolved_by: str,
+    *,
+    runtime_status: str | None = None,
+    system_status: dict | None = None,
+) -> dict:
     pod_id = str(pod.get("id") or settings.sandbox_pod_id).strip()
     services = _http_services(pod_id, pod.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(pod))
     status = str(pod.get("desiredStatus") or pod.get("status") or "UNKNOWN").upper()
-    runtime_status = _runtime_status(settings, pod_id, status, services)
-    system_status = _runtime_metrics(settings, pod_id, pod)
-    if not any(service["internalPort"] == 8188 for service in services):
-        message = "ComfyUI HTTP 8188 포트가 노출되지 않았습니다. RunPod Pod 설정을 확인하세요."
-    elif runtime_status == "READY":
-        message = "Sandbox Pod와 ComfyUI HTTP 8188 서비스가 준비되었습니다."
-    elif status == "RUNNING":
-        message = "Sandbox Pod는 실행 중이며 ComfyUI HTTP 8188 서비스 준비를 확인 중입니다. 잠시 후 Refresh Status를 누르세요."
-    else:
-        message = "Sandbox Pod 상태를 조회했습니다."
+    if runtime_status is None:
+        runtime_status = _runtime_status(settings, pod_id, status, services)
+    if system_status is None:
+        system_status = _runtime_metrics(settings, pod_id, pod)
+    message = _readiness_message(services, status, runtime_status)
     lifecycle_event = str(pod.get("lastStatusChange") or "").strip() or None
     lifecycle_event_at = _lifecycle_event_timestamp(lifecycle_event)
     return {
@@ -1236,6 +1373,9 @@ def _lifecycle_event_timestamp(value: str | None) -> datetime | None:
         return None
 
 
+_PROBE_TIMEOUT_SECONDS = 2
+
+
 def _runtime_status(settings: Settings, pod_id: str, desired_status: str, services: list[dict]) -> str:
     if desired_status != "RUNNING":
         return desired_status
@@ -1245,7 +1385,8 @@ def _runtime_status(settings: Settings, pod_id: str, desired_status: str, servic
     service_url = service["url"]
     request = urllib.request.Request(service_url, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=min(settings.sandbox_pod_timeout, 5)) as response:
+        # 2026-09-13: 초기화 중인 파드는 어차피 INITIALIZING이므로 프로브 대기 상한 5→2초
+        with urllib.request.urlopen(request, timeout=min(settings.sandbox_pod_timeout, _PROBE_TIMEOUT_SECONDS)) as response:
             return "READY" if 200 <= response.status < 500 else "INITIALIZING"
     except urllib.error.HTTPError as exc:
         return "READY" if 200 <= exc.code < 500 else "INITIALIZING"

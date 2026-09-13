@@ -175,7 +175,7 @@ export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "review.assets": "Collection 관리",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
-  "admin.taskPolicy": "Task Policy",
+  "admin.taskPolicy": "Runpod Worker 설정",
   "admin.roles": "역할 & 권한",
   "admin.resourceMap": "기능 리소스 매핑",
   "admin.users": "사용자",

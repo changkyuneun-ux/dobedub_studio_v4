@@ -225,6 +225,7 @@ from backend.app.services.sandbox_pod_service import (  # noqa: E402
     SandboxPodUnavailable,
     _classify_error,
     _gpu_candidates,
+    sandbox_pod_live,
     sandbox_pod_status,
     start_sandbox_pod,
     stop_sandbox_pod,
@@ -404,6 +405,48 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         self.assertEqual(result["pods"][0]["gpuTier"], "primary")
         self.assertEqual(result["pods"][1]["pricePerHr"], 2.19)
         self.assertEqual(result["attempts"], [])
+
+    def test_status_probes_each_running_pod_once_and_skips_detail_when_list_is_complete(self) -> None:
+        # 2026-09-13 성능: 표시 파드에 8188 프로브가 두 번 나가던 중복 제거 + 목록 응답이
+        # 완전하면 GET /pods/{id} 상세 조회 생략 확인.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        probe = patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY")
+        metrics = patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": False, "mode": "configuration", "gpus": []})
+        with patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake), \
+                patch("backend.app.services.sandbox_pod_service._fetch_gpu_catalog", return_value=None), \
+                probe as probe_mock, metrics as metrics_mock:
+            result = sandbox_pod_status(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"))
+
+        running = [pod for pod in fake.pods.values() if pod["desiredStatus"] == "RUNNING"]
+        self.assertEqual(probe_mock.call_count, len(running))
+        self.assertEqual(metrics_mock.call_count, 1)
+        self.assertEqual(result["runtimeStatus"], "READY")
+        self.assertEqual([m for m, p, _ in fake.calls if m == "GET" and p.startswith("/pods/")], [])
+
+    def test_two_phase_loading_status_without_live_then_live_endpoint(self) -> None:
+        # 2026-09-13 2단계 로딩: include_live=False는 프로브·지표를 호출하지 않고 pending으로,
+        # sandbox_pod_live는 표시 파드의 준비 상태·지표와 파드별 runtimeStatus만 돌려준다.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        metrics_value = {"available": True, "mode": "live", "gpus": [], "uptimeSeconds": 5}
+        with patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake), \
+                patch("backend.app.services.sandbox_pod_service._fetch_gpu_catalog", return_value=None), \
+                patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY") as probe_mock, \
+                patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value=metrics_value) as metrics_mock:
+            listed = sandbox_pod_status(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"), include_live=False)
+            self.assertEqual(probe_mock.call_count, 0)
+            self.assertEqual(metrics_mock.call_count, 0)
+            self.assertEqual(listed["runtimeStatus"], "RUNNING")
+            self.assertEqual(listed["systemStatus"]["mode"], "pending")
+            self.assertEqual([pod["podId"] for pod in listed["pods"]], ["caiuvooekq9qqw", "3i50u1x4pyz0vr"])
+
+            live = sandbox_pod_live(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"))
+            self.assertEqual(live["podId"], "3i50u1x4pyz0vr")
+            self.assertEqual(live["runtimeStatus"], "READY")
+            self.assertEqual(live["systemStatus"], metrics_value)
+            self.assertIn("준비되었습니다", live["message"])
+            self.assertEqual({pod["podId"]: pod["runtimeStatus"] for pod in live["pods"]}["3i50u1x4pyz0vr"], "READY")
+            self.assertEqual(probe_mock.call_count, 1)
+            self.assertEqual(metrics_mock.call_count, 1)
 
     def test_status_without_running_pod_uses_selected_then_most_recent(self) -> None:
         fake = _RunPodScript([_pod_5090(), _pod_pro6000("EXITED")])

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
@@ -12,6 +12,7 @@ from backend.app.services.audit_log_service import record_audit_log
 from backend.app.services.sandbox_pod_service import (
     SandboxPodConflict,
     SandboxPodUnavailable,
+    sandbox_pod_live,
     sandbox_pod_status,
     start_sandbox_pod,
     stop_sandbox_pod,
@@ -48,16 +49,32 @@ def _last_pod_id(attempts: list[dict]) -> str:
 
 @router.get("")
 def get_sandbox_pod(
+    live: bool = Query(default=True, description="false면 8188 프로브·runtime 지표를 생략(2단계 로딩 1단계)"),
     _: CurrentUser = Depends(require_permission("sandbox:read")),
     db: Session = Depends(get_db),
 ):
     try:
-        return sandbox_pod_status(get_settings(), db)
+        return sandbox_pod_status(get_settings(), db, include_live=live)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface the cause to the admin UI instead of a bare 500
         LOGGER.exception("sandbox_pod.status failed")
         raise HTTPException(status_code=500, detail=f"Sandbox Pod 상태 처리 오류: {type(exc).__name__}: {exc}") from exc
+
+
+@router.get("/live")
+def get_sandbox_pod_live(
+    _: CurrentUser = Depends(require_permission("sandbox:read")),
+    db: Session = Depends(get_db),
+):
+    """2단계 로딩 2단계: 표시 파드의 준비 상태(8188)·runtime 지표와 파드별 runtimeStatus."""
+    try:
+        return sandbox_pod_live(get_settings(), db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("sandbox_pod.live failed")
+        raise HTTPException(status_code=500, detail=f"Sandbox Pod LIVE 지표 처리 오류: {type(exc).__name__}: {exc}") from exc
 
 
 @router.post("/select")

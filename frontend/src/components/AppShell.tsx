@@ -2,7 +2,6 @@ import React from "react";
 import { User, canUse } from "../auth";
 import { HealthResponse } from "../api/client";
 import { StudioRoute } from "../router";
-import { serviceStatusLabel, qwenStatusLabel } from "../helpers/format";
 import { canUseAdminConsole } from "../helpers/adminForms";
 
 // 구버전 상단 TopBar(브랜드 + 네비 메뉴 + 서비스 상태 + 유저/로그아웃)를 제거하면서,
@@ -75,14 +74,17 @@ const LOCAL_NAV_ITEMS: NavItem[] = [
 // 혼란스러운 현상이 있었다(사용자 리포트) - 두 항목을 여기서 제거하고 Create6c/
 // 6dScreen을 area="generate"로 되돌려 design_handoff 원래 소속(HELP 그룹, 아래
 // helpItems)으로 되돌린다. 화면 자체의 내용·권한은 변경 없음.
+// 2026-09-13: 사용자 요청으로 순서 재정렬(운영 빈도순: Sandbox Pod → 워크플로 → 프롬프트 →
+// 사용자/권한 → Runpod Worker 설정 → 감사 로그). "Task Policy"는 "Runpod Worker 설정"으로
+// 라벨만 변경(route key·권한·화면 내용은 동일).
 const ADMIN_NAV_ITEMS: NavItem[] = [
-  { key: "adminRoles", label: "역할 & 권한", permission: "roles:read" },
-  { key: "adminUsers", label: "사용자", permission: "users:read" },
-  { key: "adminCatalog", label: "프롬프트 카탈로그", permission: "prompt-catalog:read" },
-  { key: "adminGrokInstructions", label: "프롬프트 지시 관리", permission: "prompt-catalog:read" },
-  { key: "adminWorkflows", label: "워크플로 정의", permission: "workflows:read" },
   { key: "adminSandbox", label: "Sandbox Pod", permission: "sandbox:read" },
-  { key: "adminTaskPolicy", label: "Task Policy", permission: "roles:read" },
+  { key: "adminWorkflows", label: "워크플로 정의", permission: "workflows:read" },
+  { key: "adminGrokInstructions", label: "프롬프트 지시 관리", permission: "prompt-catalog:read" },
+  { key: "adminCatalog", label: "프롬프트 카탈로그", permission: "prompt-catalog:read" },
+  { key: "adminUsers", label: "사용자", permission: "users:read" },
+  { key: "adminRoles", label: "역할 & 권한", permission: "roles:read" },
+  { key: "adminTaskPolicy", label: "Runpod Worker 설정", permission: "roles:read" },
   { key: "adminAuditLog", label: "감사 로그", permission: "roles:read" }
 ];
 
@@ -137,16 +139,12 @@ export function AppShell({
 
   // HELP 그룹: design_handoff 6b의 사이드바가 GENERATE 그룹 아래 두는 HELP 묶음
   // (User Manual / System Status / Metadata). 구버전 TopBar가 담당하던 접근을 이관.
+  // 2026-09-13: System Status는 사용자 요청으로 HELP 그룹에서 제거(라우트 admin.status 자체는 유지).
   const helpItems: { route: StudioRoute; label: string; permission: string }[] = [
     { route: "access.manual", label: "User Manual", permission: "manual:read" },
-    { route: "admin.status", label: "System Status", permission: "system:read" },
     { route: "admin.metadata", label: "Metadata", permission: "metadata:read" },
   ];
   const visibleHelpItems = helpItems.filter((item) => canUse(user, item.permission));
-
-  const system = chrome?.health?.system || chrome?.health?.legacy;
-  const comfyStatus = serviceStatusLabel(Boolean(system?.runpod?.configured), chrome?.healthError || "", system?.dryRun ? "DRY-RUN" : undefined);
-  const qwenStatus = qwenStatusLabel(system?.promptLlm, chrome?.healthError || "");
 
   return (
     <div className="v3-shell">
@@ -220,16 +218,10 @@ export function AppShell({
         {sidebarExtra ? <div className="v3-sidebar-extra">{sidebarExtra}</div> : null}
         {sidebarFooter ? <div className="v3-sidebar-footer">{sidebarFooter}</div> : null}
 
-        {/* 계정·상태 블록: 구버전 TopBar의 서비스 상태 + 유저/로그아웃 + 영역 전환을 이관.
-            사이드바 최하단에 고정한다. */}
+        {/* 계정 블록: 구버전 TopBar의 유저/로그아웃을 이관. 사이드바 최하단에 고정한다.
+            2026-09-13: ComfyUI·Qwen 서비스 상태 표시는 사용자 요청으로 제거. */}
         {chrome ? (
           <div className="v3-sidebar-account">
-            <div className="v3-sidebar-status">
-              <span className={`v3-status-dot is-${comfyStatus.toLowerCase()}`} aria-hidden="true" />ComfyUI · {comfyStatus}
-            </div>
-            <div className="v3-sidebar-status">
-              <span className={`v3-status-dot is-${qwenStatus.toLowerCase()}`} aria-hidden="true" />Qwen · {qwenStatus}
-            </div>
             <div className="v3-sidebar-user">
               <span className="v3-sidebar-user-name">{user?.name || user?.id}<span className="v3-sidebar-user-role">{user?.role || ""}</span></span>
               <button className="v3-sidebar-logout" type="button" onClick={chrome.onLogout}>로그아웃</button>

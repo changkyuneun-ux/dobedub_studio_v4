@@ -67,7 +67,7 @@ RESOURCE_CATALOG = [
     # 전용 행을 새로 추가한다 - api.prompts를 prompts:review로 바꾸면 generate/scene에는
     # 오히려 틀린 정보가 된다.
     ("API", "api.prompt_feedback", "Prompt Feedback API", "prompts:review", "/api/prompts/feedback", "POST", 362),
-    ("API", "api.admin.sandbox_pod", "Sandbox Pod Status API", "sandbox:read", "/api/admin/sandbox-pod", "GET", 370),
+    ("API", "api.admin.sandbox_pod", "Sandbox Pod Status API", "sandbox:read", "/api/admin/sandbox-pod[/live]", "GET", 370),
     ("API", "api.admin.sandbox_pod_control", "Sandbox Pod Control API", "sandbox:control", "/api/admin/sandbox-pod/start|stop|select|terminate|settings", "POST", 371),
     ("API", "api.admin.audit_logs", "Admin Audit Log API", "roles:read", "/api/admin/audit-logs", "GET", 372),
 ]

@@ -274,7 +274,7 @@ export type SandboxPodStatus = {
   httpServices: SandboxPodHttpService[];
   systemStatus?: {
     available: boolean;
-    mode?: "live" | "configuration" | "unavailable";
+    mode?: "live" | "configuration" | "unavailable" | "pending";
     uptimeSeconds?: number | null;
     cpuPercent?: number | null;
     memoryPercent?: number | null;
@@ -293,6 +293,21 @@ export type SandboxPodStatus = {
     };
     message?: string;
   };
+};
+
+// 2단계 로딩 2단계(GET /api/admin/sandbox-pod/live): 표시 파드의 8188 준비 상태·runtime
+// 지표와 파드별 runtimeStatus만. 목록·설정은 sandboxPodStatus({ live: false })가 담당.
+export type SandboxPodLive = {
+  configured: boolean;
+  podId?: string | null;
+  desiredStatus?: string;
+  runtimeStatus?: string | null;
+  systemStatus?: SandboxPodStatus["systemStatus"] | null;
+  message?: string | null;
+  pods: Array<{ podId: string; runtimeStatus: string }>;
+  checkedAt?: string | null;
+  checkedAtUtc?: string | null;
+  checkedAtKst?: string | null;
 };
 
 export type ConfigControl = {
@@ -1672,7 +1687,9 @@ export const apiClient = {
     requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
       method: "POST"
     }),
-  sandboxPodStatus: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod"),
+  sandboxPodStatus: (options?: { live?: boolean }) =>
+    requestJson<SandboxPodStatus>(options?.live === false ? "/api/admin/sandbox-pod?live=false" : "/api/admin/sandbox-pod"),
+  sandboxPodLive: () => requestJson<SandboxPodLive>("/api/admin/sandbox-pod/live"),
   selectSandboxPod: (podId: string) =>
     requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/select", { method: "POST", body: JSON.stringify({ podId }) }),
   startSandboxPod: (podId?: string | null) =>
