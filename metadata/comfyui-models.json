@@ -1,14 +1,14 @@
 {
   "manifest": {
-    "generatedAt": "2026-08-20 15:07:31 KST",
-    "generatedAtUtc": "2026-08-20T06:07:31Z",
-    "generatedAtKst": "2026-08-20 15:07:31 KST",
+    "generatedAt": "2026-09-09 18:29:31 KST",
+    "generatedAtUtc": "2026-09-09T09:29:31Z",
+    "generatedAtKst": "2026-09-09 18:29:31 KST",
     "generatedAtSourceTimezone": "UTC",
     "generatedAtSource": "metadata-loader",
     "source": "workflow-json",
     "workflowDirectory": "workflows",
-    "fingerprint": "7918f5465e24c63423010079061b1cbbb42ea0355ab9fb9725727ee8c4b7bfb7",
-    "workflowCount": 10,
+    "fingerprint": "b6078a1664972fa1a037e1caf08d97f918e73d55a31b6156a62dbf37204652a2",
+    "workflowCount": 5,
     "hasObjectInfoSnapshot": false,
     "sources": [
       {
@@ -25,106 +25,6 @@
         "path": "workflows/1-images.paramconfig.json",
         "sha256": "fda9ef8c588673baa82c383ca3d8b259893f32e9de61bc8b33915ced6557d887",
         "sizeBytes": 4160,
-        "modifiedAt": "2026-08-11 10:29:53 KST",
-        "modifiedAtUtc": "2026-08-11T01:29:53Z",
-        "modifiedAtKst": "2026-08-11 10:29:53 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/2-images.json",
-        "sha256": "909df8591036a6ab859e65dc775f4ae50424199c5d3afb1ac97029628716879b",
-        "sizeBytes": 5247,
-        "modifiedAt": "2026-07-31 14:01:18 KST",
-        "modifiedAtUtc": "2026-07-31T05:01:18Z",
-        "modifiedAtKst": "2026-07-31 14:01:18 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/2-images.paramconfig.json",
-        "sha256": "9407861e285b4fd25478e1abce2d91a10b721a4464f2fe3e65795e26b7cf4cc0",
-        "sizeBytes": 4186,
-        "modifiedAt": "2026-08-11 10:29:53 KST",
-        "modifiedAtUtc": "2026-08-11T01:29:53Z",
-        "modifiedAtKst": "2026-08-11 10:29:53 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/3-images.json",
-        "sha256": "e873acd2a3c6d69a6ee60f83f400946dd0261bd17690c9b4e36ff0c07d32dea4",
-        "sizeBytes": 11154,
-        "modifiedAt": "2026-07-31 14:01:18 KST",
-        "modifiedAtUtc": "2026-07-31T05:01:18Z",
-        "modifiedAtKst": "2026-07-31 14:01:18 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/3-images.paramconfig.json",
-        "sha256": "4aedf5857cd5f7ff62f300252cce6e2317a71b5cc7b088c32f25a4fde4d61dbf",
-        "sizeBytes": 7332,
-        "modifiedAt": "2026-08-11 10:29:53 KST",
-        "modifiedAtUtc": "2026-08-11T01:29:53Z",
-        "modifiedAtKst": "2026-08-11 10:29:53 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/4-images.json",
-        "sha256": "f1ede7fcfb2d9a58ab986012af7149789a301968c8a68b0686038b091942a5db",
-        "sizeBytes": 16549,
-        "modifiedAt": "2026-07-31 14:01:18 KST",
-        "modifiedAtUtc": "2026-07-31T05:01:18Z",
-        "modifiedAtKst": "2026-07-31 14:01:18 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/4-images.paramconfig.json",
-        "sha256": "7d23d693fb9f69eb9a4eb51018698a3f6ea5e70af6f20fdf2a942a2008c5378e",
-        "sizeBytes": 10085,
-        "modifiedAt": "2026-08-11 10:29:53 KST",
-        "modifiedAtUtc": "2026-08-11T01:29:53Z",
-        "modifiedAtKst": "2026-08-11 10:29:53 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/5-images.json",
-        "sha256": "70a7851e0fb11314ff80698c73f89f646f6deb3c5b727edfe99e0a42d4aa3906",
-        "sizeBytes": 21944,
-        "modifiedAt": "2026-07-31 14:01:18 KST",
-        "modifiedAtUtc": "2026-07-31T05:01:18Z",
-        "modifiedAtKst": "2026-07-31 14:01:18 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/5-images.paramconfig.json",
-        "sha256": "68108d3478ef549157ea1ffef756c5a08c7df6e95b279e937311ecf7c026df57",
-        "sizeBytes": 12838,
-        "modifiedAt": "2026-08-11 10:29:53 KST",
-        "modifiedAtUtc": "2026-08-11T01:29:53Z",
-        "modifiedAtKst": "2026-08-11 10:29:53 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/6-images.json",
-        "sha256": "e9f0ede548b146be8a0fb8743553f2138350704339bdcfc4ffb12d817732dcd2",
-        "sizeBytes": 27339,
-        "modifiedAt": "2026-07-31 14:01:18 KST",
-        "modifiedAtUtc": "2026-07-31T05:01:18Z",
-        "modifiedAtKst": "2026-07-31 14:01:18 KST",
-        "modifiedAtSourceTimezone": "UTC",
-        "modifiedAtSource": "filesystem"
-      },
-      {
-        "path": "workflows/6-images.paramconfig.json",
-        "sha256": "6ea6e45cbd184876d100b25bbb95ce557e49f89f2a03d4d25122a3d00ffdb6f4",
-        "sizeBytes": 15591,
         "modifiedAt": "2026-08-11 10:29:53 KST",
         "modifiedAtUtc": "2026-08-11T01:29:53Z",
         "modifiedAtKst": "2026-08-11 10:29:53 KST",
@@ -213,11 +113,11 @@
       },
       {
         "path": "data/segment-defaults.json",
-        "sha256": "12b870e57b9445a5d58d86ea75af2e6c090e1d22c900a4e89e881c9ef1cbdf6c",
-        "sizeBytes": 7641,
-        "modifiedAt": "2026-08-20 15:07:31 KST",
-        "modifiedAtUtc": "2026-08-20T06:07:31Z",
-        "modifiedAtKst": "2026-08-20 15:07:31 KST",
+        "sha256": "66e69f774149567d0d49a9eb13e47b3e3fd27aad26d1f1cf2ea3f37b611c6fcb",
+        "sizeBytes": 2534,
+        "modifiedAt": "2026-09-09 18:29:31 KST",
+        "modifiedAtUtc": "2026-09-09T09:29:31Z",
+        "modifiedAtKst": "2026-09-09 18:29:31 KST",
         "modifiedAtSourceTimezone": "UTC",
         "modifiedAtSource": "filesystem"
       }

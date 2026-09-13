@@ -78,8 +78,10 @@
 export type StudioRoute =
   | "access.login"
   | "access.manual"
+  | "webtoonCuts"
   | "create.load"
   | "create.promptManagement"
+  | "create.batchJobs"
   | "create.runpodRequests"
   | "create.prompt"
   | "create.confirm"
@@ -121,8 +123,10 @@ const LEGACY_LAST_SEGMENT_ROUTE: Record<string, StudioRoute> = {
 const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.login": "/studio/access/login",
   "access.manual": "/studio/access/manual",
+  "webtoonCuts": "/studio/webtoon-cuts",
   "create.load": "/studio/create/load",
   "create.promptManagement": "/studio/create/prompts",
+  "create.batchJobs": "/studio/create/batch-jobs",
   "create.runpodRequests": "/studio/create/runpod",
   "create.prompt": "/studio/create/prompt",
   "create.confirm": "/studio/create/confirm",

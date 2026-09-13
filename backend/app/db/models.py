@@ -180,6 +180,7 @@ class WorkflowTask(Base):
         # values remain intact; only PENDING_SUBMIT is locally introduced.
         Index("ix_workflow_tasks_dispatch", "status", "next_dispatch_at", "created_at"),
         Index("ix_workflow_tasks_prompt_draft_latest", "prompt_draft_id", "deleted_at", "created_at", "id"),
+        Index("ix_workflow_tasks_batch_deleted_status", "batch_job_id", "deleted_at", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -225,6 +226,7 @@ class WorkflowTask(Base):
     # External-provider raw timestamps and their normalized UTC/KST pairs.
     # Existing rows keep an empty object and are reported as legacy/unknown.
     time_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -242,6 +244,26 @@ class TaskExecutionPolicy(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     max_active_tasks_per_user: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     max_active_tasks_total: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    updated_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class SandboxPodSetting(Base):
+    """Singleton Sandbox Pod selection / switch preferences (spec 2026-09-11 §5.1).
+
+    The selected Pod and switch policy must survive redeploys and be shared by
+    every admin, so they live here rather than in environment variables.
+    """
+
+    __tablename__ = "sandbox_pod_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    selected_pod_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    auto_switch_on_start_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    pod_priority_json: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    # Policy A (2026-09-12): after a successful create, delete stopped Pods of the same GPU.
+    replace_same_gpu_pods: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     updated_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
@@ -630,6 +652,9 @@ class ImagePromptDraft(Base):
         Index("ix_image_prompt_drafts_workflow_updated_id", "workflow_id", "updated_at", "id"),
         Index("ix_image_prompt_drafts_workflow_owner_status", "workflow_id", "created_by", "status"),
         Index("ix_image_prompt_drafts_updated_id", "updated_at", "id"),
+        Index("ix_image_prompt_drafts_batch_status", "batch_job_id", "status"),
+        Index("ix_image_prompt_drafts_promotion", "status", "promotion_claimed_at", "batch_job_id"),
+        Index("ix_image_prompt_drafts_batch_promotion_retry", "batch_job_id", "promotion_status", "promotion_next_attempt_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -648,6 +673,16 @@ class ImagePromptDraft(Base):
     raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    promotion_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Batch jobs promote a completed Grok draft into one durable RunPod task.
+    # Keep that handoff state separate from prompt generation status so a
+    # browser logout or app restart cannot hide a failed handoff.
+    promotion_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_APPLICABLE", index=True)
+    promotion_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promotion_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    promotion_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    promotion_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -664,6 +699,7 @@ class PromptGenerationBatch(Base):
     completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -711,6 +747,7 @@ class RunpodRequestBatch(Base):
     # The worker owns all drafts/tasks. A manager may submit the worker's batch
     # without changing the owner shown in task and prompt history.
     submitted_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    batch_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
@@ -722,6 +759,7 @@ class RunpodRequestItem(Base):
     __table_args__ = (
         Index("ix_runpod_request_items_batch_sequence", "request_batch_id", "sequence_no"),
         Index("ix_runpod_request_items_status", "status"),
+        Index("ix_runpod_request_items_orphan", "status", "task_id", "materialization_claimed_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -733,9 +771,51 @@ class RunpodRequestItem(Base):
     positive_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_frames: Mapped[int] = mapped_column(Integer, nullable=False, default=81)
+    resolution_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="sd")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_SUBMIT")
     task_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workflow_tasks.id"), nullable=True, index=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    materialization_claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    materialization_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+BATCH_JOB_INCOMPLETE = "INCOMPLETE"
+BATCH_JOB_COMPLETE = "COMPLETE"
+
+
+class BatchJob(Base):
+    """One folder-scoped bulk run: prompt generation through RunPod video output."""
+
+    __tablename__ = "batch_jobs"
+    __table_args__ = (
+        Index("ix_batch_jobs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    # INCOMPLETE / COMPLETE. Dashboards read only INCOMPLETE rows.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="INCOMPLETE")
+    # Browsers never expose an absolute path, so only the picked folder name is stored.
+    source_dir_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_zip_file_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    requested_frames: Mapped[int] = mapped_column(Integer, nullable=False, default=81)
+    resolution_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="sd")
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_requested_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_generating_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_pending_submit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_queued_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runpod_in_progress_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 

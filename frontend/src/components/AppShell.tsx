@@ -27,8 +27,8 @@ export const AppShellChromeContext = React.createContext<AppShellChrome | null>(
 // 순서대로 이관). 지금은 신규 화면을 지을 때 쓸 재사용 가능한 뼈대만 갖춘 상태다.
 //
 // 사이드바 상단 고정 메뉴는 두 가지 영역(area)으로 나뉜다 - design_handoff의
-// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(프롬프트 생성 관리 /
-// RunPod 요청 관리 / Task History / 컬렉션 관리)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
+// "2 Create.dc.html" "3 Review.dc.html"은 GENERATE 영역(작업 이력 /
+// Batch 처리 / 단위 작업 / Collection 관리)을, "4 Admin.dc.html"은 ADMIN 영역(역할 & 권한 / 사용자 /
 // 프롬프트 카탈로그 / 워크플로 정의 / Sandbox Pod / 감사 로그)을 공통으로 반복한다.
 // 각 화면이 다르게 그리는 부분(스텝 트래커, 필터, 카탈로그 트리 등)은 sidebarExtra로,
 // 화면 하단 고정 정보(서비스 상태, 보관 기한 안내 등)는 sidebarFooter로 화면이 채운다.
@@ -38,26 +38,32 @@ export const AppShellChromeContext = React.createContext<AppShellChrome | null>(
 // 상태로 보여준다(design_handoff의 표시 방식과 동일) - "감사 로그"는 A-04에서
 // 구현이 끝나 더 이상 이 처리 대상이 아니다.
 
-export type AppShellArea = "generate" | "admin";
+export type AppShellArea = "local" | "generate" | "admin";
 
 type NavItem = {
   key: string;
   label: string;
   /** 없으면 항상 노출(예: Workspace) */
   permission?: string;
+  permissions?: string[];
   /** 권한은 있지만 백엔드 기능이 아직 없는 항목 - 숨기지 않고 배지와 함께 비활성 처리 */
   unimplemented?: boolean;
 };
 
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
-  { key: "promptManagement", label: "프롬프트 생성 관리", permission: "prompts:build" },
-  { key: "runpodRequests", label: "RunPod 요청 관리", permission: "jobs:run" },
-  { key: "taskHistory", label: "Task History", permission: "history:read" },
+  { key: "taskHistory", label: "작업 이력", permission: "history:read" },
+  { key: "batchJobs", label: "Batch 처리", permissions: ["prompts:build", "jobs:run"] },
+  { key: "promptManagement", label: "Grok 프롬프트 생성", permission: "prompts:build" },
+  { key: "runpodRequests", label: "Runpod ComfyUI 요청", permission: "jobs:run" },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "컬렉션 관리" 한
   // 화면으로 통합 - 사이드바 메뉴도 컬렉션 관리 하나로 줄었다(컬렉션은 그 화면
   // 안의 필터로 이동).
-  { key: "assets", label: "컬렉션 관리", permission: "history:read" }
+  { key: "assets", label: "Collection 관리", permission: "history:read" }
+];
+
+const LOCAL_NAV_ITEMS: NavItem[] = [
+  { key: "webtoonCuts", label: "이미지 컷 분할", permission: "jobs:run" }
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.
@@ -112,9 +118,21 @@ export function AppShell({
   rightPanel,
   children
 }: AppShellProps) {
-  const navItems = area === "admin" ? ADMIN_NAV_ITEMS : GENERATE_NAV_ITEMS;
-  const groupLabel = area === "admin" ? "ADMIN" : "GENERATE";
-  const visibleNavItems = navItems.filter((item) => !item.permission || canUse(user, item.permission));
+  const navGroups = area === "admin"
+    ? [{ label: "ADMIN", items: ADMIN_NAV_ITEMS }]
+    : [
+      { label: "LOCAL", items: LOCAL_NAV_ITEMS },
+      { label: "GENERATE", items: GENERATE_NAV_ITEMS }
+    ];
+  const visibleNavGroups = navGroups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
+    if (item.permissions?.length) {
+      return item.permissions.every((permission) => canUse(user, permission));
+    }
+    return !item.permission || canUse(user, item.permission);
+    })
+  })).filter((group) => group.items.length);
   const chrome = React.useContext(AppShellChromeContext);
 
   // HELP 그룹: design_handoff 6b의 사이드바가 GENERATE 그룹 아래 두는 HELP 묶음
@@ -153,29 +171,33 @@ export function AppShell({
           </div>
         ) : null}
 
-        <div className="v3-sidebar-group-label">{groupLabel}</div>
-        <div className="v3-sidebar-nav">
-          {visibleNavItems.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
-              disabled={item.unimplemented}
-              aria-current={item.key === activeItem ? "page" : undefined}
-              onClick={() => {
-                if (!item.unimplemented) {
-                  onNavigate(item.key);
-                }
-              }}
-            >
-              <span>{item.label}</span>
-              {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
-            </button>
-          ))}
-        </div>
+        {visibleNavGroups.map((group) => (
+          <React.Fragment key={group.label}>
+            <div className="v3-sidebar-group-label">{group.label}</div>
+            <div className="v3-sidebar-nav">
+              {group.items.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
+                  disabled={item.unimplemented}
+                  aria-current={item.key === activeItem ? "page" : undefined}
+                  onClick={() => {
+                    if (!item.unimplemented) {
+                      onNavigate(item.key);
+                    }
+                  }}
+                >
+                  <span>{item.label}</span>
+                  {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
+                </button>
+              ))}
+            </div>
+          </React.Fragment>
+        ))}
 
         {/* HELP 그룹(GENERATE 영역에서만). ADMIN 영역은 자체 nav에 Status/Metadata를 이미 둔다. */}
-        {area === "generate" && chrome && visibleHelpItems.length ? (
+        {area !== "admin" && chrome && visibleHelpItems.length ? (
           <>
             <div className="v3-sidebar-group-label">HELP</div>
             <div className="v3-sidebar-nav">

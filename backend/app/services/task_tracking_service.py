@@ -20,15 +20,18 @@ from backend.app.core.timezone_utils import (
     timestamp_fields,
     timestamp_pair,
 )
-from backend.app.db.models import Asset, Collection, CollectionItem, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
+from backend.app.db.models import Asset, Collection, CollectionItem, ImagePromptDraft, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
 from backend.app.services.metadata_service import get_workflow_widget_metadata
+from backend.app.services import workflow_service
 
 
 TERMINAL_STATES = {"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
 ACTIVE_STATES = {"QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING"}
 PENDING_SUBMISSION_STATES = {"PENDING_SUBMIT", "DISPATCHING"}
+REWORKABLE_STATES = {"FAILED", "CANCELLED", "TIMED_OUT"}
+REPLAYABLE_STATES = TERMINAL_STATES
 STALE_DISPATCH_CLAIM_SECONDS = 300
 RUNPOD_TIMESTAMP_KEYS = {
     "createdat", "queuedat", "startedat", "completedat", "finishedat", "endedat",
@@ -68,6 +71,7 @@ def record_job_status(job: dict, *, resolve_asset: Callable[[str], tuple[dict, P
 # 테이블을 읽던 이전 시그니처는 호출부가 실수하기 쉬웠고, 실제로 prompt_options()가
 # 그 경로로 workflow_tasks 전체를 메모리에 올려 ECS OOM을 냈다.
 MAX_HISTORY_PAGE_SIZE = 200
+MAX_HISTORY_SELECTION_SIZE = 1000
 
 
 def task_history_items(
@@ -79,6 +83,8 @@ def task_history_items(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
 ) -> list[dict]:
     session = SessionLocal()
     try:
@@ -90,6 +96,8 @@ def task_history_items(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
         )
         id_statement = (
             select(WorkflowTask.id)
@@ -115,9 +123,20 @@ def task_history_items(
         # 이 페이지가 참조하는 자산만 읽는다. assets 테이블 전체를 읽던 이전
         # 구현은 자산이 쌓일수록 모든 이력 조회를 함께 느리게 만들었다.
         assets_by_id = _assets_by_ids(session, _history_asset_ids(tasks))
+        prompt_batch_ids_by_draft_id = _prompt_batch_ids_by_draft_id(session, tasks)
+        default_negative_prompts_by_workflow_id = _default_negative_prompts_by_workflow_id({
+            str(task.workflow_id or "")
+            for task in tasks
+            if task.workflow_id
+        })
         tasks_by_id = {task.id: task for task in tasks}
         return [
-            _task_to_history_item(tasks_by_id[task_id], assets_by_id)
+            _task_to_history_item(
+                tasks_by_id[task_id],
+                assets_by_id,
+                prompt_batch_ids_by_draft_id,
+                default_negative_prompts_by_workflow_id,
+            )
             for task_id in task_ids
             if task_id in tasks_by_id
         ]
@@ -132,6 +151,8 @@ def task_history_total(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
 ) -> int:
     session = SessionLocal()
     try:
@@ -141,6 +162,8 @@ def task_history_total(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
         )
         statement = (
             select(func.count())
@@ -153,6 +176,63 @@ def task_history_total(
         session.close()
 
 
+def _history_status_stat_key(status: str | None) -> str:
+    normalized = str(status or "").upper()
+    if normalized in {"COMPLETED", "SUCCESS"}:
+        return "completed"
+    if normalized in {"FAILED", "TIMED_OUT"}:
+        return "failed"
+    if normalized == "CANCELLED":
+        return "cancelled"
+    if normalized in PENDING_SUBMISSION_STATES:
+        return "pendingSubmit"
+    return "active"
+
+
+def task_history_stats(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
+) -> dict[str, int]:
+    session = SessionLocal()
+    try:
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
+        )
+        rows = session.execute(
+            select(WorkflowTask.status, func.count())
+            .select_from(WorkflowTask)
+            .where(*conditions)
+            .group_by(WorkflowTask.status)
+        ).all()
+        stats = {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "pendingSubmit": 0,
+            "active": 0,
+        }
+        for status, count in rows:
+            value = int(count or 0)
+            stats["total"] += value
+            stats[_history_status_stat_key(status)] += value
+        return stats
+    finally:
+        session.close()
+
+
 def _history_filter_conditions(
     *,
     workflow_id: str = "",
@@ -160,12 +240,29 @@ def _history_filter_conditions(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
 ) -> list:
     conditions = [WorkflowTask.deleted_at.is_(None)]
     if workflow_id:
         conditions.append(WorkflowTask.workflow_id == workflow_id)
     if worker_id:
         conditions.append(WorkflowTask.user_id == worker_id)
+    if batch_job_id:
+        conditions.append(or_(
+            WorkflowTask.batch_job_id == batch_job_id,
+            select(ImagePromptDraft.id)
+            .where(
+                ImagePromptDraft.id == WorkflowTask.prompt_draft_id,
+                ImagePromptDraft.prompt_batch_id == batch_job_id,
+            )
+            .exists(),
+        ))
+    if job_id:
+        conditions.append(or_(
+            WorkflowTask.id == job_id,
+            WorkflowTask.runpod_job_id == job_id,
+        ))
     from_value = _parse_history_date_boundary(date_from, end_of_day=False)
     if from_value is not None:
         conditions.append(WorkflowTask.created_at >= from_value)
@@ -176,6 +273,42 @@ def _history_filter_conditions(
     if result_condition is not None:
         conditions.append(result_condition)
     return conditions
+
+
+def task_history_selection_ids(
+    *,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
+) -> dict[str, object]:
+    """Return bounded terminal task IDs for cross-page history selection."""
+    session = SessionLocal()
+    try:
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=result_status,
+            worker_id=worker_id,
+            date_from=date_from,
+            date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
+        )
+        rows = list(session.scalars(
+            select(WorkflowTask.id)
+            .where(*conditions, WorkflowTask.status.in_(TERMINAL_STATES))
+            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+            .limit(MAX_HISTORY_SELECTION_SIZE + 1)
+        ))
+        return {
+            "taskIds": rows[:MAX_HISTORY_SELECTION_SIZE],
+            "truncated": len(rows) > MAX_HISTORY_SELECTION_SIZE,
+        }
+    finally:
+        session.close()
 
 
 def _parse_history_date_boundary(value: str, *, end_of_day: bool) -> datetime | None:
@@ -198,7 +331,11 @@ def _history_result_status_condition(value: str):
     if normalized in {"COMPLETED", "SUCCESS"}:
         return WorkflowTask.status.in_({"COMPLETED", "SUCCESS"})
     if normalized == "FAILED":
-        return WorkflowTask.status.in_({"FAILED", "CANCELLED", "TIMED_OUT"})
+        return WorkflowTask.status.in_({"FAILED", "TIMED_OUT"})
+    if normalized == "CANCELLED":
+        return WorkflowTask.status == "CANCELLED"
+    if normalized == "TIMED_OUT":
+        return WorkflowTask.status == "TIMED_OUT"
     if normalized in {"ACTIVE", "RUNNING", "IN_PROGRESS"}:
         return or_(WorkflowTask.status.is_(None), WorkflowTask.status.not_in(TERMINAL_STATES))
     return None
@@ -429,7 +566,12 @@ def restore_job_from_task(task_id: str) -> dict | None:
         )
         if not task:
             return None
-        history_item = _task_to_history_item(task, _assets_by_ids(session, _history_asset_ids([task])))
+        history_item = _task_to_history_item(
+            task,
+            _assets_by_ids(session, _history_asset_ids([task])),
+            _prompt_batch_ids_by_draft_id(session, [task]),
+            _default_negative_prompts_by_workflow_id({str(task.workflow_id or "")}),
+        )
         payload = dict(task.payload_json or {})
         segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
         first_segment = segments[0] if segments else {}
@@ -464,6 +606,7 @@ def restore_job_from_task(task_id: str) -> dict | None:
             "outputsSaved": bool(output_assets),
             "wanNodeConfig": task.wan_node_config or {},
             "historySaved": str(task.status or "").upper() in TERMINAL_STATES,
+            "lastDispatchError": task.last_dispatch_error,
             "restoredFromDb": True,
         }
         created_at_fields = _task_timestamp_fields(task, "createdAt", task.created_at)
@@ -476,6 +619,209 @@ def restore_job_from_task(task_id: str) -> dict | None:
         return result
     finally:
         session.close()
+
+
+def restore_existing_job_for_prompt_draft(prompt_draft_id: str, *, batch_job_id: str | None = None) -> dict | None:
+    normalized_draft_id = str(prompt_draft_id or "").strip()
+    if not normalized_draft_id:
+        return None
+    session = SessionLocal()
+    try:
+        task = session.scalar(
+            select(WorkflowTask)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.prompt_draft_id == normalized_draft_id,
+            )
+            .order_by(WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
+            .limit(1)
+        )
+        if task is None:
+            return None
+        task_id = task.id
+        normalized_batch_job_id = str(batch_job_id or "").strip()
+        if normalized_batch_job_id and not task.batch_job_id:
+            payload = dict(task.payload_json or {})
+            payload["batchJobId"] = normalized_batch_job_id
+            task.payload_json = payload
+            task.batch_job_id = normalized_batch_job_id
+            task.updated_at = now_seoul_naive()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+    return restore_job_from_task(task_id)
+
+
+def _reset_task_for_rework(session: Session, task: WorkflowTask, *, actor_id: str, reset_created_at: bool = True) -> None:
+    now = now_seoul_naive()
+    payload = dict(task.payload_json or {})
+    for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
+        payload.pop(key, None)
+    if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
+        payload["user"] = {
+            "id": task.user_id or actor_id,
+            "name": task.worker_name or (task.user.name if task.user else None) or task.user_id or actor_id,
+            "role": task.user.role if task.user else "",
+            "permissions": task.user.permissions_json if task.user else [],
+        }
+
+    task.status = "PENDING_SUBMIT"
+    task.progress = 0
+    task.runpod_job_id = None
+    task.completed_at = None
+    task.elapsed_seconds = None
+    task.runpod_submit_json = {}
+    task.runpod_status_json = {}
+    task.payload_json = payload
+    task.wan_node_config = {}
+    task.dispatch_claimed_at = None
+    task.dispatch_attempts = 0
+    task.next_dispatch_at = None
+    task.last_dispatch_error = None
+    task.started_at = now
+    task.updated_at = now
+    if reset_created_at:
+        task.created_at = now
+    for link in list(task.output_assets):
+        session.delete(link)
+    for prompt in list(task.prompts):
+        prompt.output_asset_ids = []
+        prompt.updated_at = now
+    _sync_request_batch(session, task)
+
+
+def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = False) -> dict:
+    """Reset an existing terminal task so the dispatcher resubmits the same row."""
+    session = SessionLocal()
+    try:
+        task = session.scalar(
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(WorkflowTask.id == task_id, WorkflowTask.deleted_at.is_(None))
+            .limit(1)
+        )
+        if task is None:
+            raise KeyError(task_id)
+        if not can_manage and str(task.user_id or "") != str(actor_id or ""):
+            raise PermissionError("다른 작업자의 RunPod 작업은 재작업할 수 없습니다.")
+        status = str(task.status or "").upper()
+        if status not in REPLAYABLE_STATES:
+            raise ValueError("종료된 RunPod 작업만 재실행할 수 있습니다.")
+
+        _reset_task_for_rework(session, task, actor_id=actor_id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    restored = restore_job_from_task(task_id)
+    if restored is None:
+        raise KeyError(task_id)
+    return restored
+
+
+def requeue_runpod_history_items(
+    session: Session,
+    *,
+    actor_id: str,
+    can_manage: bool = False,
+    scope: str = "selected",
+    task_ids: list[str] | None = None,
+    workflow_id: str = "",
+    result_status: str = "",
+    worker_id: str = "",
+    run_date: str = "",
+    batch_job_id: str = "",
+) -> dict:
+    """Reset RunPod history rows using either explicit selection or current query filters."""
+    normalized_scope = str(scope or "selected").strip().lower()
+    skipped: list[dict[str, str]] = []
+    selected_ids = [str(task_id).strip() for task_id in (task_ids or []) if str(task_id).strip()]
+
+    if normalized_scope == "selected":
+        if not selected_ids:
+            raise ValueError("재실행할 RunPod 작업을 선택해주세요.")
+        statement = (
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(
+                WorkflowTask.id.in_(selected_ids),
+                WorkflowTask.deleted_at.is_(None),
+            )
+        )
+        if not can_manage:
+            statement = statement.where(WorkflowTask.user_id == actor_id)
+        tasks = list(session.scalars(statement))
+        task_by_id = {task.id: task for task in tasks}
+        ordered_tasks = []
+        for task_id in selected_ids:
+            task = task_by_id.get(task_id)
+            if task is None:
+                skipped.append({"id": task_id, "reason": "not_found_or_forbidden"})
+                continue
+            ordered_tasks.append(task)
+    elif normalized_scope == "query":
+        if not batch_job_id:
+            raise ValueError("조회 조건 재실행에는 Batch ID가 필요합니다.")
+        normalized_result = str(result_status or "").strip().upper()
+        if normalized_result in {"COMPLETED", "SUCCESS", "ACTIVE", "RUNNING", "IN_PROGRESS"}:
+            raise ValueError("조회 결과 재실행은 실패 또는 취소 RunPod 작업에만 사용할 수 있습니다.")
+        effective_result = result_status if normalized_result in {"FAILED", "CANCELLED", "TIMED_OUT"} else ""
+        conditions = _history_filter_conditions(
+            workflow_id=workflow_id,
+            result_status=effective_result,
+            worker_id=worker_id,
+            date_from=run_date,
+            date_to=run_date,
+            batch_job_id=batch_job_id,
+        )
+        if not effective_result:
+            conditions.append(WorkflowTask.status.in_(REWORKABLE_STATES))
+        if not can_manage:
+            conditions.append(WorkflowTask.user_id == actor_id)
+        ordered_tasks = list(session.scalars(
+            select(WorkflowTask)
+            .options(
+                selectinload(WorkflowTask.output_assets),
+                selectinload(WorkflowTask.prompts),
+                selectinload(WorkflowTask.user),
+            )
+            .where(*conditions)
+            .order_by(WorkflowTask.created_at.desc())
+        ))
+    else:
+        raise ValueError("지원하지 않는 RunPod 재실행 범위입니다.")
+
+    reworked_ids: list[str] = []
+    for task in ordered_tasks:
+        status = str(task.status or "").upper()
+        if status not in REPLAYABLE_STATES:
+            skipped.append({"id": task.id, "reason": "not_terminal"})
+            continue
+        _reset_task_for_rework(session, task, actor_id=actor_id)
+        reworked_ids.append(task.id)
+
+    session.commit()
+    return {
+        "scope": normalized_scope,
+        "requested": len(selected_ids) if normalized_scope == "selected" else len(ordered_tasks),
+        "reworked": len(reworked_ids),
+        "taskIds": reworked_ids,
+        "skipped": skipped,
+    }
 
 
 def active_task_ids() -> list[str]:
@@ -492,6 +838,33 @@ def active_task_ids() -> list[str]:
                 .order_by(WorkflowTask.created_at.asc())
             )
         )
+    finally:
+        session.close()
+
+
+def pending_output_import_task_ids() -> list[str]:
+    """Return completed RunPod tasks whose manifest-backed output is absent.
+
+    The status monitor owns this retry path, so a delayed RunPod S3 manifest
+    is eventually imported even after every browser has left the page.
+    """
+    session = SessionLocal()
+    try:
+        missing_output = ~select(TaskOutputAsset.id).where(
+            TaskOutputAsset.task_id == WorkflowTask.id,
+        ).exists()
+        return list(session.scalars(
+            select(WorkflowTask.id)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.execution_mode == "runpod",
+                WorkflowTask.runpod_job_id.is_not(None),
+                WorkflowTask.status.in_({"COMPLETED", "SUCCESS"}),
+                missing_output,
+            )
+            .order_by(WorkflowTask.updated_at.asc(), WorkflowTask.id.asc())
+            .limit(20)
+        ))
     finally:
         session.close()
 
@@ -514,7 +887,11 @@ def claim_next_pending_submission() -> dict | None:
                 WorkflowTask.status == "PENDING_SUBMIT",
                 or_(WorkflowTask.next_dispatch_at.is_(None), WorkflowTask.next_dispatch_at <= now),
             )
-            .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+            .order_by(
+                WorkflowTask.batch_job_id.is_not(None).asc(),
+                WorkflowTask.created_at.asc(),
+                WorkflowTask.id.asc(),
+            )
             .limit(10)
         ))
         for task_id in candidate_ids:
@@ -907,6 +1284,7 @@ def _upsert_task(session: Session, job: dict) -> WorkflowTask:
     task.prompt_draft_id = str(job.get("promptDraftId") or payload.get("promptDraftId") or task.prompt_draft_id or "") or None
     task.request_batch_id = str(job.get("requestBatchId") or payload.get("requestBatchId") or task.request_batch_id or "") or None
     task.request_item_id = str(job.get("requestItemId") or payload.get("requestItemId") or task.request_item_id or "") or None
+    task.batch_job_id = str(job.get("batchJobId") or payload.get("batchJobId") or task.batch_job_id or "") or None
     if status.upper() in ACTIVE_STATES or status.upper() in TERMINAL_STATES:
         task.dispatch_claimed_at = None
         task.next_dispatch_at = None
@@ -927,7 +1305,14 @@ def _replace_input_assets(
     for link in list(task.input_assets):
         session.delete(link)
     session.flush()
-    for index, asset_id in enumerate(_input_asset_ids(job), start=1):
+    seen_asset_ids: set[str] = set()
+    unique_asset_ids: list[str] = []
+    for asset_id in _input_asset_ids(job):
+        if asset_id in seen_asset_ids:
+            continue
+        seen_asset_ids.add(asset_id)
+        unique_asset_ids.append(asset_id)
+    for index, asset_id in enumerate(unique_asset_ids, start=1):
         _ensure_asset(session, asset_id, resolve_asset=resolve_asset)
         if session.get(Asset, asset_id):
             session.add(TaskInputAsset(task_id=task.id, asset_id=asset_id, slot_index=index))
@@ -943,12 +1328,16 @@ def _replace_output_assets(
     for link in list(task.output_assets):
         session.delete(link)
     session.flush()
+    seen_asset_ids: set[str] = set()
     for asset in job.get("outputAssets") or []:
         if not isinstance(asset, dict):
             continue
         asset_id = str(asset.get("assetId") or "").strip()
         if not asset_id:
             continue
+        if asset_id in seen_asset_ids:
+            continue
+        seen_asset_ids.add(asset_id)
         _ensure_asset(session, asset_id, asset_payload=asset, resolve_asset=resolve_asset)
         if session.get(Asset, asset_id):
             session.add(TaskOutputAsset(
@@ -1156,7 +1545,64 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> dict:
+def _prompt_batch_ids_by_draft_id(session: Session, tasks: list[WorkflowTask]) -> dict[str, str]:
+    draft_ids = sorted({
+        str(task.prompt_draft_id)
+        for task in tasks
+        if task.prompt_draft_id
+    })
+    if not draft_ids:
+        return {}
+    return {
+        str(draft_id): str(prompt_batch_id)
+        for draft_id, prompt_batch_id in session.execute(
+            select(ImagePromptDraft.id, ImagePromptDraft.prompt_batch_id)
+            .where(
+                ImagePromptDraft.id.in_(draft_ids),
+                ImagePromptDraft.prompt_batch_id.is_not(None),
+            )
+        ).all()
+        if prompt_batch_id
+    }
+
+
+def _default_negative_prompts_by_workflow_id(workflow_ids: set[str]) -> dict[str, list[dict[str, str | int]]]:
+    defaults: dict[str, list[dict[str, str | int]]] = {}
+    for workflow_id in sorted(workflow_id for workflow_id in workflow_ids if workflow_id):
+        try:
+            schema = workflow_service.get_workflow_schema(workflow_id)
+        except Exception:
+            defaults[workflow_id] = []
+            continue
+        defaults[workflow_id] = [
+            {"index": int(segment.get("index") or index + 1), "text": text}
+            for index, segment in enumerate(schema.get("segments") or [])
+            for text in [str(segment.get("defaultNegativePrompt") or "").strip()]
+            if text
+        ]
+    return defaults
+
+
+def _history_item_has_negative_prompt(item: dict) -> bool:
+    if str(item.get("negativePrompt") or "").strip():
+        return True
+    for entry in item.get("negativePrompts") or []:
+        if isinstance(entry, dict) and str(entry.get("text") or entry.get("negativePrompt") or "").strip():
+            return True
+        if isinstance(entry, str) and entry.strip():
+            return True
+    for segment in item.get("segments") or []:
+        if isinstance(segment, dict) and str(segment.get("negativePromptAddition") or segment.get("negativePrompt") or "").strip():
+            return True
+    return False
+
+
+def _task_to_history_item(
+    task: WorkflowTask,
+    assets_by_id: dict[str, dict],
+    prompt_batch_ids_by_draft_id: dict[str, str] | None = None,
+    default_negative_prompts_by_workflow_id: dict[str, list[dict[str, str | int]]] | None = None,
+) -> dict:
     item = dict(task.payload_json or {})
     item.setdefault("taskId", task.id)
     item.update(_task_timestamp_fields(task, "timestamp", task.started_at or task.created_at))
@@ -1165,6 +1611,9 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     # without rewriting stored payloads or requiring a data migration.
     item.setdefault("workflowName", Path(task.workflow_id).stem)
     item.setdefault("promptDraftId", task.prompt_draft_id or "")
+    item["batchJobId"] = task.batch_job_id
+    prompt_batch_id = prompt_batch_ids_by_draft_id.get(str(task.prompt_draft_id or "")) if prompt_batch_ids_by_draft_id else None
+    item.setdefault("promptBatchId", prompt_batch_id)
     item.setdefault("runpodJobId", task.runpod_job_id or "")
     item.setdefault("executionMode", task.execution_mode)
     item.setdefault("workerName", task.worker_name or "-")
@@ -1172,7 +1621,17 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     item.setdefault("progress", int(task.progress or 0))
     item.setdefault("positivePrompts", task.positive_prompts or [])
     item.setdefault("negativePrompts", task.negative_prompts or [])
+    default_negative_prompts = (
+        default_negative_prompts_by_workflow_id or {}
+    ).get(str(task.workflow_id or ""), [])
+    if default_negative_prompts and not _history_item_has_negative_prompt(item):
+        item["negativePrompts"] = default_negative_prompts
+        item["negativePrompt"] = " | ".join(
+            f"{entry['index']}: {entry['text']}"
+            for entry in default_negative_prompts
+        )
     item.setdefault("configJson", task.config_json or {})
+    item.setdefault("durationSeconds", _history_duration_seconds(task, item))
     item.setdefault("wanNodeConfig", task.wan_node_config or {})
     item.setdefault("patchSummary", task.patch_summary or {})
     # Keeps application and provider time origins inspectable in Task History.
@@ -1204,9 +1663,60 @@ def _task_to_history_item(task: WorkflowTask, assets_by_id: dict[str, dict]) -> 
     item["outputAssets"] = output_assets or item.get("outputAssets", [])
     item.setdefault("outputUrl", _first_output_url(item["outputAssets"]))
     item["runpodResponse"] = _runpod_response_summary(task, item["outputAssets"])
+    requested_generation = (task.patch_summary or {}).get("generation") if isinstance(task.patch_summary, dict) else None
+    item["requestedGeneration"] = requested_generation if isinstance(requested_generation, list) else []
+    item["runpodGeneration"] = _runpod_generation(task.runpod_status_json or {})
+    if item["runpodGeneration"]:
+        item["runpodResponse"]["generation"] = item["runpodGeneration"]
     item.update(_task_timestamp_fields(task, "completedAt", task.completed_at))
     item.setdefault("elapsedSeconds", task.elapsed_seconds)
     return item
+
+
+def _history_duration_seconds(task: WorkflowTask, item: dict) -> int | None:
+    for source in _history_duration_sources(task, item):
+        seconds = _positive_int(
+            source.get("durationSeconds")
+            or source.get("duration_seconds")
+            or source.get("duration")
+        )
+        if seconds is not None:
+            return seconds
+        frames = _positive_int(source.get("frames") or source.get("length") or source.get("frame_count"))
+        if frames is None:
+            continue
+        fps = _positive_int(source.get("outputFps") or source.get("output_fps") or source.get("fps")) or 16
+        return max(1, round(frames / fps))
+    return None
+
+
+def _history_duration_sources(task: WorkflowTask, item: dict) -> list[dict]:
+    sources: list[dict] = []
+    for source in (item.get("configJson"), item.get("config"), task.config_json):
+        if isinstance(source, dict):
+            sources.append(source)
+    payload = task.payload_json or {}
+    if isinstance(payload, dict):
+        for segment in payload.get("segments") or []:
+            config = segment.get("config") if isinstance(segment, dict) else None
+            if isinstance(config, dict):
+                sources.append(config)
+    patch_summary = task.patch_summary or {}
+    if isinstance(patch_summary, dict):
+        for setting in patch_summary.get("videoSettings") or []:
+            if isinstance(setting, dict):
+                sources.append(setting)
+    return sources
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> dict:
@@ -1218,12 +1728,68 @@ def _runpod_response_summary(task: WorkflowTask, output_assets: list[dict]) -> d
         or _find_provider_value(submit_payload, ("filename", "fileName"))
         or _first_output_filename(output_assets)
     )
-    return {
+    summary = {
         "filename": filename or None,
-        "delaySeconds": _find_provider_value(submit_payload, ("delayTime", "delay_time", "delaySeconds")),
-        "executionSeconds": _find_provider_value(provider_payload, ("executionTime", "execution_time", "executionSeconds")),
+        "delaySeconds": _find_provider_duration_seconds(
+            submit_payload,
+            millisecond_keys=("delayTime", "delay_time"),
+            second_keys=("delaySeconds", "delay_seconds"),
+        ),
+        "executionSeconds": _find_provider_duration_seconds(
+            provider_payload,
+            millisecond_keys=("executionTime", "execution_time"),
+            second_keys=("executionSeconds", "execution_seconds"),
+        ),
         "jobId": task.runpod_job_id or _find_provider_value(submit_payload, ("id", "jobId", "job_id")) or None,
     }
+    generation = _runpod_generation(provider_payload)
+    if generation:
+        summary["generation"] = generation
+    return summary
+
+
+def _runpod_generation(provider_payload: dict) -> list:
+    if not isinstance(provider_payload, dict):
+        return []
+    candidates = [
+        provider_payload.get("generation"),
+        (provider_payload.get("output") or {}).get("generation") if isinstance(provider_payload.get("output"), dict) else None,
+        (provider_payload.get("manifest") or {}).get("generation") if isinstance(provider_payload.get("manifest"), dict) else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return candidate
+    return []
+
+
+def _find_provider_duration_seconds(
+    payload: object,
+    *,
+    millisecond_keys: tuple[str, ...],
+    second_keys: tuple[str, ...],
+) -> float | int | str | None:
+    seconds = _find_provider_value(payload, second_keys)
+    if seconds not in (None, ""):
+        return _numeric_duration(seconds)
+    milliseconds = _find_provider_value(payload, millisecond_keys)
+    if milliseconds in (None, ""):
+        return None
+    value = _numeric_duration(milliseconds)
+    if isinstance(value, (int, float)):
+        return round(value / 1000, 3)
+    return value
+
+
+def _numeric_duration(value: object) -> float | int | str:
+    if isinstance(value, bool):
+        return str(value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not number.is_integer():
+        return number
+    return int(number)
 
 
 def _find_provider_value(payload: object, keys: tuple[str, ...]) -> object | None:
@@ -1381,7 +1947,11 @@ def _history_status_label(status: Any) -> str:
     text = str(status or "").upper()
     if text in {"COMPLETED", "SUCCESS"}:
         return "Completed"
-    if text in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+    if text == "CANCELLED":
+        return "Cancelled"
+    if text == "TIMED_OUT":
+        return "Timed Out"
+    if text == "FAILED":
         return "Failed"
     return status or "queued"
 

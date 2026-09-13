@@ -77,7 +77,9 @@ import {
 } from "./screens/createScreens";
 import { GrokWorkspaceScreen } from "./screens/grokWorkspaceScreen";
 import { PromptManagementScreen } from "./screens/promptManagementScreen";
+import { BatchJobScreen } from "./screens/batchJobScreen";
 import { RunpodRequestScreen } from "./screens/runpodRequestScreen";
+import { WebtoonCutScreen } from "./screens/webtoonCutScreen";
 import {
   Create3aScreen,
   Create4cScreen,
@@ -109,6 +111,7 @@ import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 // (screens/accessScreens.tsx의 AccessDeniedScreen)을 구현해, 직접 URL 진입 시
 // 아래 deniedRoute 계산으로 그 화면을 본문에 그린다.
 export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
+  "webtoonCuts": "jobs:run",
   "create.promptManagement": "prompts:build",
   "create.runpodRequests": "jobs:run",
   "review.history": "history:read",
@@ -132,6 +135,10 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "access.manual": "manual:read"
 };
 
+export const ROUTE_REQUIRED_PERMISSIONS: Partial<Record<StudioRoute, string[]>> = {
+  "create.batchJobs": ["prompts:build", "jobs:run"]
+};
+
 type ConfirmationRequest = {
   title: string;
   description: string;
@@ -148,6 +155,10 @@ type PromptReuseTarget = {
 };
 
 export function routeAccessGranted(user: User | null, route: StudioRoute): boolean {
+  const requiredPermissions = ROUTE_REQUIRED_PERMISSIONS[route];
+  if (requiredPermissions?.length) {
+    return requiredPermissions.every((permission) => canUse(user, permission));
+  }
   const requiredPermission = ROUTE_REQUIRED_PERMISSION[route];
   if (!requiredPermission) {
     return true;
@@ -156,10 +167,12 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 }
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
-  "create.promptManagement": "프롬프트 생성 관리",
-  "create.runpodRequests": "RunPod 요청 관리",
-  "review.history": "Task History",
-  "review.assets": "컬렉션 관리",
+  "webtoonCuts": "이미지 컷 분할",
+  "create.promptManagement": "Grok 프롬프트 생성",
+  "create.batchJobs": "Batch 처리",
+  "create.runpodRequests": "Runpod ComfyUI 요청",
+  "review.history": "작업 이력",
+  "review.assets": "Collection 관리",
   "admin.systemPrompt": "System Prompt",
   "admin.sandbox": "Sandbox Pod",
   "admin.taskPolicy": "Task Policy",
@@ -1574,8 +1587,8 @@ export function StudioShell({
   }
 
   function updateGrokVideoLengthFrames(frames: number) {
-    const safeFrames = [49, 81, 161].includes(frames) ? frames : 81;
-    const seconds = safeFrames === 49 ? 3 : safeFrames === 161 ? 10 : 5;
+    const safeFrames = [49, 81].includes(frames) ? frames : 81;
+    const seconds = safeFrames === 49 ? 3 : 5;
     setGrokVideoLengthFrames(safeFrames);
     setSegments((items) => items.map((segment) => ({
       ...segment,
@@ -1590,6 +1603,19 @@ export function StudioShell({
         output_fps: 16
       }
     })));
+  }
+
+  function normalizeGenerationLengthConfig(config: Record<string, string | number>) {
+    return {
+      ...config,
+      frames: 81,
+      frame_count: 81,
+      length: 81,
+      duration: 5,
+      duration_seconds: 5,
+      fps: 16,
+      output_fps: 16
+    };
   }
 
   function applyWanResolutionForKeyframe(slotIndex: number, imageWidth?: number | null, imageHeight?: number | null) {
@@ -1695,10 +1721,11 @@ export function StudioShell({
           ...segment,
           config: {
             ...currentConfig,
-            ...defaultConfig
+            ...normalizeGenerationLengthConfig(defaultConfig)
           }
         };
       }));
+      setGrokVideoLengthFrames(81);
       setNotice("세그먼트 설정을 워크플로우 기본값으로 초기화했습니다.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "세그먼트 기본값을 불러오지 못했습니다.");
@@ -2000,8 +2027,12 @@ export function StudioShell({
         error={manualError}
         onGoTo={onNavigate}
       />
+    ) : route === "webtoonCuts" ? (
+      <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} />
     ) : route === "create.load" || route === "create.promptManagement" ? (
       <PromptManagementScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
+    ) : route === "create.batchJobs" ? (
+      <BatchJobScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.runpodRequests" ? (
       <RunpodRequestScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.prompt" || route === "create.confirm" ? (

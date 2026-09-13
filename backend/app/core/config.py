@@ -25,6 +25,8 @@ class Settings:
     storage_backend: str = "local"
     s3_bucket: str = ""
     s3_prefix: str = "dobedub-studio"
+    s3_endpoint_url: str = ""
+    s3_force_path_style: bool = False
     # B-04: 운영 배포 문서(ecs-express-deployment-runbook.md 외 3곳)가 모두
     # RUNPOD_DRY_RUN=0(실제 실행)을 운영 환경 필수값으로 명시하므로, 코드 기본값도
     # 실제 운영 기본값에 맞춘다. 로컬 개발은 .env.example의 명시적
@@ -43,9 +45,16 @@ class Settings:
     sandbox_pod_deploy_name: str = "dobedub_comfyUI_Sandbox"
     sandbox_pod_api_key: str = ""
     sandbox_pod_rest_url: str = "https://rest.runpod.io/v1"
-    sandbox_pod_graphql_url: str = "https://api.runpod.io/graphql"
-    sandbox_pod_graphql_api_key: str = ""
+    # REST v2 is read-only here: live runtime metrics and the GPU catalog, which v1 does not expose.
+    sandbox_pod_rest_v2_url: str = "https://rest.runpod.io/v2"
     sandbox_pod_timeout: int = 20
+    # Multi-pod / GPU fallback (spec 2026-09-11 §5.1). Empty fallback list
+    # keeps the legacy single-GPU create behaviour.
+    sandbox_pod_gpu_fallback_type_ids: tuple[str, ...] = ()
+    sandbox_pod_start_retry_count: int = 1
+    sandbox_pod_create_attempt_delay_seconds: float = 2.0
+    sandbox_pod_min_vram_gb: int = 24
+    sandbox_pod_stop_wait_seconds: int = 60
     prompt_llm_provider: str = "mock"
     prompt_llm_api_key: str = ""
     prompt_llm_endpoint_id: str = ""
@@ -99,6 +108,29 @@ def get_settings() -> Settings:
         sandbox_pod_gpu_count = max(1, int(os.environ.get("RUNPOD_SANDBOX_GPU_COUNT", "1")))
     except ValueError:
         sandbox_pod_gpu_count = 1
+    sandbox_pod_gpu_fallback_type_ids = tuple(
+        item.strip()
+        for item in os.environ.get("RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS", "").split(",")
+        if item.strip()
+    )
+    try:
+        sandbox_pod_start_retry_count = max(0, int(os.environ.get("RUNPOD_SANDBOX_START_RETRY_COUNT", "1")))
+    except ValueError:
+        sandbox_pod_start_retry_count = 1
+    try:
+        sandbox_pod_create_attempt_delay_seconds = max(
+            0.0, float(os.environ.get("RUNPOD_SANDBOX_CREATE_ATTEMPT_DELAY_SECONDS", "2"))
+        )
+    except ValueError:
+        sandbox_pod_create_attempt_delay_seconds = 2.0
+    try:
+        sandbox_pod_min_vram_gb = max(0, int(os.environ.get("RUNPOD_SANDBOX_MIN_VRAM_GB", "24")))
+    except ValueError:
+        sandbox_pod_min_vram_gb = 24
+    try:
+        sandbox_pod_stop_wait_seconds = max(0, int(os.environ.get("RUNPOD_SANDBOX_STOP_WAIT_SECONDS", "60")))
+    except ValueError:
+        sandbox_pod_stop_wait_seconds = 60
     try:
         prompt_llm_timeout = int(os.environ.get("PROMPT_LLM_TIMEOUT", "45"))
     except ValueError:
@@ -179,6 +211,8 @@ def get_settings() -> Settings:
         storage_backend=os.environ.get("STORAGE_BACKEND", "local"),
         s3_bucket=os.environ.get("S3_BUCKET", ""),
         s3_prefix=os.environ.get("S3_PREFIX", "dobedub-studio"),
+        s3_endpoint_url=os.environ.get("S3_ENDPOINT_URL", "").strip(),
+        s3_force_path_style=os.environ.get("S3_FORCE_PATH_STYLE", "0") in {"1", "true", "TRUE", "yes", "YES"},
         dry_run=dry_run,
         runpod_api_key=os.environ.get("RUNPOD_API_KEY", ""),
         runpod_endpoint_id=os.environ.get("RUNPOD_ENDPOINT_ID", ""),
@@ -193,9 +227,13 @@ def get_settings() -> Settings:
         sandbox_pod_deploy_name=os.environ.get("RUNPOD_SANDBOX_DEPLOY_NAME", "dobedub_comfyUI_Sandbox"),
         sandbox_pod_api_key=os.environ.get("RUNPOD_SANDBOX_POD_API_KEY", ""),
         sandbox_pod_rest_url=os.environ.get("RUNPOD_SANDBOX_POD_REST_URL", "https://rest.runpod.io/v1"),
-        sandbox_pod_graphql_url=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_URL", "https://api.runpod.io/graphql"),
-        sandbox_pod_graphql_api_key=os.environ.get("RUNPOD_SANDBOX_POD_GRAPHQL_API_KEY", ""),
+        sandbox_pod_rest_v2_url=os.environ.get("RUNPOD_SANDBOX_POD_REST_V2_URL", "https://rest.runpod.io/v2"),
         sandbox_pod_timeout=sandbox_pod_timeout,
+        sandbox_pod_gpu_fallback_type_ids=sandbox_pod_gpu_fallback_type_ids,
+        sandbox_pod_start_retry_count=sandbox_pod_start_retry_count,
+        sandbox_pod_create_attempt_delay_seconds=sandbox_pod_create_attempt_delay_seconds,
+        sandbox_pod_min_vram_gb=sandbox_pod_min_vram_gb,
+        sandbox_pod_stop_wait_seconds=sandbox_pod_stop_wait_seconds,
         prompt_llm_provider=os.environ.get("PROMPT_LLM_PROVIDER", "mock").strip().lower() or "mock",
         prompt_llm_api_key=os.environ.get("PROMPT_LLM_API_KEY", ""),
         prompt_llm_endpoint_id=os.environ.get("PROMPT_LLM_ENDPOINT_ID", ""),

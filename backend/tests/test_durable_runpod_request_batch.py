@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+from sqlalchemy import select
+
 from backend.app.core.security import create_access_token
 from backend.app.core.timezone_utils import now_seoul_naive
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
+from backend.app.services import studio_api_service
 from backend.app.services.runpod_request_batch_service import (
     create_request_batch,
     request_batch_queue,
@@ -17,22 +21,32 @@ from backend.app.services.runpod_request_batch_service import (
 )
 
 
-def _draft(asset_id: str, *, draft_id: str, positive: str, frames: int = 81) -> ImagePromptDraft:
+def _draft(
+    asset_id: str,
+    *,
+    draft_id: str,
+    positive: str,
+    frames: int = 81,
+    batch_job_id: str | None = None,
+    negative: str | None = "blur",
+    workflow_id: str = "1-images_81.json",
+) -> ImagePromptDraft:
     return ImagePromptDraft(
         id=draft_id,
         asset_id=asset_id,
-        workflow_id="1-images.json",
+        workflow_id=workflow_id,
         slot_index=1,
         status="READY",
         provider="grok",
         model="grok-test",
-        instruction_version="1-images.json@1",
+        instruction_version=f"{workflow_id}@1",
         positive_prompt=positive,
-        negative_prompt="blur",
+        negative_prompt=negative,
         requested_frames=frames,
         warnings_json=[],
         raw_json={},
         created_by="operator",
+        batch_job_id=batch_job_id,
     )
 
 
@@ -68,7 +82,7 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
         db_session,
         created_by="operator",
         items=[
-            {"promptDraftId": "draft_request_1", "workflowId": "Pickme_Workflow.json", "requestedFrames": 161},
+            {"promptDraftId": "draft_request_1", "workflowId": "wan22_default_81.json", "requestedFrames": 81, "resolutionTier": "hd"},
             {"promptDraftId": "draft_request_2", "requestedFrames": 49},
         ],
     )
@@ -84,9 +98,205 @@ def test_request_batch_keeps_immutable_per_image_prompt_and_length_snapshots(db_
     snapshot = request_batch_payload(db_session, batch["id"], created_by="operator")
     assert snapshot["requestedCount"] == 2
     assert [(item["workflowId"], item["positivePrompt"], item["requestedFrames"]) for item in snapshot["items"]] == [
-        ("Pickme_Workflow.json", "first prompt", 161),
-        ("1-images.json", "second prompt", 49),
+        ("wan22_default_81.json", "first prompt", 81),
+        ("1-images_81.json", "second prompt", 49),
     ]
+    assert [item["resolutionTier"] for item in snapshot["items"]] == ["hd", "sd"]
+
+    request_item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.prompt_draft_id == "draft_request_1")
+    )
+    assert request_item is not None
+    job_payload = studio_api_service.job_payload_from_request_item(request_item.id, user={"id": "operator"})
+    config = job_payload["segments"][0]["config"]
+    assert config["frames"] == 81
+    assert config["duration_seconds"] == 5
+    assert config["duration"] == 5
+    assert config["fps"] == 16
+    assert config["output_fps"] == 16
+    assert job_payload["resolutionTier"] == "hd"
+
+
+def test_request_batch_canonicalizes_legacy_draft_workflow_for_retries(db_session):
+    db_session.add_all([
+        _asset("asset_request_legacy_workflow"),
+        _draft(
+            "asset_request_legacy_workflow",
+            draft_id="draft_request_legacy_workflow",
+            positive="legacy prompt",
+            workflow_id="1-images_10s_chain.json",
+        ),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_legacy_workflow", "requestedFrames": 81, "resolutionTier": "hd"}],
+    )
+
+    assert batch["workflowId"] == "1-images_10s_chain_81.json"
+    assert batch["items"][0]["workflowId"] == "1-images_10s_chain_81.json"
+    item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.prompt_draft_id == "draft_request_legacy_workflow")
+    )
+    assert item is not None
+    assert item.workflow_id == "1-images_10s_chain_81.json"
+
+
+def test_request_item_job_payload_uses_metadata_dimensions_when_asset_columns_are_empty(db_session):
+    db_session.add(Asset(
+        id="asset_request_metadata_dimensions",
+        asset_type="input_image",
+        file_name="portrait.png",
+        mime_type="image/png",
+        size_bytes=1,
+        storage_backend="s3",
+        storage_key="prod/uploads/asset_request_metadata_dimensions/portrait.png",
+        public_url="s3://dobedub-studio/prod/uploads/asset_request_metadata_dimensions/portrait.png",
+        image_width=None,
+        image_height=None,
+        metadata_json={"imageWidth": 747, "imageHeight": 840},
+    ))
+    db_session.add(_draft(
+        "asset_request_metadata_dimensions",
+        draft_id="draft_request_metadata_dimensions",
+        positive="portrait prompt",
+        frames=81,
+    ))
+    db_session.commit()
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_metadata_dimensions"}],
+    )
+    request_item = db_session.scalar(
+        select(RunpodRequestItem).where(RunpodRequestItem.request_batch_id == batch["id"])
+    )
+
+    job_payload = studio_api_service.job_payload_from_request_item(request_item.id, user={"id": "operator"})
+
+    assert job_payload["segments"][0]["config"]["width"] == 747
+    assert job_payload["segments"][0]["config"]["height"] == 840
+    asset = db_session.get(Asset, "asset_request_metadata_dimensions")
+    db_session.refresh(asset)
+    assert asset.image_width == 747
+    assert asset.image_height == 840
+
+
+def test_request_batch_rejects_removed_ten_second_length(db_session):
+    db_session.add_all([
+        _asset("asset_request_unsupported_length"),
+        _draft("asset_request_unsupported_length", draft_id="draft_request_unsupported_length", positive="prompt", frames=81),
+    ])
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="영상 Length"):
+        create_request_batch(
+            db_session,
+            created_by="operator",
+            items=[{"promptDraftId": "draft_request_unsupported_length", "requestedFrames": 161}],
+        )
+
+
+def test_request_batch_rejects_hd_for_small_source_image(db_session):
+    small_asset = _asset("asset_request_small_hd")
+    small_asset.image_width = 640
+    small_asset.image_height = 640
+    db_session.add_all([
+        small_asset,
+        _draft("asset_request_small_hd", draft_id="draft_request_small_hd", positive="prompt", frames=81),
+    ])
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="HD"):
+        create_request_batch(
+            db_session,
+            created_by="operator",
+            items=[{"promptDraftId": "draft_request_small_hd", "requestedFrames": 81, "resolutionTier": "hd"}],
+        )
+
+
+def test_request_queue_exposes_metadata_dimensions_for_quality_limit(db_session):
+    db_session.add(Asset(
+        id="asset_request_queue_metadata_dimensions",
+        asset_type="input_image",
+        file_name="metadata-dimensions.png",
+        mime_type="image/png",
+        size_bytes=1,
+        storage_backend="s3",
+        storage_key="prod/uploads/asset_request_queue_metadata_dimensions/metadata-dimensions.png",
+        image_width=None,
+        image_height=None,
+        metadata_json={"imageWidth": 640, "imageHeight": 640},
+    ))
+    db_session.add(_draft(
+        "asset_request_queue_metadata_dimensions",
+        draft_id="draft_request_queue_metadata_dimensions",
+        positive="prompt",
+        frames=81,
+    ))
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+
+    assert queue["items"][0]["asset"]["imageWidth"] == 640
+    assert queue["items"][0]["asset"]["imageHeight"] == 640
+
+
+def test_request_batch_uses_workflow_default_negative_when_draft_is_blank(db_session):
+    db_session.add_all([
+        _asset("asset_request_default_negative"),
+        _draft("asset_request_default_negative", draft_id="draft_request_default_negative", positive="prompt", negative=None),
+    ])
+    db_session.commit()
+
+    batch = create_request_batch(
+        db_session,
+        created_by="operator",
+        items=[{"promptDraftId": "draft_request_default_negative"}],
+    )
+
+    snapshot = request_batch_payload(db_session, batch["id"], created_by="operator")
+    assert snapshot["items"][0]["negativePrompt"]
+    assert "photorealistic" in snapshot["items"][0]["negativePrompt"]
+
+
+def test_request_queue_excludes_folder_batch_work(db_session):
+    """Folder batch work is tracked in Task History, not RunPod request management."""
+    db_session.add_all([
+        _asset("asset_manual_request"),
+        _asset("asset_batch_ready"),
+        _asset("asset_legacy_batch_item"),
+        _draft("asset_manual_request", draft_id="draft_manual_request", positive="manual prompt"),
+        _draft("asset_batch_ready", draft_id="draft_batch_ready", positive="batch prompt", batch_job_id="batch_auto"),
+    ])
+    legacy_batch = RunpodRequestBatch(
+        id="rpb_legacy_batch_work",
+        workflow_id="1-images.json",
+        requested_count=1,
+        status="QUEUED",
+        created_by="operator",
+        batch_job_id="batch_auto",
+    )
+    db_session.add(legacy_batch)
+    db_session.add(RunpodRequestItem(
+        id="rpi_legacy_batch_work",
+        request_batch_id=legacy_batch.id,
+        sequence_no=1,
+        prompt_draft_id="draft_batch_ready",
+        asset_id="asset_legacy_batch_item",
+        workflow_id="1-images.json",
+        positive_prompt="legacy batch prompt",
+        requested_frames=81,
+        status="QUEUED",
+    ))
+    db_session.commit()
+
+    queue = request_batch_queue(db_session, created_by="operator", page=1, page_size=10)
+
+    assert queue["total"] == 1
+    assert [item["promptDraftId"] for item in queue["items"]] == ["draft_manual_request"]
 
 
 def test_request_batch_keeps_worker_owner_separate_from_submitter(db_session):

@@ -89,6 +89,8 @@ export type WorkflowItem = {
   keyframeCount?: number;
 };
 
+export type ResolutionTier = "sd" | "hd";
+
 export type AdminUser = {
   id: string;
   name: string;
@@ -182,10 +184,78 @@ export type AdminWorkflowsResponse = {
   metadataManifest?: Record<string, unknown>;
 };
 
+export type SandboxPodAttempt = {
+  stage: "stop" | "start" | "switch" | "create" | string;
+  ok: boolean;
+  at?: string;
+  podId?: string;
+  podName?: string | null;
+  gpuTypeId?: string;
+  error?: string;
+  skipped?: string;
+};
+
+export type SandboxPodHttpService = {
+  internalPort: number;
+  url: string;
+  label?: string;
+  authRequired?: boolean;
+};
+
+export type SandboxPodSummary = {
+  podId: string;
+  name?: string | null;
+  gpuTypeId?: string | null;
+  gpuLabel?: string;
+  gpuTier?: "primary" | "fallback" | "unknown";
+  vramGb?: number | null;
+  ramGb?: number | null;
+  pricePerHr?: number | null;
+  desiredStatus?: string;
+  runtimeStatus?: string;
+  lastStartedAt?: string | null;
+  lastStartedAtUtc?: string | null;
+  lastStartedAtKst?: string | null;
+  httpServices: SandboxPodHttpService[];
+};
+
+export type SandboxPodSettings = {
+  selectedPodId?: string | null;
+  autoSwitchOnStartFailure: boolean;
+  podPriority: string[];
+  replaceSameGpuPods?: boolean;
+};
+
+export type SandboxPodStartFailure = {
+  message: string;
+  attempts?: SandboxPodAttempt[];
+  retryAfterSeconds?: number;
+  runningPodIds?: string[];
+};
+
 export type SandboxPodStatus = {
   configured: boolean;
   message?: string;
-  podId?: string;
+  podId?: string | null;
+  // Multi-pod (spec 2026-09-11): every Pod on the Sandbox volume plus the
+  // selection / single-running invariant state. Legacy single-Pod fields
+  // above/below describe the active Pod.
+  pods?: SandboxPodSummary[];
+  selectedPodId?: string | null;
+  selectedPodMissing?: boolean;
+  activePodId?: string | null;
+  activePodName?: string | null;
+  conflict?: boolean;
+  conflictPodIds?: string[];
+  settings?: SandboxPodSettings;
+  attempts?: SandboxPodAttempt[];
+  switched?: boolean;
+  createdBy?: string | null;
+  gpuTypeId?: string | null;
+  gpuTier?: "primary" | "fallback" | "unknown";
+  stoppedPodId?: string;
+  terminatedPodId?: string;
+  terminatedPodName?: string | null;
   podName?: string | null;
   resolvedBy?: string;
   desiredStatus?: string;
@@ -201,11 +271,7 @@ export type SandboxPodStatus = {
   checkedAtUtc?: string | null;
   checkedAtKst?: string | null;
   locked?: boolean;
-  httpServices: Array<{
-    internalPort: number;
-    url: string;
-    label?: string;
-  }>;
+  httpServices: SandboxPodHttpService[];
   systemStatus?: {
     available: boolean;
     mode?: "live" | "configuration" | "unavailable";
@@ -304,11 +370,33 @@ export type UploadResponse = {
   downloadUrl: string;
 };
 
+export type S3UploadScope =
+  | { requestBatchId: string; requestItemId: string; jobId: string; promptBatchId?: string | null }
+  | { batchJobId: string; requestItemId: string; jobId: string; promptBatchId?: string | null };
+
+export type S3UploadPresignResponse = {
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  storageBackend: "s3";
+  storageKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+  expiresAt: string;
+};
+
+export type S3UploadCompleteResponse = UploadResponse & {
+  storageBackend: "s3";
+  storageKey: string;
+  publicUrl?: string | null;
+};
+
 export type GrokImagePromptDraftResponse = {
   draftId: string;
   assetId: string;
   workflowId: string;
   promptBatchId?: string | null;
+  batchJobId?: string | null;
   slotIndex: number;
   status: "READY" | "GENERATING" | "MANUAL_REQUIRED" | "FAILED" | string;
   provider: string;
@@ -355,6 +443,98 @@ export type PromptGenerationBatchResponse = {
   items: GrokImagePromptDraftResponse[];
 };
 
+export type BatchJobResponse = {
+  id: string;
+  workflowId: string;
+  status: string;
+  sourceDirName?: string | null;
+  sourceZipFileName?: string | null;
+  requestedFrames: number;
+  resolutionTier?: ResolutionTier;
+  durationSeconds: number;
+  totalImages: number;
+  promptCompletedCount: number;
+  promptFailedCount: number;
+  videoRequestedCount: number;
+  videoCompletedCount: number;
+  videoFailedCount: number;
+  videoCancelledCount: number;
+  promptWaiting: number;
+  promptGenerating: number;
+  runpodPendingSubmit: number;
+  runpodQueued: number;
+  runpodInProgress: number;
+  promotionFailedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  lastDownloadedAt?: string | null;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type BatchJobListResponse = {
+  items: BatchJobResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+  workers: Array<{ workerId: string; workerName: string }>;
+};
+
+export type BatchJobDetailItemResponse = {
+  id: string;
+  assetId?: string | null;
+  sourceFileName: string;
+  sourceRelativePath?: string | null;
+  sourceZipFileName?: string | null;
+  promptDraftId?: string | null;
+  taskId?: string | null;
+  promptStatus: string;
+  runpodStatus: string;
+  error?: string | null;
+  retryKind: "prompt" | "promotion" | "runpod" | "none" | string;
+  retryable: boolean;
+  selectable: boolean;
+  actionLabel: string;
+  retryCount: number;
+  nextRetryAt?: string | null;
+  promotionStatus?: string | null;
+  promotionAttempts?: number;
+  promotionLastError?: string | null;
+};
+
+export type BatchJobDetailResponse = {
+  batch: BatchJobResponse;
+  items: BatchJobDetailItemResponse[];
+  warnings: Array<Record<string, unknown>>;
+};
+
+export type BatchJobRetryResponse = {
+  batchJobId: string;
+  promptRetried: number;
+  promotionRetried: number;
+  runpodReworked: number;
+  skipped: Array<{ id: string; reason: string }>;
+  batch: BatchJobResponse;
+};
+
+export type RunpodHistoryReworkResponse = {
+  scope: string;
+  requested: number;
+  reworked: number;
+  taskIds: string[];
+  skipped: Array<{ id: string; reason: string }>;
+};
+
+export type BatchJobCandidateListResponse = {
+  items: BatchJobResponse[];
+};
+
+export type ActiveBatchJobListResponse = {
+  items: BatchJobResponse[];
+};
+
 export type PromptDraftListResponse = {
   items: GrokImagePromptDraftResponse[];
   workerStats: Array<{
@@ -381,6 +561,7 @@ export type RunpodRequestItemResponse = {
   positivePrompt: string;
   negativePrompt?: string | null;
   requestedFrames: number;
+  resolutionTier?: ResolutionTier;
   status: string;
   taskId?: string | null;
   runpodJobId?: string | null;
@@ -659,6 +840,8 @@ export type HistoryItem = {
   workflowName?: string;
   workflow?: string;
   promptDraftId?: string;
+  promptBatchId?: string | null;
+  batchJobId?: string | null;
   runpodResponse?: {
     filename?: string | null;
     delaySeconds?: number | string | null;
@@ -671,8 +854,11 @@ export type HistoryItem = {
   workerName?: string;
   user?: { id?: string; name?: string };
   status?: string;
+  statusLabel?: string;
+  lastDispatchError?: string | null;
   progress?: number;
   elapsedSeconds?: number;
+  durationSeconds?: number;
   prompt?: string;
   positivePrompt?: string;
   negativePrompt?: string;
@@ -697,11 +883,21 @@ export type HistoryItem = {
   inputImages?: InputImage[];
 };
 
+export type RunpodHistoryStats = {
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  pendingSubmit: number;
+  active: number;
+};
+
 export type HistoryResponse = {
   items: HistoryItem[];
   page: number;
   pageSize: number;
   total: number;
+  stats?: RunpodHistoryStats;
 };
 
 // A-04: `GET /api/admin/audit-logs` 응답. `beforeJson`/`afterJson`은 스키마가
@@ -793,6 +989,8 @@ export type JobCreateResponse = {
   taskId: string;
   runpodJobId: string;
   status: string;
+  statusLabel?: string;
+  lastDispatchError?: string | null;
   generationSeed?: number | string;
 };
 
@@ -816,6 +1014,7 @@ export type JobStatusResponse = {
   progress?: number;
   workerSummary?: string;
   statusLabel?: string;
+  lastDispatchError?: string | null;
   message?: string;
   outputUrl?: string;
   outputAssets?: OutputAsset[];
@@ -955,6 +1154,18 @@ function friendlyApiErrorMessage(rawMessage: string, response: Response, path: s
   return trimmed || `Request failed: ${response.status}`;
 }
 
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -967,22 +1178,63 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const rawMessage = await response.text();
   if (!response.ok) {
     let message = friendlyApiErrorMessage(rawMessage, response, path);
+    let detail: unknown = undefined;
     try {
       const parsed = JSON.parse(rawMessage) as { detail?: unknown; message?: unknown; error?: unknown };
-      const detail = parsed.detail ?? parsed.message ?? parsed.error;
+      detail = parsed.detail ?? parsed.message ?? parsed.error;
       if (typeof detail === "string" && detail.trim()) {
         message = detail.trim();
+      } else if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+        // Structured failures (e.g. Sandbox Pod 409/503) carry a message plus
+        // machine-readable fields; keep the object for callers that render it.
+        message = (detail as { message: string }).message;
       }
     } catch {
       // Ignore non-JSON bodies and fall back to a safe, readable message.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, detail);
   }
 
   if (!rawMessage.trim()) {
     return undefined as T;
   }
 
+  try {
+    return JSON.parse(rawMessage) as T;
+  } catch {
+    const message = friendlyApiErrorMessage(rawMessage, response, path);
+    throw new Error(message);
+  }
+}
+
+async function requestFormJson<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: sessionUserHeaders(path),
+    body: formData
+  });
+  const rawMessage = await response.text();
+  if (!response.ok) {
+    let message = friendlyApiErrorMessage(rawMessage, response, path);
+    let detail: unknown = undefined;
+    try {
+      const parsed = JSON.parse(rawMessage) as { detail?: unknown; message?: unknown; error?: unknown };
+      detail = parsed.detail ?? parsed.message ?? parsed.error;
+      if (typeof detail === "string" && detail.trim()) {
+        message = detail.trim();
+      } else if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+        // Structured failures (e.g. Sandbox Pod 409/503) carry a message plus
+        // machine-readable fields; keep the object for callers that render it.
+        message = (detail as { message: string }).message;
+      }
+    } catch {
+      // Ignore non-JSON bodies and fall back to a safe, readable message.
+    }
+    throw new ApiError(message, response.status, detail);
+  }
+  if (!rawMessage.trim()) {
+    return undefined as T;
+  }
   try {
     return JSON.parse(rawMessage) as T;
   } catch {
@@ -1037,25 +1289,39 @@ export const apiClient = {
   // 명시 전송하므로 이 기본값은 호출부가 실수로 pageSize를 생략했을 때의
   // 안전망일 뿐이다.
   history: (page = 1, pageSize = 20) => requestJson<HistoryResponse>(`/api/history?page=${page}&pageSize=${pageSize}`),
-  // Task History is intentionally split into two fixed 20-row contracts. Keeping
+  // Task History is intentionally split into two fixed 10-row contracts. Keeping
   // these endpoints separate prevents prompt-generation history from inheriting
   // RunPod pagination and sorting behavior.
-  promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string } = {}) => {
+  promptHistory: (params: { page?: number; generationStatus?: string; runpodStatus?: string; batchId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
+    query.set("pageSize", "10");
     if (params.generationStatus) query.set("generationStatus", params.generationStatus);
     if (params.runpodStatus) query.set("runpodStatus", params.runpodStatus);
+    if (params.batchId) query.set("batchId", params.batchId);
     return requestJson<PromptDraftListResponse>(`/api/history/prompts?${query.toString()}`);
   },
-  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; dateFrom?: string; dateTo?: string } = {}) => {
+  runpodHistory: (params: { page?: number; workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string; jobId?: string } = {}) => {
     const query = new URLSearchParams();
     query.set("page", String(params.page || 1));
+    query.set("pageSize", "10");
     if (params.workflowId) query.set("workflowId", params.workflowId);
     if (params.resultStatus) query.set("resultStatus", params.resultStatus);
     if (params.workerId) query.set("workerId", params.workerId);
-    if (params.dateFrom) query.set("dateFrom", params.dateFrom);
-    if (params.dateTo) query.set("dateTo", params.dateTo);
+    if (params.runDate) query.set("runDate", params.runDate);
+    if (params.batchId) query.set("batchId", params.batchId);
+    if (params.jobId) query.set("jobId", params.jobId);
     return requestJson<HistoryResponse>(`/api/history/runpod?${query.toString()}`);
+  },
+  runpodHistorySelection: (params: { workflowId?: string; resultStatus?: string; workerId?: string; runDate?: string; batchId?: string; jobId?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.workflowId) query.set("workflowId", params.workflowId);
+    if (params.resultStatus) query.set("resultStatus", params.resultStatus);
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.runDate) query.set("runDate", params.runDate);
+    if (params.batchId) query.set("batchId", params.batchId);
+    if (params.jobId) query.set("jobId", params.jobId);
+    return requestJson<{ taskIds: string[]; truncated: boolean }>(`/api/history/runpod/selection?${query.toString()}`);
   },
   // A-01/E-03(5a): type/workflowId는 선택 필터. 빈 문자열은 쿼리에서 생략한다.
   // 2026-08-11: Asset 관리 통합 - collectionId/uncategorized 필터 추가(사이드바
@@ -1185,10 +1451,6 @@ export const apiClient = {
     }),
   retryImagePromptDraft: (draftId: string) =>
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),
-  deleteImagePromptDraft: (draftId: string) =>
-    requestJson<{ draftId: string; assetId: string; deleted: boolean }>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
-      method: "DELETE"
-    }),
   grokInstructions: (workflowId: string) =>
     requestJson<GrokInstructionSetResponse>(`/api/admin/grok-instructions?workflowId=${encodeURIComponent(workflowId)}`),
   grokInstructionSourceWorkflows: () =>
@@ -1232,8 +1494,36 @@ export const apiClient = {
     requestJson<{ ok?: boolean; deleted?: boolean }>(`/api/history/${encodeURIComponent(taskId)}/delete`, {
       method: "POST"
     }),
+  reworkHistoryItem: (taskId: string) =>
+    requestJson<{ taskId: string; sourceTaskId: string; runpodJobId?: string; status: string; statusLabel?: string; lastDispatchError?: string | null; generationSeed?: number | string | null }>(
+      `/api/history/${encodeURIComponent(taskId)}/rework`,
+      { method: "POST" }
+    ),
+  reworkRunpodHistoryItems: (payload: {
+    scope: "selected" | "query";
+    taskIds?: string[];
+    batchId?: string;
+    workflowId?: string;
+    resultStatus?: string;
+    workerId?: string;
+    runDate?: string;
+  }) =>
+    requestJson<RunpodHistoryReworkResponse>("/api/history/runpod/rework", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   upload: (payload: { fileName: string; mimeType: string; dataUrl: string }) =>
     requestJson<UploadResponse>("/api/uploads", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  presignUpload: (payload: S3UploadScope & { fileName: string; mimeType: string }) =>
+    requestJson<S3UploadPresignResponse>("/api/uploads/presign", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  completeUpload: (payload: S3UploadScope & { assetId: string; fileName: string; mimeType: string; storageKey: string; sizeBytes: number }) =>
+    requestJson<S3UploadCompleteResponse>("/api/uploads/complete", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -1241,6 +1531,54 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
+  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
+    requestJson<BatchJobResponse>("/api/batch-jobs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  createBatchJobFromZip: (payload: { workflowId: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; file: File }) => {
+    const formData = new FormData();
+    formData.set("workflowId", payload.workflowId);
+    formData.set("requestedFrames", String(payload.requestedFrames || 81));
+    formData.set("resolutionTier", payload.resolutionTier || "sd");
+    formData.set("negativePrompt", payload.negativePrompt || "");
+    formData.set("file", payload.file);
+    return requestFormJson<BatchJobResponse>("/api/batch-jobs/zip", formData);
+  },
+  activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
+  batchJobDetail: (batchJobId: string) =>
+    requestJson<BatchJobDetailResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}`),
+  retryFailedBatchItems: (batchJobId: string) =>
+    requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/retry-failed`, {
+      method: "POST",
+      body: JSON.stringify({ stage: "all" })
+    }),
+  retrySelectedBatchItems: (batchJobId: string, payload: { draftIds?: string[]; taskIds?: string[] }) =>
+    requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/items/retry`, {
+      method: "POST",
+      body: JSON.stringify({ stage: "all", draftIds: payload.draftIds || [], taskIds: payload.taskIds || [] })
+    }),
+  batchJobCandidates: (params: { query: string; limit?: number }) => {
+    const query = new URLSearchParams();
+    query.set("query", params.query);
+    query.set("limit", String(params.limit || 10));
+    return requestJson<BatchJobCandidateListResponse>(`/api/batch-jobs/search?${query.toString()}`);
+  },
+  batchJobs: (params: { page?: number; dateFrom?: string; dateTo?: string; workerId?: string; status?: string } = {}) => {
+    const query = new URLSearchParams();
+    query.set("page", String(params.page || 1));
+    if (params.dateFrom) query.set("dateFrom", params.dateFrom);
+    if (params.dateTo) query.set("dateTo", params.dateTo);
+    if (params.workerId) query.set("workerId", params.workerId);
+    if (params.status) query.set("status", params.status);
+    return requestJson<BatchJobListResponse>(`/api/batch-jobs?${query.toString()}`);
+  },
+  batchJobZip: (batchJobId: string, taskIds?: string[]) => {
+    const query = new URLSearchParams();
+    (taskIds || []).forEach((taskId) => query.append("taskIds", taskId));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return requestBlob(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/download${suffix}`);
+  },
   createJob: (payload: unknown) =>
     requestJson<JobCreateResponse>("/api/jobs", {
       method: "POST",
@@ -1251,7 +1589,7 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ promptDraftId })
     }),
-  createRunpodRequestBatch: (payload: { workerId?: string; items: Array<{ promptDraftId: string; workflowId?: string; requestedFrames?: number }> }) =>
+  createRunpodRequestBatch: (payload: { workerId?: string; items: Array<{ promptDraftId: string; workflowId?: string; requestedFrames?: number; resolutionTier?: ResolutionTier }> }) =>
     requestJson<RunpodRequestBatchResponse>("/api/jobs/request-batches", {
       method: "POST",
       body: JSON.stringify(payload)
@@ -1335,8 +1673,22 @@ export const apiClient = {
       method: "POST"
     }),
   sandboxPodStatus: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod"),
-  startSandboxPod: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/start", { method: "POST" }),
-  stopSandboxPod: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/stop", { method: "POST" }),
+  selectSandboxPod: (podId: string) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/select", { method: "POST", body: JSON.stringify({ podId }) }),
+  startSandboxPod: (podId?: string | null) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/start", {
+      method: "POST",
+      body: JSON.stringify(podId ? { podId } : {})
+    }),
+  stopSandboxPod: (podId?: string | null) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/stop", {
+      method: "POST",
+      body: JSON.stringify(podId ? { podId } : {})
+    }),
+  terminateSandboxPod: (podId: string) =>
+    requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/terminate", { method: "POST", body: JSON.stringify({ podId }) }),
+  updateSandboxPodSettings: (payload: { autoSwitchOnStartFailure: boolean; podPriority: string[]; replaceSameGpuPods?: boolean }) =>
+    requestJson<SandboxPodSettings>("/api/admin/sandbox-pod/settings", { method: "PUT", body: JSON.stringify(payload) }),
   login: (payload: { id: string; password: string }) =>
     requestJson<AuthSession>("/api/auth/login", {
       method: "POST",

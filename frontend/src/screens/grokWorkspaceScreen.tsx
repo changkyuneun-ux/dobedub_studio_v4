@@ -49,7 +49,7 @@ export function GrokWorkspaceScreen({
   const missingPrompt = linkedSegments.some((segment) => !segment.positivePrompt.trim());
   const canRun = Boolean(selectedWorkflow) && missing === 0 && !promptPending && !missingPrompt && !running;
   const negativePrompt = segments[0]?.negativePrompt || "";
-  const frameSeconds = lengthFrames === 49 ? "약 3초" : lengthFrames === 161 ? "약 10초" : "약 5초 · 기본";
+  const frameSeconds = lengthFrames === 49 ? "약 3초" : "약 5초 · 기본";
 
   function dropFiles(index: number, event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
@@ -137,7 +137,7 @@ export function GrokWorkspaceScreen({
       <section className="v3-card">
         <div className="v3-card-header"><div className="v3-card-header-title">실행 설정</div><span className="v3-muted-text">필수값만 선택 · 나머지는 workflow 기본값</span></div>
         <div className="v3-grok-settings">
-          <div className="v3-grok-setting is-length"><span>VIDEO LENGTH</span><div>{[49, 81, 161].map((frames) => <button key={frames} type="button" className={frames === lengthFrames ? "is-selected" : ""} onClick={() => onLengthFramesChange(frames)}><b>{frames}</b><small>{frames === 49 ? "약 3초" : frames === 81 ? "약 5초 · 기본" : "약 10초"}</small></button>)}</div></div>
+          <div className="v3-grok-setting is-length"><span>VIDEO LENGTH</span><div>{[49, 81].map((frames) => <button key={frames} type="button" className={frames === lengthFrames ? "is-selected" : ""} onClick={() => onLengthFramesChange(frames)}><b>{frames}</b><small>{frames === 49 ? "약 3초" : "약 5초 · 기본"}</small></button>)}</div></div>
           <div className="v3-grok-setting"><span>WAN RESOLUTION</span><strong>{resolutionText(keyframes)}</strong><small>업로드 이미지에서 계산 · 자동 주입</small></div>
           <div className="v3-grok-setting"><span>FPS</span><strong>16</strong><small>고정</small></div>
           <div className="v3-grok-setting"><span>SEED</span><strong>자동</strong><small>실행 시 서버 생성</small></div>

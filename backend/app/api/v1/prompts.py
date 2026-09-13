@@ -42,7 +42,6 @@ from backend.app.services.grok_image_prompt_service import (
 from backend.app.services.grok_instruction_service import active_instruction_text, list_instruction_documents
 from backend.app.services.prompt_batch_service import (
     create_prompt_generation_batch,
-    delete_prompt_draft,
     list_active_prompt_generation_batches,
     latest_active_prompt_generation_batch,
     list_prompt_drafts,
@@ -444,7 +443,7 @@ def generate_image_draft(
         return _image_prompt_draft_payload(existing, cached=True)
 
     try:
-        asset, asset_path = studio_api_service.get_asset(asset_id)
+        asset, asset_bytes = studio_api_service.read_asset_bytes(asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Input image asset was not found.") from exc
     except FileNotFoundError as exc:
@@ -468,9 +467,9 @@ def generate_image_draft(
     try:
         result = generate_image_prompt(
             settings,
-            asset_path=asset_path,
+            asset_bytes=asset_bytes,
             mime_type=str(asset.get("mimeType") or ""),
-            file_name=str(asset.get("fileName") or asset_path.name),
+            file_name=str(asset.get("fileName") or asset_id),
             image_width=asset.get("imageWidth"),
             image_height=asset.get("imageHeight"),
             instruction_text=instruction_text,
@@ -613,19 +612,6 @@ def retry_image_prompt_draft(
         return retry_prompt_draft(db, draft_id, created_by=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.delete("/image-drafts/{draft_id}")
-def delete_image_prompt_draft(
-    draft_id: str,
-    current_user: CurrentUser = Depends(require_permission("prompts:build")),
-    db: Session = Depends(get_db),
-):
-    try:
-        return delete_prompt_draft(db, draft_id, created_by=current_user.id)
-    except ValueError as exc:
-        status_code = 404 if "not found" in str(exc).lower() else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/generate/{request_id}")

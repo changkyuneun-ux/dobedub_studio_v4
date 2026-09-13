@@ -1,34 +1,44 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
+import mimetypes
 import uuid
-from pathlib import Path
+from datetime import timedelta
+from pathlib import Path, PurePosixPath
 from threading import RLock
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.app.core.config import get_settings
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, timestamp_pair, utc_now
 from backend.app.repositories.factory import data_paths, history_repository, studio_repository
-from backend.app.services import job_service, output_service, workflow_patch_service
+from backend.app.services import job_service, output_service, workflow_patch_service, workflow_service
 from backend.app.db.models import Asset, ImagePromptDraft, RunpodRequestBatch, RunpodRequestItem, User, WorkflowTask
-from backend.app.services.asset_storage import encode_file_base64, safe_filename
+from backend.app.services.asset_storage import decode_data_url, encode_file_base64, image_dimensions, safe_filename
 from backend.app.services.runpod_client import connection_status as runpod_connection_status
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
+from backend.app.services.storage_backends import S3AssetStorage
 from backend.app.services.task_tracking_service import (
     active_task_ids,
     assets_total,
     list_assets,
     record_job_status,
+    pending_output_import_task_ids,
+    requeue_task_for_rework,
+    restore_existing_job_for_prompt_draft,
     restore_job_from_task,
     reusable_task_prompts,
     task_history_items,
+    task_history_stats,
     task_history_total,
     task_prompts,
     update_task_prompt_quality,
     update_task_prompt_review,
 )
 from backend.app.services.task_policy_service import assert_task_submission_allowed
+from backend.app.services.workflow_visibility import is_ten_second_chain_workflow
 from backend.app.services.runpod_dispatch_service import RunpodDispatchRuntime, dispatch_next_pending_submission
 from backend.app.services.runpod_request_batch_service import (
     attach_task_to_request_item,
@@ -44,6 +54,11 @@ from backend.app.db.session import SessionLocal
 
 JOBS: dict[str, dict] = {}
 JOB_LOCK = RLock()
+LOGGER = logging.getLogger(__name__)
+
+
+class OutputImportPending(RuntimeError):
+    """RunPod finished, but its S3 manifest is not readable yet."""
 
 
 def ensure_storage_dirs() -> None:
@@ -59,6 +74,74 @@ def ensure_storage_dirs() -> None:
 # 최근 200건이면 그 100건을 채우고도 남는다. 전체 이력을 읽던 이전 구현은
 # workflow_tasks 전 행을 한 요청에서 메모리로 올려 ECS 메모리 부족의 직접 원인이었다.
 PROMPT_OPTION_HISTORY_LIMIT = 200
+DEFAULT_REQUESTED_FRAMES = 81
+DEFAULT_WORKFLOW_FPS = 16
+
+
+def _workflow_default_fps(workflow_id: str) -> int:
+    fps = DEFAULT_WORKFLOW_FPS
+    try:
+        schema = workflow_service.get_workflow_schema(workflow_id)
+    except Exception:
+        return fps
+    for segment in schema.get("segments") or []:
+        for control in segment.get("configControls") or []:
+            if str(control.get("key")) not in {"output_fps", "fps"}:
+                continue
+            candidate = control.get("default")
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool) and candidate > 0:
+                return int(candidate)
+    return fps
+
+
+def _video_config_from_requested_frames(workflow_id: str, requested_frames: int | None) -> dict[str, int]:
+    try:
+        frames = int(requested_frames or DEFAULT_REQUESTED_FRAMES)
+    except (TypeError, ValueError):
+        frames = DEFAULT_REQUESTED_FRAMES
+    frames = max(1, frames)
+    fps = _workflow_default_fps(workflow_id)
+    chain_multiplier = 2 if is_ten_second_chain_workflow(workflow_id) else 1
+    duration_seconds = max(1, round((frames * chain_multiplier) / fps))
+    return {
+        "frames": frames,
+        "frame_count": frames,
+        "length": frames,
+        "duration": duration_seconds,
+        "duration_seconds": duration_seconds,
+        "fps": fps,
+        "output_fps": fps,
+    }
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _asset_dimensions(asset: Asset) -> tuple[int | None, int | None]:
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    width = _positive_int(asset.image_width) or _positive_int(metadata.get("imageWidth")) or _positive_int(metadata.get("image_width"))
+    height = _positive_int(asset.image_height) or _positive_int(metadata.get("imageHeight")) or _positive_int(metadata.get("image_height"))
+    return width, height
+
+
+def _apply_asset_dimensions(config: dict, asset: Asset, session=None) -> None:
+    width, height = _asset_dimensions(asset)
+    if not width or not height:
+        return
+    config["width"] = width
+    config["height"] = height
+    if session is not None and (_positive_int(asset.image_width) != width or _positive_int(asset.image_height) != height):
+        asset.image_width = width
+        asset.image_height = height
+        session.add(asset)
+        session.commit()
 
 
 def load_history(limit: int = PROMPT_OPTION_HISTORY_LIMIT) -> list[dict]:
@@ -77,6 +160,8 @@ def paginated_history(
     worker_id: str = "",
     date_from: str = "",
     date_to: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
 ) -> dict:
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 20)))
@@ -85,6 +170,8 @@ def paginated_history(
     worker_id = str(worker_id or "").strip()
     date_from = str(date_from or "").strip()
     date_to = str(date_to or "").strip()
+    batch_job_id = str(batch_job_id or "").strip()
+    job_id = str(job_id or "").strip()
     return {
         "items": task_history_items(
             page,
@@ -94,6 +181,8 @@ def paginated_history(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
         ),
         "page": page,
         "pageSize": page_size,
@@ -103,6 +192,8 @@ def paginated_history(
             worker_id=worker_id,
             date_from=date_from,
             date_to=date_to,
+            batch_job_id=batch_job_id,
+            job_id=job_id,
         ),
     }
 
@@ -113,19 +204,33 @@ def paginated_runpod_history(
     workflow_id: str = "",
     result_status: str = "",
     worker_id: str = "",
-    date_from: str = "",
-    date_to: str = "",
+    run_date: str = "",
+    batch_job_id: str = "",
+    job_id: str = "",
 ) -> dict:
-    """Return the dedicated RunPod-history contract with its fixed 20-row page."""
-    return paginated_history(
+    """Return the dedicated RunPod-history contract with its fixed 10-row page."""
+    run_date = str(run_date or "").strip()
+    response = paginated_history(
         page,
-        20,
+        10,
         workflow_id=workflow_id,
         result_status=result_status,
         worker_id=worker_id,
-        date_from=date_from,
-        date_to=date_to,
+        date_from=run_date,
+        date_to=run_date,
+        batch_job_id=batch_job_id,
+        job_id=job_id,
     )
+    response["stats"] = task_history_stats(
+        workflow_id=workflow_id,
+        result_status=result_status,
+        worker_id=worker_id,
+        date_from=run_date,
+        date_to=run_date,
+        batch_job_id=batch_job_id,
+        job_id=job_id,
+    )
+    return response
 
 
 def append_history(item: dict) -> list[dict]:
@@ -248,13 +353,368 @@ def prompt_options() -> dict:
 
 
 def create_upload(payload: dict) -> dict:
+    settings = get_settings()
+    if settings.storage_backend == "s3" and settings.persistence_backend == "db":
+        return _create_s3_upload_from_data_url(payload)
     with studio_repository() as repository:
         return repository.create_upload(payload)
+
+
+def _create_s3_upload_from_data_url(payload: dict) -> dict:
+    settings = get_settings()
+    file_name = safe_filename(str(payload.get("fileName") or "upload.bin"))
+    raw, decoded_mime_type = decode_data_url(payload.get("dataUrl", ""))
+    if len(raw) == 0:
+        raise ValueError("uploaded file is empty")
+    mime_type = str(payload.get("mimeType") or decoded_mime_type or "application/octet-stream").strip() or "application/octet-stream"
+    asset_id = f"asset_{uuid.uuid4().hex[:12]}"
+    stored = s3_asset_storage().save_bytes(
+        f"uploads/{asset_id}/{file_name}",
+        raw,
+        file_name=file_name,
+        mime_type=mime_type,
+    )
+    image_width, image_height = image_dimensions(raw, mime_type)
+    metadata = {
+        "createdBy": payload.get("createdBy") or None,
+        "downloadUrl": f"/api/files/{asset_id}",
+        **timestamp_fields(
+            "createdAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="s3-upload",
+        ),
+    }
+    if image_width and image_height:
+        metadata["imageWidth"] = image_width
+        metadata["imageHeight"] = image_height
+
+    session = SessionLocal()
+    try:
+        asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+        asset.asset_type = "input_image"
+        asset.file_name = file_name
+        asset.mime_type = stored.mime_type
+        asset.size_bytes = stored.size_bytes
+        asset.image_width = image_width
+        asset.image_height = image_height
+        asset.storage_backend = "s3"
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = metadata
+        session.add(asset)
+        session.commit()
+    finally:
+        session.close()
+
+    item = {
+        "assetId": asset_id,
+        "type": "input_image",
+        "fileName": file_name,
+        "mimeType": stored.mime_type,
+        "sizeBytes": stored.size_bytes,
+        "storageBackend": "s3",
+        "storageKey": stored.storage_key,
+        "publicUrl": stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}",
+        "downloadUrl": f"/api/files/{asset_id}",
+    }
+    if image_width and image_height:
+        item["imageWidth"] = image_width
+        item["imageHeight"] = image_height
+    return item
+
+
+def create_s3_input_asset_from_bytes(
+    *,
+    raw: bytes,
+    file_name: str,
+    mime_type: str,
+    batch_job_id: str,
+    request_item_id: str,
+    created_by: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3" or settings.persistence_backend != "db":
+        raise ValueError("STORAGE_BACKEND=s3 and PERSISTENCE_BACKEND=db are required for S3 input assets")
+    safe_name = safe_filename(file_name)
+    normalized_batch_id = str(batch_job_id or "").strip()
+    normalized_item_id = str(request_item_id or "").strip()
+    if not normalized_batch_id or not normalized_item_id:
+        raise ValueError("batchJobId and requestItemId are required for S3 input assets")
+    if not raw:
+        raise ValueError("uploaded file is empty")
+    asset_id = f"asset_{uuid.uuid4().hex[:12]}"
+    stored = s3_asset_storage().save_bytes(
+        f"batches/{normalized_batch_id}/items/{normalized_item_id}/inputs/{asset_id}/{safe_name}",
+        raw,
+        file_name=safe_name,
+        mime_type=mime_type,
+    )
+    image_width, image_height = image_dimensions(raw, stored.mime_type)
+    asset_metadata = {
+        "createdBy": created_by or None,
+        "batchJobId": normalized_batch_id,
+        "requestItemId": normalized_item_id,
+        "downloadUrl": f"/api/files/{asset_id}",
+        **(metadata or {}),
+        **timestamp_fields(
+            "createdAt",
+            utc_now(),
+            naive_timezone=UTC_TIMEZONE,
+            source_timezone="UTC",
+            source="s3-batch-input",
+        ),
+    }
+    if image_width and image_height:
+        asset_metadata["imageWidth"] = image_width
+        asset_metadata["imageHeight"] = image_height
+
+    session = SessionLocal()
+    try:
+        asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+        asset.asset_type = "input_image"
+        asset.file_name = safe_name
+        asset.mime_type = stored.mime_type
+        asset.size_bytes = stored.size_bytes
+        asset.image_width = image_width
+        asset.image_height = image_height
+        asset.storage_backend = "s3"
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = asset_metadata
+        session.add(asset)
+        session.commit()
+    finally:
+        session.close()
+
+    result = {
+        "assetId": asset_id,
+        "type": "input_image",
+        "fileName": safe_name,
+        "mimeType": stored.mime_type,
+        "sizeBytes": stored.size_bytes,
+        "storageBackend": "s3",
+        "storageKey": stored.storage_key,
+        "publicUrl": stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}",
+        "downloadUrl": f"/api/files/{asset_id}",
+    }
+    if image_width and image_height:
+        result["imageWidth"] = image_width
+        result["imageHeight"] = image_height
+    return result
+
+
+def s3_asset_storage() -> S3AssetStorage:
+    settings = get_settings()
+    return S3AssetStorage(
+        bucket=settings.s3_bucket,
+        prefix=settings.s3_prefix,
+        endpoint_url=settings.s3_endpoint_url,
+        force_path_style=settings.s3_force_path_style,
+    )
+
+
+def create_s3_upload_presign(payload: dict, *, created_by: str) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        raise ValueError("STORAGE_BACKEND=s3 is required for S3 upload presign")
+    file_name = safe_filename(str(payload.get("fileName") or "upload.bin"))
+    mime_type = str(payload.get("mimeType") or "application/octet-stream").strip() or "application/octet-stream"
+    asset_id = str(payload.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+    key = _s3_input_key(payload, asset_id=asset_id, file_name=file_name)
+    storage = s3_asset_storage()
+    storage_key = storage._key(key)
+    expires_in = 900
+    return {
+        "assetId": asset_id,
+        "fileName": file_name,
+        "mimeType": mime_type,
+        "storageBackend": "s3",
+        "storageKey": storage_key,
+        "uploadUrl": storage.presigned_put(key, content_type=mime_type, expires_in=expires_in),
+        "headers": {"Content-Type": mime_type},
+        "expiresAt": (utc_now() + timedelta(seconds=expires_in)).isoformat(),
+    }
+
+
+def complete_s3_upload(payload: dict, *, created_by: str) -> dict:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        raise ValueError("STORAGE_BACKEND=s3 is required for S3 upload completion")
+    asset_id = str(payload.get("assetId") or "").strip()
+    storage_key = str(payload.get("storageKey") or "").strip().lstrip("/")
+    if not asset_id or not storage_key:
+        raise ValueError("assetId and storageKey are required")
+    expected_key = s3_asset_storage()._key(_s3_input_key(payload, asset_id=asset_id, file_name=safe_filename(str(payload.get("fileName") or "upload.bin"))))
+    if storage_key != expected_key:
+        raise ValueError("storageKey does not match the request item scope")
+    stored = s3_asset_storage().stat(storage_key)
+    requested_size = payload.get("sizeBytes")
+    if requested_size is not None and int(requested_size) != stored.size_bytes:
+        raise ValueError("uploaded object size does not match sizeBytes")
+    file_name = safe_filename(str(payload.get("fileName") or stored.file_name))
+    mime_type = str(payload.get("mimeType") or stored.mime_type or "application/octet-stream")
+    metadata = _s3_scope_metadata(payload)
+    metadata["createdBy"] = created_by
+    image_width = _positive_int(payload.get("imageWidth")) or _positive_int(payload.get("image_width"))
+    image_height = _positive_int(payload.get("imageHeight")) or _positive_int(payload.get("image_height"))
+    if image_width and image_height:
+        metadata["imageWidth"] = image_width
+        metadata["imageHeight"] = image_height
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            asset = Asset(id=asset_id, created_at=utc_now().replace(tzinfo=None))
+            session.add(asset)
+        asset.asset_type = "input_image"
+        asset.file_name = file_name
+        asset.mime_type = mime_type
+        asset.size_bytes = stored.size_bytes
+        if image_width and image_height:
+            asset.image_width = image_width
+            asset.image_height = image_height
+        asset.storage_backend = "s3"
+        asset.storage_key = storage_key
+        asset.public_url = f"s3://{settings.s3_bucket}/{storage_key}"
+        asset.metadata_json = metadata
+        session.commit()
+        item = {
+            "assetId": asset.id,
+            "type": asset.asset_type,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageBackend": asset.storage_backend,
+            "storageKey": asset.storage_key,
+            "publicUrl": asset.public_url,
+            "downloadUrl": f"/api/files/{asset.id}",
+        }
+        if image_width and image_height:
+            item["imageWidth"] = image_width
+            item["imageHeight"] = image_height
+        return item
+    finally:
+        session.close()
+
+
+def s3_asset_download(asset_id: str, *, include_url: bool = True) -> dict | None:
+    if get_settings().persistence_backend != "db":
+        return None
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            raise KeyError(asset_id)
+        if asset.storage_backend != "s3":
+            return None
+        item = {
+            "assetId": asset.id,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageKey": asset.storage_key,
+            "metadata": asset.metadata_json or {},
+        }
+        if include_url:
+            item["url"] = s3_asset_storage().presigned_url(asset.storage_key, expires_in=900)
+        return item
+    finally:
+        session.close()
+
+
+def _s3_input_key(payload: dict, *, asset_id: str, file_name: str) -> str:
+    scope = _s3_scope_metadata(payload)
+    if not scope.get("requestBatchId") and not scope.get("batchJobId"):
+        raise ValueError("requestBatchId or batchJobId is required for S3 upload scope")
+    if not scope.get("requestItemId") or not scope.get("jobId"):
+        raise ValueError("requestItemId and jobId are required for S3 upload scope")
+    if scope.get("batchJobId"):
+        return (
+            f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/inputs/{asset_id}/{file_name}"
+        )
+    return (
+        f"request-batches/{scope['requestBatchId']}/items/{scope['requestItemId']}/"
+        f"jobs/{scope['jobId']}/inputs/{asset_id}/{file_name}"
+    )
+
+
+def _s3_scope_metadata(payload: dict) -> dict[str, str]:
+    request_batch_id = str(payload.get("requestBatchId") or "").strip()
+    batch_job_id = str(payload.get("batchJobId") or "").strip()
+    request_item_id = str(payload.get("requestItemId") or "").strip()
+    job_id = str(payload.get("jobId") or payload.get("taskId") or "").strip()
+    prompt_batch_id = str(payload.get("promptBatchId") or "").strip()
+    if not request_batch_id and not batch_job_id and not job_id:
+        raise ValueError("requestBatchId, batchJobId, or jobId is required for S3 upload scope")
+    if request_batch_id and (not request_item_id or not job_id):
+        raise ValueError("requestItemId and jobId are required for S3 upload scope")
+    if batch_job_id and not job_id:
+        raise ValueError("jobId is required for batch S3 upload scope")
+    if job_id and not request_item_id:
+        # Folder batches deliberately do not create RunPod request items. Their
+        # task id already makes the S3 path unique, so use a storage-only item
+        # token without adding a fake request_item_id to the DB relationship.
+        request_item_id = "item_0001"
+    metadata = {
+        "requestItemId": request_item_id,
+        "jobId": job_id,
+    }
+    if request_batch_id:
+        metadata["requestBatchId"] = request_batch_id
+    if batch_job_id:
+        metadata["batchJobId"] = batch_job_id
+    if prompt_batch_id:
+        metadata["promptBatchId"] = prompt_batch_id
+    return metadata
 
 
 def get_asset(asset_id: str) -> tuple[dict, Path]:
     with studio_repository() as repository:
         return repository.get_asset(asset_id)
+
+
+def read_asset_bytes(asset_id: str) -> tuple[dict, bytes]:
+    try:
+        asset = asset_metadata(asset_id)
+    except KeyError:
+        asset = {}
+    if asset.get("storageBackend") == "s3" and asset.get("storageKey"):
+        with s3_asset_storage().open_read(str(asset["storageKey"])) as stream:
+            return asset, stream.read()
+
+    asset, path = get_asset(asset_id)
+    return asset, path.read_bytes()
+
+
+def asset_metadata(asset_id: str) -> dict:
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            raise KeyError(asset_id)
+        metadata = dict(asset.metadata_json or {})
+        item = {
+            "assetId": asset.id,
+            "type": asset.asset_type,
+            "fileName": asset.file_name,
+            "mimeType": asset.mime_type,
+            "sizeBytes": asset.size_bytes,
+            "storageBackend": asset.storage_backend,
+            "storageKey": asset.storage_key,
+            "publicUrl": asset.public_url,
+            **metadata,
+        }
+        width, height = _asset_dimensions(asset)
+        if width and height:
+            item["imageWidth"] = width
+            item["imageHeight"] = height
+        return item
+    finally:
+        session.close()
 
 
 def register_asset(file_path: Path, asset_type: str, mime_type: str | None = None, file_name: str | None = None) -> dict:
@@ -268,11 +728,66 @@ def hydrate_input_images(item: dict) -> list[dict]:
 
 
 def asset_to_runpod_image(asset_id: str, fallback_name: str | None = None) -> dict:
+    if get_settings().storage_backend == "s3":
+        try:
+            asset = asset_metadata(asset_id)
+        except KeyError:
+            asset = {}
+        if asset.get("storageBackend") == "s3" and asset.get("storageKey"):
+            settings = get_settings()
+            return {
+                "assetId": asset_id,
+                "name": safe_filename(str(asset.get("fileName") or fallback_name or asset_id)),
+                "s3Uri": f"s3://{settings.s3_bucket}/{asset['storageKey']}",
+            }
     asset, path = get_asset(asset_id)
     return {
+        "assetId": asset_id,
         "name": safe_filename(asset.get("fileName") or fallback_name or path.name),
         "path": str(path),
     }
+
+
+def ensure_s3_input_asset_scoped(asset_id: str, payload: dict, fallback_name: str | None = None) -> None:
+    """Move a RunPod-bound S3 input asset to the final batch/job input prefix.
+
+    Legacy UI upload flows may stage images under ``uploads/`` before a task id
+    exists.  At dispatch time the payload has the full batch/item/job scope, so
+    copy the object in S3 and update the asset row before building
+    ``images[].s3Uri``.
+    """
+    settings = get_settings()
+    if settings.storage_backend != "s3" or settings.persistence_backend != "db":
+        return
+    if not str(payload.get("taskId") or payload.get("jobId") or "").strip():
+        return
+    if not str(payload.get("requestBatchId") or payload.get("batchJobId") or "").strip():
+        return
+
+    session = SessionLocal()
+    try:
+        asset = session.get(Asset, asset_id)
+        if asset is None or asset.storage_backend != "s3" or not asset.storage_key:
+            return
+        file_name = safe_filename(str(asset.file_name or fallback_name or asset_id))
+        storage = s3_asset_storage()
+        target_key = storage._key(_s3_input_key(payload, asset_id=asset_id, file_name=file_name))
+        source_key = str(asset.storage_key or "").strip().lstrip("/")
+        if source_key == target_key:
+            return
+        stored = storage.copy_stored_object(source_key, target_key)
+        if _is_s3_input_staging_key(source_key):
+            storage.delete(source_key)
+        metadata = dict(asset.metadata_json or {})
+        metadata.setdefault("migratedFromStorageBackend", "s3")
+        metadata.setdefault("migratedFromStorageKey", source_key)
+        metadata.update(_s3_scope_metadata(payload))
+        asset.storage_key = stored.storage_key
+        asset.public_url = stored.public_url or f"s3://{settings.s3_bucket}/{stored.storage_key}"
+        asset.metadata_json = metadata
+        session.commit()
+    finally:
+        session.close()
 
 
 def build_runpod_images(payload: dict) -> list[dict]:
@@ -285,18 +800,49 @@ def build_runpod_images(payload: dict) -> list[dict]:
         upload_id = keyframe.get("uploadId")
         if not upload_id:
             continue
+        ensure_s3_input_asset_scoped(str(upload_id), payload, keyframe.get("fileName"))
         images.append(asset_to_runpod_image(upload_id, keyframe.get("fileName")))
     return images
 
 
-def build_runpod_payload(workflow: dict, images: list[dict]) -> dict:
+def build_runpod_payload(workflow: dict, images: list[dict], job_scope: dict | None = None) -> dict:
     input_body = {"workflow": workflow}
     if images:
-        input_body["images"] = [
-            {"name": image["name"], "image": encode_file_base64(Path(image["path"]))}
-            for image in images
-        ]
+        input_body["images"] = [_runpod_image_payload(image) for image in images]
+    output_destination = _runpod_s3_output_destination(job_scope or {})
+    if get_settings().storage_backend == "s3" and not output_destination:
+        raise ValueError("S3 output destination is required before submitting a RunPod job")
+    if output_destination:
+        input_body["output"] = output_destination
     return {"input": input_body}
+
+
+def _runpod_image_payload(image: dict) -> dict:
+    if image.get("s3Uri"):
+        return {
+            "assetId": image.get("assetId"),
+            "name": image["name"],
+            "s3Uri": image["s3Uri"],
+        }
+    return {"name": image["name"], "image": encode_file_base64(Path(image["path"]))}
+
+
+def _runpod_s3_output_destination(job_scope: dict) -> dict | None:
+    settings = get_settings()
+    if settings.storage_backend != "s3":
+        return None
+    try:
+        output_prefix = _s3_job_storage_key(job_scope, "outputs")
+        manifest_key = _s3_job_storage_key(job_scope, "manifests/runpod-result.json")
+    except ValueError:
+        return None
+    return {
+        "mode": "s3",
+        "bucket": settings.s3_bucket,
+        "prefix": output_prefix,
+        "manifestKey": manifest_key,
+        "appJobId": str(job_scope.get("taskId") or job_scope.get("jobId") or "").strip(),
+    }
 
 
 def existing_save_video_outputs(workflow: dict, workflow_id: str, segments: list[dict]) -> dict:
@@ -336,11 +882,201 @@ def runpod_connection() -> dict:
 
 
 def save_runpod_outputs(result: dict, job: dict) -> dict:
+    result = _result_with_s3_manifest_outputs(result, job)
+    result = _result_with_inline_outputs_stored_to_s3(result, job)
     return output_service.save_runpod_outputs(result, job, data_paths()["outputs"], register_asset)
 
 
+def _result_with_inline_outputs_stored_to_s3(result: dict, job: dict) -> dict:
+    if get_settings().storage_backend != "s3":
+        return result
+    output = (result or {}).get("output") or {}
+    output_items: list[tuple[str, dict]] = []
+    for kind in ("videos", "images", "gifs"):
+        for item in output.get(kind) or []:
+            if isinstance(item, dict):
+                output_items.append((kind, item))
+    if not output_items:
+        return result
+
+    converted = {"videos": [], "images": [], "gifs": []}
+    total = len(output_items)
+    changed = False
+    for index, (kind, item) in enumerate(output_items, start=1):
+        if item.get("type") == "s3_object":
+            converted[kind].append(item)
+            continue
+        data = item.get("data")
+        if not data:
+            converted[kind].append(item)
+            continue
+        metadata = output_service.infer_output_metadata(item, index, total, job)
+        file_name = output_service.output_file_name(kind, item, index, job, metadata, total)
+        raw = base64.b64decode(data)
+        asset_id = str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
+        mime_type = str(item.get("mimeType") or mimetypes.guess_type(file_name)[0] or "application/octet-stream")
+        storage_key = _s3_job_storage_key({**(job.get("payload") or {}), "taskId": job.get("taskId")}, f"outputs/{asset_id}/{file_name}")
+        stored = s3_asset_storage().save_bytes(
+            storage_key.removeprefix(f"{get_settings().s3_prefix.strip('/')}/") if get_settings().s3_prefix.strip("/") and storage_key.startswith(f"{get_settings().s3_prefix.strip('/')}/") else storage_key,
+            raw,
+            file_name=file_name,
+            mime_type=mime_type,
+        )
+        converted[_manifest_output_kind({"filename": file_name, "mimeType": mime_type})].append({
+            "type": "s3_object",
+            "assetId": asset_id,
+            "bucket": stored.bucket or get_settings().s3_bucket,
+            "key": stored.storage_key,
+            "filename": file_name,
+            "mimeType": stored.mime_type,
+            "sizeBytes": stored.size_bytes,
+            "node_id": item.get("node_id") or item.get("nodeId") or item.get("node"),
+        })
+        changed = True
+
+    if not changed:
+        return result
+    enriched = dict(result)
+    enriched["output"] = converted
+    return enriched
+
+
+def _result_with_s3_manifest_outputs(result: dict, job: dict) -> dict:
+    if get_settings().storage_backend != "s3" or _has_inline_runpod_outputs(result):
+        return result
+    try:
+        manifest_key = _s3_job_storage_key({**(job.get("payload") or {}), "taskId": job.get("taskId")}, "manifests/runpod-result.json")
+        storage = s3_asset_storage()
+        with storage.open_read(manifest_key) as stream:
+            raw = stream.read()
+    except Exception as exc:
+        raise OutputImportPending("RunPod output manifest is not available yet") from exc
+    manifest = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    output = {"videos": [], "images": [], "gifs": []}
+    items = [item for item in manifest.get("outputs") or [] if isinstance(item, dict)]
+    total = len(items)
+    for index, item in enumerate(items, start=1):
+        normalized = _manifest_output_item(item)
+        if not normalized:
+            continue
+        kind = _manifest_output_kind(normalized)
+        metadata = output_service.infer_output_metadata(normalized, index, total, job)
+        desired_file_name = output_service.output_file_name(kind, normalized, index, job, metadata, total)
+        normalized = _manifest_output_with_source_filename(storage, normalized, desired_file_name)
+        output[_manifest_output_kind(normalized)].append(normalized)
+    if not any(output.values()):
+        raise OutputImportPending("RunPod output manifest contains no output assets")
+    enriched = dict(result)
+    enriched["output"] = output
+    return enriched
+
+
+def _has_inline_runpod_outputs(result: dict) -> bool:
+    output = (result or {}).get("output") or {}
+    return any(output.get(kind) for kind in ("videos", "images", "gifs"))
+
+
+def _manifest_output_item(item: dict) -> dict | None:
+    storage_key = str(item.get("key") or item.get("storageKey") or "").strip().lstrip("/")
+    if not storage_key:
+        return None
+    mime_type = str(item.get("mimeType") or item.get("contentType") or "application/octet-stream")
+    file_name = safe_filename(str(item.get("filename") or item.get("fileName") or Path(storage_key).name))
+    return {
+        "type": "s3_object",
+        "assetId": str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}"),
+        "bucket": str(item.get("bucket") or get_settings().s3_bucket),
+        "key": storage_key,
+        "filename": file_name,
+        "mimeType": mime_type,
+        "sizeBytes": int(item.get("sizeBytes") or 0),
+        "node_id": item.get("node_id") or item.get("nodeId") or item.get("node"),
+    }
+
+
+def _manifest_output_with_source_filename(storage: S3AssetStorage, item: dict, file_name: str) -> dict:
+    safe_name = PurePosixPath(str(file_name or "")).name
+    if not safe_name:
+        return item
+    storage_key = str(item.get("key") or "").strip().lstrip("/")
+    if not storage_key:
+        return item
+    target_key = str(PurePosixPath(storage_key).with_name(safe_name))
+    if target_key == storage_key and item.get("filename") == safe_name:
+        return item
+    try:
+        stored = storage.copy_stored_object(storage_key, target_key)
+    except Exception as copy_exc:
+        try:
+            stored = storage.stat(target_key)
+        except Exception as stat_exc:
+            raise copy_exc from stat_exc
+    else:
+        storage.delete(storage_key)
+    return {
+        **item,
+        "key": stored.storage_key,
+        "filename": safe_name,
+        "mimeType": item.get("mimeType") or stored.mime_type,
+        "sizeBytes": int(item.get("sizeBytes") or stored.size_bytes or 0),
+    }
+
+
+def _manifest_output_kind(item: dict) -> str:
+    mime_type = str(item.get("mimeType") or "")
+    suffix = Path(str(item.get("filename") or item.get("key") or "")).suffix.lower()
+    if mime_type.startswith("video/") or suffix in output_service.VIDEO_SUFFIXES:
+        return "videos"
+    if mime_type.startswith("image/gif") or suffix == ".gif":
+        return "gifs"
+    return "images"
+
+
+def _s3_job_storage_key(job_scope: dict, leaf: str) -> str:
+    scope = _s3_scope_metadata(job_scope)
+    if scope.get("batchJobId"):
+        suffix = (
+            f"batches/{scope['batchJobId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/{leaf.strip('/')}"
+        )
+    elif scope.get("requestBatchId"):
+        suffix = (
+            f"request-batches/{scope['requestBatchId']}/items/{scope['requestItemId']}/"
+            f"jobs/{scope['jobId']}/{leaf.strip('/')}"
+        )
+    else:
+        raise ValueError("batchJobId or requestBatchId is required for S3 job storage")
+    prefix = get_settings().s3_prefix.strip("/")
+    return f"{prefix}/{suffix}" if prefix else suffix
+
+
+def _is_s3_input_staging_key(storage_key: str) -> bool:
+    key = _strip_configured_s3_prefix(str(storage_key or "").strip().lstrip("/"))
+    if key.startswith("uploads/"):
+        return True
+    return key.startswith("batches/") and "/items/" in key and "/inputs/" in key and "/jobs/" not in key
+
+
+def _strip_configured_s3_prefix(storage_key: str) -> str:
+    prefix = get_settings().s3_prefix.strip("/")
+    if prefix and storage_key.startswith(f"{prefix}/"):
+        return storage_key[len(prefix) + 1:]
+    return storage_key
+
+
 def build_wan_node_config_snapshot(workflow_id: str, segments_payload: list[dict]) -> dict:
-    return workflow_patch_service.build_wan_node_config_snapshot(workflow_id, segments_payload, get_settings().workflows_dir)
+    resolution_tier = "sd"
+    for segment in segments_payload or []:
+        config = segment.get("config") if isinstance(segment, dict) else {}
+        if isinstance(config, dict) and config.get("resolutionTier"):
+            resolution_tier = str(config.get("resolutionTier"))
+            break
+    return workflow_patch_service.build_wan_node_config_snapshot(
+        workflow_id,
+        segments_payload,
+        get_settings().workflows_dir,
+        resolution_tier,
+    )
 
 
 def job_runtime() -> job_service.JobRuntime:
@@ -377,7 +1113,29 @@ def create_job(payload: dict, *, user: dict[str, object]) -> dict:
             "role": str(user.get("role") or ""),
             "permissions": list(user.get("permissions") or []),
         }
+        existing_job = restore_existing_job_for_prompt_draft(
+            str(safe_payload.get("promptDraftId") or ""),
+            batch_job_id=str(safe_payload.get("batchJobId") or "").strip() or None,
+        )
+        if existing_job:
+            JOBS[existing_job["taskId"]] = existing_job
+            return existing_job
         return job_service.queue_job(job_runtime(), safe_payload)
+
+
+def rework_history_item(task_id: str, *, user: dict[str, object]) -> dict:
+    user_id = str(user.get("id") or "").strip()
+    permissions = {str(permission) for permission in user.get("permissions") or []}
+    can_manage = "admin:*" in permissions or "jobs:manage" in permissions
+    job = requeue_task_for_rework(task_id, actor_id=user_id, can_manage=can_manage)
+    with JOB_LOCK:
+        JOBS[task_id] = job
+    return job
+
+
+def regenerate_history_item(task_id: str, *, user: dict[str, object]) -> dict:
+    """Backward-compatible alias for the renamed RunPod rework operation."""
+    return rework_history_item(task_id, user=user)
 
 
 def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> dict:
@@ -401,15 +1159,17 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
         asset = session.get(Asset, draft.asset_id)
         if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
-        frames = max(1, int(draft.requested_frames or 81))
         # Draft-based jobs are submitted outside the legacy workspace form.
         # Carry the persisted source dimensions so the Wan node receives the
         # exact uploaded image size, just as it does for a direct submission.
-        config = {"frames": frames, "frame_count": frames, "length": frames, "fps": 16}
-        if asset.image_width and int(asset.image_width) > 0:
-            config["width"] = int(asset.image_width)
-        if asset.image_height and int(asset.image_height) > 0:
-            config["height"] = int(asset.image_height)
+        config = _video_config_from_requested_frames(draft.workflow_id, draft.requested_frames)
+        _apply_asset_dimensions(config, asset, session)
+        raw_metadata = draft.raw_json if isinstance(draft.raw_json, dict) else {}
+        request_item_id = str(raw_metadata.get("requestItemId") or "").strip()
+        if not request_item_id and draft.batch_job_id:
+            request_item_id = f"item_{int(draft.slot_index or 1):04d}"
+        source_relative_path = str(raw_metadata.get("sourceRelativePath") or "").strip()
+        source_zip_file_name = str(raw_metadata.get("sourceZipFileName") or "").strip()
         return {
             "workflowId": draft.workflow_id,
             # The job history must show the registered workflow label rather
@@ -417,6 +1177,10 @@ def job_payload_from_prompt_draft(draft_id: str, *, user: dict[str, object]) -> 
             # stable display name for registered workflows.
             "workflowName": Path(draft.workflow_id).stem,
             "promptDraftId": draft.id,
+            "requestItemId": request_item_id or None,
+            "sourceRelativePath": source_relative_path or None,
+            "sourceZipFileName": source_zip_file_name or None,
+            "resolutionTier": "sd",
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
                 "index": 1,
@@ -449,17 +1213,16 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
         asset = session.get(Asset, item.asset_id)
         if asset is None:
             raise ValueError("입력 이미지 자산을 찾을 수 없습니다.")
-        config = {"frames": item.requested_frames, "frame_count": item.requested_frames, "length": item.requested_frames, "fps": 16}
-        if asset.image_width and int(asset.image_width) > 0:
-            config["width"] = int(asset.image_width)
-        if asset.image_height and int(asset.image_height) > 0:
-            config["height"] = int(asset.image_height)
+        config = _video_config_from_requested_frames(item.workflow_id, item.requested_frames)
+        _apply_asset_dimensions(config, asset, session)
         return {
             "workflowId": item.workflow_id,
             "workflowName": Path(item.workflow_id).stem,
             "promptDraftId": item.prompt_draft_id,
             "requestBatchId": item.request_batch_id,
             "requestItemId": item.id,
+            "batchJobId": batch_owner.batch_job_id,
+            "resolutionTier": workflow_patch_service.normalize_resolution_tier(getattr(item, "resolution_tier", None)),
             "keyframes": [{"index": 1, "uploadId": asset.id, "fileName": asset.file_name}],
             "segments": [{
                 "index": 1,
@@ -472,7 +1235,9 @@ def job_payload_from_request_item(item_id: str, *, user: dict[str, object], work
         session.close()
 
 
-def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> dict:
+def create_runpod_request_batch(
+    payload: dict, *, user: dict[str, object], batch_job_id: str | None = None
+) -> dict:
     """Create durable local tasks for selected drafts without calling RunPod yet."""
     user_id = str(user.get("id") or "").strip()
     if not user_id:
@@ -497,11 +1262,30 @@ def create_runpod_request_batch(payload: dict, *, user: dict[str, object]) -> di
                 "role": worker.role,
                 "permissions": worker.permissions_json or [],
             }
-            batch = create_request_batch(session, items=raw_items, created_by=worker_id, submitted_by=user_id)
+            batch = create_request_batch(
+                session,
+                items=raw_items,
+                created_by=worker_id,
+                submitted_by=user_id,
+                # Only the batch pipeline passes this as an explicit keyword
+                # argument; it is never read out of the request body, so an
+                # HTTP caller has no way to attach a task to someone else's
+                # batch job. The interactive path leaves it unset, so
+                # non-batch requests stay unlabelled.
+                batch_job_id=str(batch_job_id or "").strip() or None,
+            )
         finally:
             session.close()
 
-        for item in batch["items"]:
+        if "createdItemIds" in batch:
+            created_item_ids = {str(item_id) for item_id in batch.get("createdItemIds", [])}
+            materialization_items = [
+                item for item in batch["items"]
+                if str(item.get("id") or "") in created_item_ids
+            ]
+        else:
+            materialization_items = list(batch["items"])
+        for item in materialization_items:
             try:
                 job_payload = job_payload_from_request_item(item["id"], user=user, worker_id=worker_id)
                 job = create_job(job_payload, user=worker_user)
@@ -649,12 +1433,19 @@ def monitor_active_jobs() -> dict:
     because the status API had a transient error.
     """
     dispatch = dispatch_next_queued_job()
-    task_ids = active_task_ids()
+    task_ids = list(dict.fromkeys([*active_task_ids(), *pending_output_import_task_ids()]))
     failures: list[str] = []
     for task_id in task_ids:
         try:
             job_status(task_id)
-        except Exception:
+        except Exception as exc:
+            with JOB_LOCK:
+                job = JOBS.get(task_id)
+                if job_service.is_runpod_job_not_found_error(exc) and job:
+                    job_service.mark_runpod_job_not_found(job_runtime(), job, str(exc))
+                    LOGGER.warning("RunPod job no longer exists; marked task failed: %s", task_id)
+                    continue
+            LOGGER.exception("RunPod monitor status refresh failed: task=%s", task_id)
             failures.append(task_id)
     return {"checked": len(task_ids), "failures": failures, "dispatch": dispatch}
 

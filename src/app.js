@@ -1,10 +1,9 @@
 const fallbackWorkflows = [
   { id: "1-images.json", name: "1-images", mode: "single", keyframeCount: 1, segmentCount: 1 },
-  { id: "2-images.json", name: "2-images", mode: "dual", keyframeCount: 2, segmentCount: 1 },
-  { id: "3-images.json", name: "3-images", mode: "multi_segment", keyframeCount: 3, segmentCount: 2 },
-  { id: "4-images.json", name: "4-images", mode: "multi_segment", keyframeCount: 4, segmentCount: 3 },
-  { id: "5-images.json", name: "5-images", mode: "multi_segment", keyframeCount: 5, segmentCount: 4 },
-  { id: "6-images.json", name: "6-images", mode: "multi_segment", keyframeCount: 6, segmentCount: 5 },
+  { id: "Blowbang1.json", name: "Blowbang1", mode: "single", keyframeCount: 1, segmentCount: 1 },
+  { id: "Pickme_Workflow.json", name: "Pickme_Workflow", mode: "single", keyframeCount: 1, segmentCount: 1 },
+  { id: "video_minimax_h3_r2v.json", name: "video_minimax_h3_r2v", mode: "single", keyframeCount: 1, segmentCount: 1 },
+  { id: "video_wan2_2_14B_flf2v_2-images-1.json", name: "video_wan2_2_14B_flf2v_2-images-1", mode: "dual", keyframeCount: 2, segmentCount: 1 },
 ];
 
 const defaultNegativePrompt = "photorealistic, realistic skin texture, 3D render, style shift, art style change, face/hand/foot distortion, background movement";
@@ -1752,10 +1751,10 @@ async function loadHistory() {
           prompt: "",
           config: "Wan node: FPS 16, Steps 4",
           status: "Completed",
-          workflow: "5-images.json",
+          workflow: "1-images.json",
           seed: 4920381920,
           fps: 24,
-          segments: 4,
+          segments: 1,
         }),
       ];
     }

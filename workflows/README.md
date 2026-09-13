@@ -5,11 +5,10 @@ This folder contains the active ComfyUI Export(API) workflows used by DOBEDUB ST
 The current active set is:
 
 - `1-images.json`
-- `2-images.json`
-- `3-images.json`
-- `4-images.json`
-- `5-images.json`
-- `6-images.json`
+- `Blowbang1.json`
+- `Pickme_Workflow.json`
+- `video_minimax_h3_r2v.json`
+- `video_wan2_2_14B_flf2v_2-images-1.json`
 
 Each workflow must have a matching `*.paramconfig.json` file. The paramconfig files map UI controls to the exact node IDs and input fields in the active workflow JSON.
 

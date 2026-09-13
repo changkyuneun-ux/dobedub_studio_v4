@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.security import CurrentUser, has_permission, require_permission
 from backend.app.db.session import get_db
-from backend.app.services import prompt_batch_service, studio_api_service
+from backend.app.services import job_service, prompt_batch_service, studio_api_service, task_tracking_service
+from backend.app.services.task_policy_service import TaskSubmissionLimitError
 
 router = APIRouter(prefix="/history", tags=["history"])
 LOGGER = logging.getLogger(__name__)
@@ -28,10 +29,11 @@ def prompt_history(
     page: int = 1,
     generationStatus: str = "",
     runpodStatus: str = "",
+    batchId: str = "",
     current_user: CurrentUser = Depends(require_permission("history:read")),
     db: Session = Depends(get_db),
 ):
-    """Image-scoped Grok history, deliberately fixed to 20 rows per page."""
+    """Image-scoped Grok history, deliberately fixed to 10 rows per page."""
     # A manager needs the per-worker operational dashboard. Other users keep
     # the original isolation and only receive their own prompt history.
     created_by = None if has_permission(current_user.permissions, "jobs:manage") else current_user.id
@@ -40,10 +42,11 @@ def prompt_history(
             db,
             created_by=created_by,
             page=page,
-            page_size=20,
+            page_size=10,
             include_worker_stats=False,
             generation_status=generationStatus,
             runpod_status=runpodStatus,
+            batch_job_id=batchId,
         )
     except SQLAlchemyError as exc:
         LOGGER.exception("Prompt history query failed")
@@ -59,19 +62,116 @@ def runpod_history(
     workflowId: str = "",
     resultStatus: str = "",
     workerId: str = "",
-    dateFrom: str = "",
-    dateTo: str = "",
+    runDate: str = "",
+    batchId: str = "",
+    jobId: str = "",
     _: CurrentUser = Depends(require_permission("history:read")),
 ):
-    """RunPod task history, deliberately fixed to 20 rows per page."""
+    """RunPod task history, deliberately fixed to 10 rows per page."""
     return studio_api_service.paginated_runpod_history(
         page,
         workflow_id=workflowId,
         result_status=resultStatus,
         worker_id=workerId,
-        date_from=dateFrom,
-        date_to=dateTo,
+        run_date=runDate,
+        batch_job_id=batchId,
+        job_id=jobId,
     )
+
+
+@router.get("/runpod/selection")
+def runpod_history_selection(
+    workflowId: str = "",
+    resultStatus: str = "",
+    workerId: str = "",
+    runDate: str = "",
+    batchId: str = "",
+    jobId: str = "",
+    _: CurrentUser = Depends(require_permission("history:read")),
+):
+    """Resolve all terminal task IDs for the current history filter."""
+    return task_tracking_service.task_history_selection_ids(
+        workflow_id=workflowId,
+        result_status=resultStatus,
+        worker_id=workerId,
+        date_from=runDate,
+        date_to=runDate,
+        batch_job_id=batchId,
+        job_id=jobId,
+    )
+
+
+@router.post("/runpod/rework")
+def rework_runpod_history_items(
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return task_tracking_service.requeue_runpod_history_items(
+            db,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+            scope=str(payload.get("scope") or "selected"),
+            task_ids=[str(task_id) for task_id in payload.get("taskIds") or []],
+            workflow_id=str(payload.get("workflowId") or ""),
+            result_status=str(payload.get("resultStatus") or ""),
+            worker_id=str(payload.get("workerId") or ""),
+            run_date=str(payload.get("runDate") or ""),
+            batch_job_id=str(payload.get("batchId") or ""),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _rework_history_item_response(task_id: str, current_user: CurrentUser) -> dict:
+    try:
+        job = studio_api_service.rework_history_item(
+            task_id,
+            user={
+                "id": current_user.id,
+                "name": current_user.name,
+                "role": current_user.role,
+                "permissions": current_user.permissions,
+            },
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"History item not found: {task_id}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except TaskSubmissionLimitError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "taskId": job["taskId"],
+        "sourceTaskId": task_id,
+        "runpodJobId": job.get("runpodJobId") or "",
+        "status": str(job.get("status") or "PENDING_SUBMIT").upper(),
+        "statusLabel": job.get("statusLabel") or job_service.localized_job_status(job),
+        "lastDispatchError": job.get("lastDispatchError"),
+        "generationSeed": job.get("generationSeed"),
+    }
+
+
+@router.post("/{task_id}/rework", status_code=201)
+def rework_history_item(
+    task_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    return _rework_history_item_response(task_id, current_user)
+
+
+@router.post("/{task_id}/regenerate", status_code=201)
+def regenerate_history_item(
+    task_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    return _rework_history_item_response(task_id, current_user)
 
 
 @router.post("/{task_id}/delete")

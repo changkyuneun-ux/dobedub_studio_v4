@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.app.db.models import Asset, ImagePromptDraft
-from backend.app.services import studio_api_service
+from backend.app.services import studio_api_service, workflow_patch_service
 
 
-def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session):
+def test_draft_job_payload_uses_the_draft_prompt_for_fixed_81_workflow(db_session):
     db_session.add(Asset(
         id="asset_for_job",
         asset_type="input",
@@ -19,7 +21,7 @@ def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session
     db_session.add(ImagePromptDraft(
         id="grok_draft_job",
         asset_id="asset_for_job",
-        workflow_id="1-images.json",
+        workflow_id="1-images_81.json",
         slot_index=1,
         status="READY",
         provider="grok",
@@ -27,7 +29,7 @@ def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session
         instruction_version="wf@1",
         positive_prompt="a person walks forward",
         negative_prompt="blur",
-        requested_frames=49,
+        requested_frames=81,
         warnings_json=[],
         raw_json={},
         created_by="dobedub",
@@ -37,11 +39,69 @@ def test_draft_job_payload_uses_the_draft_prompt_and_requested_length(db_session
     payload = studio_api_service.job_payload_from_prompt_draft("grok_draft_job", user={"id": "dobedub", "name": "Dob"})
 
     assert payload["promptDraftId"] == "grok_draft_job"
-    assert payload["workflowId"] == "1-images.json"
-    assert payload["workflowName"] == "1-images"
+    assert payload["workflowId"] == "1-images_81.json"
+    assert payload["workflowName"] == "1-images_81"
     assert payload["keyframes"] == [{"index": 1, "uploadId": "asset_for_job", "fileName": "source.png"}]
     assert payload["segments"][0]["positivePrompt"] == "a person walks forward"
     assert payload["segments"][0]["negativePromptAddition"] == "blur"
-    assert payload["segments"][0]["config"]["frames"] == 49
+    assert payload["segments"][0]["config"]["frames"] == 81
+    assert payload["segments"][0]["config"]["duration_seconds"] == 5
+    assert payload["segments"][0]["config"]["duration"] == 5
+    assert payload["segments"][0]["config"]["fps"] == 16
+    assert payload["segments"][0]["config"]["output_fps"] == 16
     assert payload["segments"][0]["config"]["width"] == 720
     assert payload["segments"][0]["config"]["height"] == 1280
+
+    workflow = {"98": {"inputs": {"length": 81}}}
+    applied = workflow_patch_service.apply_node_config_to_workflow(
+        workflow,
+        payload["workflowId"],
+        payload["segments"],
+        Path("workflows"),
+    )
+
+    assert applied == []
+    assert workflow["98"]["inputs"]["length"] == 81
+
+
+def test_draft_job_payload_uses_metadata_dimensions_when_asset_columns_are_empty(db_session):
+    db_session.add(Asset(
+        id="asset_metadata_dimensions",
+        asset_type="input",
+        file_name="portrait.png",
+        mime_type="image/png",
+        size_bytes=1,
+        image_width=None,
+        image_height=None,
+        storage_key="inputs/portrait.png",
+        metadata_json={"imageWidth": 747, "imageHeight": 840},
+    ))
+    db_session.add(ImagePromptDraft(
+        id="grok_draft_metadata_dimensions",
+        asset_id="asset_metadata_dimensions",
+        workflow_id="1-images_81.json",
+        slot_index=1,
+        status="READY",
+        provider="grok",
+        model="grok-test",
+        instruction_version="wf@1",
+        positive_prompt="a person walks forward",
+        negative_prompt="blur",
+        requested_frames=81,
+        warnings_json=[],
+        raw_json={},
+        created_by="dobedub",
+    ))
+    db_session.commit()
+
+    payload = studio_api_service.job_payload_from_prompt_draft(
+        "grok_draft_metadata_dimensions",
+        user={"id": "dobedub", "name": "Dob"},
+    )
+
+    assert payload["segments"][0]["config"]["width"] == 747
+    assert payload["segments"][0]["config"]["height"] == 840
+    asset = db_session.get(Asset, "asset_metadata_dimensions")
+    db_session.refresh(asset)
+    assert asset.image_width == 747
+    assert asset.image_height == 840

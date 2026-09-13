@@ -41,6 +41,11 @@ RUNPOD_SANDBOX_TEMPLATE_ID=<sandbox-template-id>
 RUNPOD_SANDBOX_GPU_TYPE_ID=NVIDIA GeForce RTX 5090
 RUNPOD_SANDBOX_GPU_COUNT=1
 RUNPOD_SANDBOX_DEPLOY_NAME=dobedub_comfyUI_Sandbox
+RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS=NVIDIA RTX PRO 4500 Blackwell,NVIDIA RTX PRO 6000 Blackwell Workstation Edition,NVIDIA GeForce RTX 4090
+RUNPOD_SANDBOX_START_RETRY_COUNT=1
+RUNPOD_SANDBOX_CREATE_ATTEMPT_DELAY_SECONDS=2
+RUNPOD_SANDBOX_MIN_VRAM_GB=24
+RUNPOD_SANDBOX_STOP_WAIT_SECONDS=60
 RUNPOD_SANDBOX_POD_API_KEY=<secret>
 RUNPOD_SANDBOX_POD_REST_URL=https://rest.runpod.io/v1
 RUNPOD_SANDBOX_POD_TIMEOUT=20
@@ -65,7 +70,7 @@ RUN_SERVER_SKIP_ENV_LOAD=1
 
 `RUNPOD_API_KEY`, `PROMPT_LLM_API_KEY`, `DATABASE_URL`, `AUTH_JWT_SECRET`는 Secrets Manager 또는 SSM Parameter Store 참조로 주입합니다. `PROMPT_LLM_API_KEY`가 같은 RunPod key를 쓰는 경우에도 별도 secret으로 분리해 두면 endpoint 교체가 쉽습니다. `DATABASE_SSL_CA`는 AWS RDS 콘솔이 안내하는 `global-bundle.pem` 경로를 container 안의 실제 파일 위치로 지정합니다. `DATABASE_SSL_VERIFY_IDENTITY=1`은 RDS 권장 접속 방식과 맞춥니다. `RUN_SERVER_AUTO_MIGRATE=0`으로 두고, migration은 one-off task로 분리합니다.
 
-Sandbox Pod 운영을 사용할 때는 `RUNPOD_SANDBOX_POD_API_KEY`를 Secrets Manager 참조로 주입합니다. 현재 RunPod API key와 같은 키를 사용하더라도 별도 환경변수 이름으로 주입해야 하며, Pod ID나 Pod 이름은 migration에 따라 바뀔 수 있으므로 고정 selector로 사용하지 않습니다. `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`를 기본 selector로, `RUNPOD_SANDBOX_TEMPLATE_ID`를 보조 selector로 사용합니다.
+Sandbox Pod 운영을 사용할 때는 `RUNPOD_SANDBOX_POD_API_KEY`를 Secrets Manager 참조로 주입합니다. 현재 RunPod API key와 같은 키를 사용하더라도 별도 환경변수 이름으로 주입해야 하며, Pod ID나 Pod 이름은 migration에 따라 바뀔 수 있으므로 고정 selector로 사용하지 않습니다. `RUNPOD_SANDBOX_NETWORK_VOLUME_ID`가 Pod의 유일한 식별자이며, `RUNPOD_SANDBOX_TEMPLATE_ID`·`RUNPOD_SANDBOX_GPU_TYPE_ID`는 새 Pod를 만들 때의 사양으로만 쓰입니다(볼륨 selector가 없을 때만 legacy 필터). 같은 볼륨에 붙은 Pod는 전부 관리자 화면 목록에 나타나고, 실행 중 Pod는 서버가 최대 1개로 강제합니다. 선택 Pod·자동 전환 옵션·우선순위는 DB(`sandbox_pod_settings`)에 저장되므로 `RUNPOD_SANDBOX_POD_ID`는 DB 선택값이 있으면 무시됩니다. `RUNPOD_SANDBOX_GPU_FALLBACK_TYPE_IDS`는 처음에는 빈 값으로 배포하고(동작 변화 없음), 설계 문서 §6 검증 후 설정합니다.
 
 인증은 `Authorization: Bearer <JWT>`만 허용합니다. `AUTH_TRUST_PROXY_HEADERS` 및 `X-User-*` 헤더 기반 인증은 지원하지 않으므로, ECS task definition에서도 해당 환경변수를 제거합니다.
 
@@ -141,6 +146,20 @@ DB에는 파일 바이너리를 저장하지 않습니다. DB에는 `asset_id`, 
 - 현재 task definition은 `STORAGE_BACKEND=local`, `STUDIO_DATA_DIR=/data/outputs/dobedub-studio`, `OUTPUTS_DIR=/data/outputs/dobedub-studio/outputs`를 사용합니다.
 - S3 backend는 장기 전환 후보일 뿐 현재 운영 task definition에는 설정하지 않습니다.
 - 로컬 개발 데이터와 EFS/RDS 운영 데이터는 자동 동기화하지 않습니다. 운영 data migration은 별도 승인·실행 대상입니다.
+
+## 이미지 컷 분할 로컬 처리
+
+`이미지 컷 분할`은 ECS 작업 큐나 서버 파일 저장소를 사용하지 않는 브라우저 로컬 기능입니다.
+
+- ECS task는 로그인, HTML/JS 번들, PDF/ZIP/컷 분할 정책 코드만 제공합니다.
+- 사용자의 PDF·이미지·ZIP 원본 바이트, 결과 PNG, `_debug/`, `summary.csv`, `manifest.json`은 ECS·EFS·S3·RDS로 업로드하지 않습니다.
+- 이 기능을 위해 FastAPI media upload/download API, DB migration, EFS 용량 증설, S3 bucket 정책을 추가하지 않습니다.
+- 컷 분할 실행은 브라우저 Web Worker에서 수행합니다. 화면 전환은 실행 중 worker와 상태 store를 유지하며, 새로고침/탭 닫기 후에는 IndexedDB에 저장된 File System Access handle과 출력 `manifest.json`을 기준으로 검증된 PNG 단위를 건너뛰고 누락 단위만 재처리합니다.
+- 입력 폴더는 read-only 권한으로 열고, 출력 작업 폴더만 readwrite 권한을 요청합니다. 시스템 폴더(`System`, `Library`, `Applications`, `Users`, `Volumes` 등)는 작업 폴더로 허용하지 않습니다.
+- PDF.js worker, 컷 분할 worker, ZIP/픽셀 처리 코드는 immutable frontend build asset으로 포함됩니다.
+- 운영 검증 시 브라우저 Network 탭, ECS 로그, EFS, S3, RDS에 원본 파일명·media MIME·media 크기 request body가 남지 않는지 확인합니다.
+
+배포 관점에서 이 기능은 “ECS 제공 + 브라우저 로컬 실행”입니다. ECS가 사용자 Mac/Windows 로컬 디렉토리에 직접 접근할 수 없으므로, 서버 처리로 전환하려면 업로드/다운로드 요구사항 변경 승인이 먼저 필요합니다.
 
 ## 이미지 빌드
 

@@ -5,6 +5,7 @@ from time import perf_counter
 from email.utils import formatdate
 from pathlib import Path
 from typing import Callable, Iterator
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -67,6 +68,26 @@ def create_upload(payload: dict, current_user: CurrentUser = Depends(require_per
     }
 
 
+@router.post("/uploads/presign", status_code=201)
+def create_s3_upload_presign(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    if not payload.get("fileName") or not payload.get("mimeType"):
+        raise HTTPException(status_code=400, detail="fileName and mimeType are required")
+    try:
+        return studio_api_service.create_s3_upload_presign(payload, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/uploads/complete", status_code=201)
+def complete_s3_upload(payload: dict, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
+    try:
+        return studio_api_service.complete_s3_upload(payload, created_by=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Uploaded object was not found.") from exc
+
+
 @router.delete("/uploads/{asset_id}")
 def delete_upload(asset_id: str, current_user: CurrentUser = Depends(require_permission("jobs:run"))):
     session = SessionLocal()
@@ -93,6 +114,78 @@ def get_file(
         raise HTTPException(status_code=403, detail="One of permissions is required: jobs:run, history:read")
     try:
         with request_timing(request, "db"):
+            s3_asset = studio_api_service.s3_asset_download(asset_id, include_url=False)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}") from exc
+    if s3_asset is not None:
+        metadata = s3_asset.get("metadata") or {}
+        created_by = str(metadata.get("createdBy") or "")
+        if created_by and created_by != current_user.id and not has_permission(current_user.permissions, "history:read"):
+            raise HTTPException(status_code=403, detail="Asset access denied")
+        file_name = str(s3_asset.get("fileName") or asset_id).replace('"', "")
+        disposition = "attachment" if download == "1" else "inline"
+        storage_key = str(s3_asset.get("storageKey") or "").strip()
+        if not storage_key:
+            raise HTTPException(status_code=404, detail=f"File not found: {asset_id}")
+        try:
+            stored = studio_api_service.s3_asset_storage().stat(storage_key)
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=f"File not found: {asset_id}") from exc
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": _content_disposition(disposition, file_name),
+            "Cache-Control": "private, no-cache",
+            "Content-Length": str(stored.size_bytes),
+        }
+        if stored.etag:
+            headers["ETag"] = str(stored.etag)
+        range_header = request.headers.get("range", "")
+        if range_header.startswith("bytes="):
+            if stored.size_bytes <= 0:
+                return Response(status_code=416, headers={**headers, "Content-Range": "bytes */0"})
+            start_text, _, end_text = range_header.removeprefix("bytes=").partition("-")
+            try:
+                start = int(start_text) if start_text else 0
+                end = int(end_text) if end_text else stored.size_bytes - 1
+                start = max(0, min(start, stored.size_bytes - 1))
+                end = max(start, min(end, stored.size_bytes - 1))
+            except ValueError:
+                start, end = 0, stored.size_bytes - 1
+            length = end - start + 1
+            headers["Content-Range"] = f"bytes {start}-{end}/{stored.size_bytes}"
+            headers["Content-Length"] = str(length)
+            headers["Content-Encoding"] = "identity"
+            return StreamingResponse(
+                _iter_s3_object_range(
+                    storage_key,
+                    start=start,
+                    end=end,
+                    on_complete=lambda duration_ms, bytes_sent: observe_asset_stream(
+                        request,
+                        duration_ms=duration_ms,
+                        bytes_sent=bytes_sent,
+                        status_code=206,
+                    ),
+                ),
+                status_code=206,
+                media_type=str(s3_asset.get("mimeType") or stored.mime_type or "application/octet-stream"),
+                headers=headers,
+            )
+        return StreamingResponse(
+            _iter_s3_object(
+                storage_key,
+                on_complete=lambda duration_ms, bytes_sent: observe_asset_stream(
+                    request,
+                    duration_ms=duration_ms,
+                    bytes_sent=bytes_sent,
+                    status_code=200,
+                ),
+            ),
+            media_type=str(s3_asset.get("mimeType") or stored.mime_type or "application/octet-stream"),
+            headers=headers,
+        )
+    try:
+        with request_timing(request, "db"):
             asset, asset_path = studio_api_service.get_asset(asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Asset not found: {asset_id}") from exc
@@ -107,7 +200,7 @@ def get_file(
     disposition = "attachment" if download == "1" else "inline"
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        "Content-Disposition": _content_disposition(disposition, file_name),
         # Keep an authenticated browser cache, but require validation before
         # reuse. This avoids serving a previously cached asset after logout
         # while still allowing a cheap 304 response instead of retransferring
@@ -133,6 +226,7 @@ def get_file(
         length = end - start + 1
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
         headers["Content-Length"] = str(length)
+        headers["Content-Encoding"] = "identity"
         return StreamingResponse(
             _iter_file_range(
                 asset_path,
@@ -151,6 +245,53 @@ def get_file(
         )
 
     return FileResponse(asset_path, media_type=content_type, filename=file_name, headers=headers, stat_result=stat_result)
+
+
+def _iter_s3_object(storage_key: str, *, on_complete: Callable[[float, int], None] | None = None, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    started = perf_counter()
+    bytes_sent = 0
+    try:
+        with studio_api_service.s3_asset_storage().open_read(storage_key) as stream:
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_sent += len(chunk)
+                yield chunk
+    finally:
+        if on_complete:
+            on_complete((perf_counter() - started) * 1000, bytes_sent)
+
+
+def _iter_s3_object_range(
+    storage_key: str,
+    *,
+    start: int,
+    end: int,
+    on_complete: Callable[[float, int], None] | None = None,
+    chunk_size: int = 1024 * 1024,
+) -> Iterator[bytes]:
+    started = perf_counter()
+    bytes_sent = 0
+    try:
+        with studio_api_service.s3_asset_storage().open_read_range(storage_key, start=start, end=end) as stream:
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_sent += len(chunk)
+                yield chunk
+    finally:
+        if on_complete:
+            on_complete((perf_counter() - started) * 1000, bytes_sent)
+
+
+def _content_disposition(disposition: str, file_name: str) -> str:
+    try:
+        file_name.encode("ascii")
+    except UnicodeEncodeError:
+        return f"{disposition}; filename*=utf-8''{quote(file_name)}"
+    return f'{disposition}; filename="{file_name}"'
 
 
 def _iter_file_range(

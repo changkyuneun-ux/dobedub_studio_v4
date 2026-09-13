@@ -20,5 +20,19 @@ services:
       timeout: 5s
       retries: 10
 
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: dobedub-studio-localstack
+    profiles:
+      - s3
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: ap-northeast-2
+    ports:
+      - "4566:4566"
+    volumes:
+      - dobedub_localstack_data:/var/lib/localstack
+
 volumes:
   dobedub_mysql_data:
+  dobedub_localstack_data:

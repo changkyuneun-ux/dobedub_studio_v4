@@ -26,6 +26,7 @@ from backend.app.services.workflow_parser import (
     list_workflows as parse_workflow_list,
     workflow_schema as parse_workflow_schema,
 )
+from backend.app.services.workflow_visibility import is_retired_workflow
 
 
 WORKFLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.json$")
@@ -232,6 +233,8 @@ def list_admin_workflows() -> dict:
     items = []
     for workflow in workflows:
         workflow_id = workflow.get("id")
+        if is_retired_workflow(workflow_id):
+            continue
         meta = dict(registry_items.get(workflow_id) or {})
         path = settings.workflows_dir / str(workflow_id)
         param_path = settings.workflows_dir / f"{Path(str(workflow_id)).stem}.paramconfig.json"
@@ -255,6 +258,8 @@ def list_admin_workflows() -> dict:
 
 def register_admin_workflow(payload: dict) -> dict:
     workflow_id = normalize_workflow_id(payload.get("workflowId") or payload.get("fileName"))
+    if is_retired_workflow(workflow_id):
+        raise ValueError("This workflow is not approved for new requests")
     workflow_json = payload.get("workflowJson")
     if not isinstance(workflow_json, dict):
         raise ValueError("workflowJson object is required")
@@ -307,6 +312,8 @@ def register_admin_workflow(payload: dict) -> dict:
 
 def set_admin_workflow_active(workflow_id: str, active: bool) -> dict:
     workflow_id = normalize_workflow_id(workflow_id)
+    if is_retired_workflow(workflow_id):
+        raise ValueError("This workflow is not approved for new requests")
     settings = get_settings()
     if not (settings.workflows_dir / workflow_id).exists():
         raise ValueError("Workflow file not found")

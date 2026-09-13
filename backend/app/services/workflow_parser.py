@@ -7,7 +7,9 @@ from pathlib import Path
 
 VIDEO_NODE_TYPES = {
     "WanFirstLastFrameToVideo",
+    "WanFunControlToVideo",
     "WanImageToVideo",
+    "WanVaceToVideo",
     "MiniMaxH3ReferenceToVideo",
 }
 

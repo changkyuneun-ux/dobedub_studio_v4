@@ -1,0 +1,62 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListDobedubStudioBatchMediaPrefixes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::dobedub-studio",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "prod/request-batches/*",
+            "prod/batches/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadBatchScopedMedia",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::dobedub-studio/prod/request-batches/*",
+        "arn:aws:s3:::dobedub-studio/prod/batches/*"
+      ]
+    },
+    {
+      "Sid": "WriteBatchScopedMedia",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::dobedub-studio/prod/request-batches/*/inputs/*",
+        "arn:aws:s3:::dobedub-studio/prod/request-batches/*/outputs/*",
+        "arn:aws:s3:::dobedub-studio/prod/request-batches/*/manifests/*",
+        "arn:aws:s3:::dobedub-studio/prod/batches/*/inputs/*",
+        "arn:aws:s3:::dobedub-studio/prod/batches/*/outputs/*",
+        "arn:aws:s3:::dobedub-studio/prod/batches/*/manifests/*"
+      ]
+    },
+    {
+      "Sid": "CopyAndDeleteLegacyS3MediaDuringLayoutMigration",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::dobedub-studio/prod/uploads/*",
+        "arn:aws:s3:::dobedub-studio/prod/jobs/*",
+        "arn:aws:s3:::dobedub-studio/prod/request-batches/*",
+        "arn:aws:s3:::dobedub-studio/prod/batches/*"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import inspect
+import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -9,9 +12,13 @@ from pathlib import Path
 from typing import Callable
 
 from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, timestamp_fields
+from backend.app.services.workflow_patch_service import normalize_resolution_tier
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,7 +26,7 @@ class JobRuntime:
     jobs: dict[str, dict]
     dry_run: bool
     prepare_workflow_for_job: Callable[[dict], tuple[dict, list[dict], dict]]
-    build_runpod_payload: Callable[[dict, list[dict]], dict]
+    build_runpod_payload: Callable[..., dict]
     runpod_request: Callable[[str, str, dict | None], dict]
     save_runpod_outputs: Callable[[dict, dict], dict]
     append_history: Callable[[dict], list[dict]]
@@ -44,9 +51,31 @@ def config_without_seed(config: dict | None) -> dict:
     }
 
 
+def normalize_payload_resolution_tier(payload: dict) -> str:
+    tier = normalize_resolution_tier(payload.get("resolutionTier"))
+    payload["resolutionTier"] = tier
+    for segment in payload.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        config = segment.setdefault("config", {})
+        if isinstance(config, dict):
+            config["resolutionTier"] = tier
+    return tier
+
+
 def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     workflow, images, patch_summary = runtime.prepare_workflow_for_job(payload)
-    response = runtime.runpod_request("POST", "/run", runtime.build_runpod_payload(workflow, images))
+    LOGGER.info(
+        "runpod_submission_snapshot %s",
+        json.dumps({
+            "event": "runpod_submission_snapshot",
+            "taskId": str(payload.get("taskId") or ""),
+            "workflowId": str(payload.get("workflowId") or ""),
+            "resolutionTier": str(payload.get("resolutionTier") or "sd"),
+            "generation": (patch_summary or {}).get("generation") or [],
+        }, ensure_ascii=True, sort_keys=True),
+    )
+    response = runtime.runpod_request("POST", "/run", _build_runpod_payload(runtime, workflow, images, payload))
     runpod_job_id = response.get("id")
     if not runpod_job_id:
         raise RuntimeError(f"RunPod response did not include job id: {response}")
@@ -57,11 +86,19 @@ def submit_runpod_job(runtime: JobRuntime, payload: dict) -> dict:
     }
 
 
+def _build_runpod_payload(runtime: JobRuntime, workflow: dict, images: list[dict], payload: dict) -> dict:
+    signature = inspect.signature(runtime.build_runpod_payload)
+    if len(signature.parameters) >= 3:
+        return runtime.build_runpod_payload(workflow, images, payload)
+    return runtime.build_runpod_payload(workflow, images)
+
+
 def queue_job(runtime: JobRuntime, payload: dict) -> dict:
     """Persist a validated job before any external RunPod request is made."""
     # The in-memory task and its DB record must preserve the exact request
     # submitted to RunPod, even if a caller later mutates its original object.
     payload = copy.deepcopy(payload)
+    normalize_payload_resolution_tier(payload)
     now_seoul = now_seoul_naive()
     task_id = f"task_{now_seoul.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     now = time.time()
@@ -133,8 +170,10 @@ def dispatch_queued_job(runtime: JobRuntime, job: dict) -> dict:
     payload = copy.deepcopy(job.get("payload") or {})
     if not payload:
         raise ValueError("Queued task payload is missing")
+    normalize_payload_resolution_tier(payload)
     if job.get("generationSeed") is not None:
         payload["generationSeed"] = job["generationSeed"]
+    payload["taskId"] = job["taskId"]
 
     runpod_data = submit_runpod_job(runtime, payload)
     execution_mode = "runpod"
@@ -175,21 +214,77 @@ def poll_runpod_job(runtime: JobRuntime, job: dict) -> tuple[dict, float, int]:
     job["progress"] = progress
     job["runpodStatus"] = runpod_status
 
-    if state == "COMPLETED" and not job.get("outputsSaved"):
-        saved = runtime.save_runpod_outputs(runpod_status, job)
-        job["outputAssets"] = saved["assets"]
-        job["remoteOutputUrls"] = saved["remoteUrls"]
-        final_asset = next((asset for asset in saved["assets"] if asset.get("outputRole") == "final"), None)
-        job["outputUrl"] = (
-            final_asset["downloadUrl"]
-            if final_asset
-            else saved["assets"][0]["downloadUrl"]
-            if saved["assets"]
-            else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
-        )
-        job["outputsSaved"] = True
-    record_job(runtime, job)
+    if state == "COMPLETED":
+        # The provider terminal state must survive even when output registration
+        # (S3/local storage or asset DB writes) has a separate failure.
+        job["runpodStatus"] = {**runpod_status, "outputImportStatus": "PENDING"}
+        job["outputImportStatus"] = "PENDING"
+        record_job(runtime, job)
+        _save_completed_outputs_safely(runtime, job, runpod_status)
+    else:
+        record_job(runtime, job)
     return runpod_status, elapsed, progress
+
+
+def _save_completed_outputs_if_needed(runtime: JobRuntime, job: dict, runpod_status: dict) -> None:
+    if job.get("outputsSaved"):
+        return
+    saved = runtime.save_runpod_outputs(runpod_status, job)
+    job["outputAssets"] = saved["assets"]
+    job["remoteOutputUrls"] = saved["remoteUrls"]
+    final_asset = next((asset for asset in saved["assets"] if asset.get("outputRole") == "final"), None)
+    job["outputUrl"] = (
+        final_asset["downloadUrl"]
+        if final_asset
+        else saved["assets"][0]["downloadUrl"]
+        if saved["assets"]
+        else (saved["remoteUrls"][0] if saved["remoteUrls"] else "")
+    )
+    job["outputsSaved"] = True
+    job["outputImportStatus"] = "COMPLETED"
+    job.pop("outputSaveError", None)
+    if isinstance(job.get("runpodStatus"), dict):
+        job["runpodStatus"] = {
+            **job["runpodStatus"],
+            "outputImportStatus": "COMPLETED",
+        }
+        job["runpodStatus"].pop("outputSaveError", None)
+    record_job(runtime, job)
+
+
+def _save_completed_outputs_safely(runtime: JobRuntime, job: dict, runpod_status: dict) -> None:
+    try:
+        _save_completed_outputs_if_needed(runtime, job, runpod_status)
+    except Exception as exc:
+        error = str(exc)
+        job["outputImportStatus"] = "PENDING"
+        job["outputSaveError"] = error
+        if isinstance(job.get("runpodStatus"), dict):
+            job["runpodStatus"] = {
+                **job["runpodStatus"],
+                "outputSaveError": error,
+                "outputImportStatus": "PENDING",
+            }
+        LOGGER.exception("RunPod job completed but output persistence failed: task=%s", job.get("taskId"))
+        record_job(runtime, job)
+
+
+def is_runpod_job_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "runpod http 404" in message and ("job not found" in message or "not found" in message)
+
+
+def mark_runpod_job_not_found(runtime: JobRuntime, job: dict, error: str) -> dict:
+    job["status"] = "FAILED"
+    job["progress"] = 100
+    job["runpodStatus"] = {
+        "status": "FAILED",
+        "error": error,
+        "providerStatus": "NOT_FOUND",
+    }
+    job["historySaved"] = True
+    record_job(runtime, job)
+    return job
 
 
 def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
@@ -221,9 +316,17 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
     if not job:
         raise KeyError(task_id)
     elapsed = max(0, time.time() - job["createdAt"])
-    if str(job.get("status") or "").upper() in {"PENDING_SUBMIT", "DISPATCHING"}:
+    status = str(job.get("status") or "").upper()
+    if status in {"PENDING_SUBMIT", "DISPATCHING"}:
         progress = 0
         terminal = False
+    elif job.get("executionMode") == "runpod" and status in TERMINAL_RUNPOD_STATES:
+        progress = 100
+        job["progress"] = progress
+        runpod_status = job.get("runpodStatus") or {"status": status}
+        if status == "COMPLETED":
+            _save_completed_outputs_safely(runtime, job, runpod_status)
+        terminal = True
     elif job.get("executionMode") == "runpod":
         runpod_status, elapsed, progress = poll_runpod_job(runtime, job)
         terminal = runpod_status.get("status") in TERMINAL_RUNPOD_STATES
@@ -256,7 +359,9 @@ def job_status(runtime: JobRuntime, task_id: str) -> dict:
         "generationSeed": job.get("generationSeed"),
         "outputUrl": job.get("outputUrl", ""),
         "outputAssets": job.get("outputAssets", []),
+        "outputImportStatus": job.get("outputImportStatus") or ("COMPLETED" if job.get("outputsSaved") else "PENDING"),
         "cancelRequested": bool(job.get("cancelRequested")),
+        "lastDispatchError": job.get("lastDispatchError"),
     }
     for field_name in ("createdAt", "startedAt", "completedAt", "cancelledAt"):
         if field_name == "createdAt":
@@ -302,7 +407,11 @@ def display_job_status(job: dict) -> str:
     status = str(job.get("status", "")).upper()
     if status in {"COMPLETED", "SUCCESS"}:
         return "Completed"
-    if status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+    if status == "CANCELLED":
+        return "Cancelled"
+    if status == "TIMED_OUT":
+        return "Timed Out"
+    if status == "FAILED":
         return "Failed"
     return job.get("status", "running")
 

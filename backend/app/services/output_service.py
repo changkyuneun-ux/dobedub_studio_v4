@@ -97,9 +97,18 @@ def workflow_output_token(workflow_id: str) -> str:
 
 def first_upload_stem(job: dict) -> str:
     payload = job.get("payload") or {}
+    source_relative_path = str(payload.get("sourceRelativePath") or "").strip()
+    if source_relative_path:
+        return _safe_output_stem(Path(source_relative_path).name)
     keyframes = payload.get("keyframes") or []
     first_name = keyframes[0].get("fileName") if keyframes else ""
-    return Path(safe_filename(first_name or "upload")).stem or "upload"
+    return _safe_output_stem(first_name or "upload")
+
+
+def _safe_output_stem(name: str) -> str:
+    stem = Path(str(name or "upload")).stem or "upload"
+    stem = re.sub(r"[^\w_.-]+", "_", stem, flags=re.UNICODE).strip("._")
+    return stem or "upload"
 
 
 def output_file_name(
@@ -115,7 +124,6 @@ def output_file_name(
     default_suffix = {"videos": ".mp4", "images": ".png", "gifs": ".gif"}.get(kind, "")
     if not suffix:
         suffix = default_suffix
-    sequence = job.setdefault("outputSequence", uuid.uuid4().hex[:6])
     metadata = metadata or {}
     if metadata.get("outputRole") == "segment":
         role_suffix = f"_segment{metadata.get('segmentIndex') or index}"
@@ -123,7 +131,7 @@ def output_file_name(
         role_suffix = "_final"
     else:
         role_suffix = f"_{index:02d}" if index > 1 else ""
-    return f"{first_upload_stem(job)}_{workflow_output_token(job.get('workflowId'))}_{sequence}{role_suffix}{suffix}"
+    return f"{first_upload_stem(job)}{role_suffix}{suffix}"
 
 
 def infer_output_metadata(item: dict, index: int, total: int, job: dict) -> dict:
@@ -174,6 +182,28 @@ def save_runpod_outputs(
     total = len(output_items)
     for index, (kind, item) in enumerate(output_items, start=1):
         data = item.get("data")
+        if item.get("type") == "s3_object":
+            metadata = infer_output_metadata(item, index, total, job)
+            asset_id = s3_output_asset_id(item, index, job)
+            file_name = output_file_name(kind, item, index, job, metadata, total)
+            bucket = str(item.get("bucket") or "")
+            storage_key = str(item.get("key") or item.get("storageKey") or "")
+            mime_type = str(item.get("mimeType") or "application/octet-stream")
+            effective_kind = "videos" if mime_type.startswith("video/") or Path(file_name).suffix.lower() in VIDEO_SUFFIXES else kind
+            saved.append({
+                "assetId": asset_id,
+                "fileName": file_name,
+                "downloadUrl": f"/api/files/{asset_id}",
+                "kind": effective_kind,
+                "mimeType": mime_type,
+                "sizeBytes": int(item.get("sizeBytes") or 0),
+                "outputRole": metadata.get("outputRole"),
+                "segmentIndex": metadata.get("segmentIndex"),
+                "storageBackend": "s3",
+                "storageKey": storage_key,
+                "publicUrl": f"s3://{bucket}/{storage_key}" if bucket and storage_key else None,
+            })
+            continue
         if item.get("type") == "s3_url" and data:
             remote_urls.append(data)
             continue
@@ -198,3 +228,11 @@ def save_runpod_outputs(
             "segmentIndex": metadata.get("segmentIndex"),
         })
     return {"assets": saved, "remoteUrls": remote_urls}
+
+
+def s3_output_asset_id(item: dict, index: int, job: dict) -> str:
+    task_id = str(job.get("taskId") or (job.get("payload") or {}).get("taskId") or "").strip()
+    if task_id:
+        safe_task_id = re.sub(r"[^A-Za-z0-9_-]+", "_", task_id).strip("_")[:48]
+        return f"asset_{safe_task_id}_{index:03d}"
+    return str(item.get("assetId") or f"asset_{uuid.uuid4().hex[:12]}")
