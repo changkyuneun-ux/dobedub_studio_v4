@@ -61,6 +61,12 @@ const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "assets", label: "Collection 관리", permission: "history:read" }
 ];
 
+// 2026-09-13: 로그인 랜딩 대시보드. 전역 정책 — permission 없음(로그인한 모든 사용자에게
+// 표시)이며 local/generate/admin 모든 영역에서 최상단 HOME 그룹으로 그린다.
+const HOME_NAV_ITEMS: NavItem[] = [
+  { key: "dashboard", label: "대시보드" }
+];
+
 const LOCAL_NAV_ITEMS: NavItem[] = [
   { key: "webtoonCuts", label: "이미지 컷 분할", permission: "jobs:run" }
 ];
@@ -121,8 +127,9 @@ export function AppShell({
   children
 }: AppShellProps) {
   const navGroups = area === "admin"
-    ? [{ label: "ADMIN", items: ADMIN_NAV_ITEMS }]
+    ? [{ label: "HOME", items: HOME_NAV_ITEMS }, { label: "ADMIN", items: ADMIN_NAV_ITEMS }]
     : [
+      { label: "HOME", items: HOME_NAV_ITEMS },
       { label: "LOCAL", items: LOCAL_NAV_ITEMS },
       { label: "GENERATE", items: GENERATE_NAV_ITEMS }
     ];

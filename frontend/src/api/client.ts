@@ -310,6 +310,77 @@ export type SandboxPodLive = {
   checkedAtKst?: string | null;
 };
 
+// 2026-09-13 로그인 랜딩 대시보드(GET /api/dashboard/summary) — 전역 API, 인증만 필요.
+export type DashboardRange = "today" | "7d" | "30d";
+
+export type DashboardRecentTask = {
+  taskId: string;
+  createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
+  user: { id?: string | null; name?: string | null };
+  workflowId: string;
+  workflowName: string;
+  workerName?: string | null;
+  status: string;
+  statusKind: "completed" | "failed" | "queued" | "active" | "other";
+  elapsedSeconds?: number | null;
+  lastDispatchError?: string | null;
+  batchJobId?: string | null;
+};
+
+export type DashboardAlert = { id: string; level: "warning" | "danger" | "info"; message: string; route?: StudioRouteLike | null };
+type StudioRouteLike = string;
+
+export type DashboardSummary = {
+  range: DashboardRange;
+  since?: string | null;
+  sinceKst?: string | null;
+  until?: string | null;
+  untilKst?: string | null;
+  kpi: {
+    submitted: number;
+    submittedDeltaPercent?: number | null;
+    completed: number;
+    successRate?: number | null;
+    active: number;
+    queued: number;
+    failed: number;
+    failedDispatch: number;
+    failedTimeout: number;
+    avgElapsedSeconds?: number | null;
+    avgDelaySeconds?: number | null;
+    activeUsers: number;
+    batchJobsInProgress: number;
+  };
+  recent: DashboardRecentTask[];
+  byUser: Array<{ userId?: string | null; name: string; submitted: number; failed: number }>;
+  byWorkflow: Array<{ workflowId: string; workflowName: string; submitted: number; avgElapsedSeconds?: number | null }>;
+  system: {
+    comfy: { configured: boolean; executionMode: string; dryRun: boolean };
+    promptLlm: { configured: boolean; provider?: string | null; model?: string | null; timeoutSeconds?: number | null };
+    workflows: { count?: number | null };
+  };
+  sandbox: {
+    configured: boolean;
+    activePodId?: string | null;
+    activePodName?: string | null;
+    desiredStatus?: string | null;
+    gpuTier?: string | null;
+    gpuTypeId?: string | null;
+    podCount: number;
+    runningCount: number;
+    conflict: boolean;
+    duplicateStoppedPodIds: string[];
+    error?: string | null;
+  };
+  worker: { active: number; queued: number; maxActiveTasksTotal: number; maxActiveTasksPerUser: number };
+  db: { alembicCurrent?: string | null; alembicHead?: string | null; migrationRequired: boolean; error?: string | null };
+  alerts: DashboardAlert[];
+  checkedAt?: string | null;
+  checkedAtKst?: string | null;
+};
+
 export type ConfigControl = {
   key: string;
   param?: string;
@@ -1687,6 +1758,8 @@ export const apiClient = {
     requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
       method: "POST"
     }),
+  dashboardSummary: (range: DashboardRange, limit = 20) =>
+    requestJson<DashboardSummary>(`/api/dashboard/summary?range=${encodeURIComponent(range)}&limit=${limit}`),
   sandboxPodStatus: (options?: { live?: boolean }) =>
     requestJson<SandboxPodStatus>(options?.live === false ? "/api/admin/sandbox-pod?live=false" : "/api/admin/sandbox-pod"),
   sandboxPodLive: () => requestJson<SandboxPodLive>("/api/admin/sandbox-pod/live"),

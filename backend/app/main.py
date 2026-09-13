@@ -26,6 +26,7 @@ from backend.app.api.v1.metadata import router as metadata_router
 from backend.app.api.v1.prompts import router as prompts_router
 from backend.app.api.v1.reports import router as reports_router
 from backend.app.api.v1.sandbox_pod import router as sandbox_pod_router
+from backend.app.api.v1.dashboard import router as dashboard_router
 from backend.app.api.v1.segment_defaults import router as segment_defaults_router
 from backend.app.api.v1.system import router as system_router
 from backend.app.api.v1.workflows import router as workflows_router
@@ -180,6 +181,7 @@ def create_app() -> FastAPI:
         reports_router,
         system_router,
         sandbox_pod_router,
+        dashboard_router,
     ]
     for prefix in (settings.api_prefix, "/api"):
         for router in api_routers:

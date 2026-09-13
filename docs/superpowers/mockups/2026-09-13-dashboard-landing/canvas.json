@@ -1,0 +1,14 @@
+{
+  "pages": [
+    { "id": "page-1", "name": "대시보드 (확정 A)" },
+    { "id": "page-2", "name": "대안 B (보류)" }
+  ],
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "대시보드 랜딩 · A 데이터 우선", "page": "page-1" },
+    { "file": "DirectionB.dc.html", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "B · 요약 우선 (미채택)", "page": "page-2" }
+  ],
+  "annotations": [
+    { "id": "brief", "x": 0, "y": -150, "w": 560, "page": "page-1", "text": "확정: A 데이터 우선. 사이드바 HOME > 대시보드(로그인 기본 랜딩)\n1) 시스템 상태 5타일  2) 작업 KPI(오늘/7일/30일)  3) 최근 작업 테이블 + 작업자/워크플로 집계 + 주의 필요\n숫자·이름은 샘플. 신규 API 필요: GET /api/dashboard/summary?range=7d (KPI·작업자별·워크플로별 집계)" }
+  ],
+  "launch": { "view": "canvas", "page": "page-1" }
+}
