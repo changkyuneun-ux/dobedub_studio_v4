@@ -80,6 +80,9 @@ export type StudioRoute =
   | "access.manual"
   // 2026-09-13: 로그인 랜딩 대시보드(HOME 그룹, 전역 표시)
   | "home.dashboard"
+  // 2026-09-13: 관리자 콘솔 쉘 안의 대시보드(같은 화면, ADMIN 사이드바). 스튜디오↔관리자
+  // 콘솔 전환 버튼의 기본 도착지.
+  | "admin.dashboard"
   | "webtoonCuts"
   | "create.load"
   | "create.promptManagement"
@@ -137,6 +140,7 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "review.history": "/studio/review/history",
   "review.reuse": "/studio/review/reuse",
   "review.assets": "/studio/review/assets",
+  "admin.dashboard": "/studio/admin/home",
   "admin.systemPrompt": "/studio/admin/system-prompt",
   "admin.sandbox": "/studio/admin/sandbox",
   "admin.taskPolicy": "/studio/admin/task-policy",

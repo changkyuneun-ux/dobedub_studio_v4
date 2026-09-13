@@ -169,12 +169,14 @@ export function AppShell({
             generate 한정 → admin이 아닌 모든 영역으로 완화(사용자 리포트). */}
         {chrome && area !== "admin" && canUseAdminConsole(user) ? (
           <div className="v3-sidebar-switch-top">
-            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.roles")}>관리자 콘솔 →</button>
+            {/* 2026-09-13: 전환 시 기본 도착지는 항상 대시보드(사용자 요청). 이전: admin.roles */}
+            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.dashboard")}>관리자 콘솔 →</button>
           </div>
         ) : null}
         {chrome && area === "admin" ? (
           <div className="v3-sidebar-switch-top">
-            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("create.load")}>← 스튜디오</button>
+            {/* 2026-09-13: 전환 시 기본 도착지는 항상 대시보드(사용자 요청). 이전: create.load */}
+            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("home.dashboard")}>← 스튜디오</button>
           </div>
         ) : null}
 

@@ -169,6 +169,7 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "home.dashboard": "대시보드",
+  "admin.dashboard": "대시보드",
   "webtoonCuts": "이미지 컷 분할",
   "create.promptManagement": "Grok 프롬프트 생성",
   "create.batchJobs": "Batch 처리",
@@ -2031,6 +2032,8 @@ export function StudioShell({
       />
     ) : route === "home.dashboard" ? (
       <DashboardScreen user={user} onGoTo={onNavigate} />
+    ) : route === "admin.dashboard" ? (
+      <DashboardScreen user={user} onGoTo={onNavigate} area="admin" />
     ) : route === "webtoonCuts" ? (
       <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} />
     ) : route === "create.load" || route === "create.promptManagement" ? (

@@ -30,7 +30,7 @@ export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void)
 // (역할 & 권한)로 보낸다. A-04: adminAuditLog(감사 로그)도 같은 방식으로 추가했다.
 export function shellNavigateAdmin(key: string, onGoTo: (route: StudioRoute) => void) {
   if (key === "dashboard") {
-    onGoTo("home.dashboard");
+    onGoTo("admin.dashboard");
   } else if (key === "adminCatalog") {
     onGoTo("admin.catalogHierarchy");
   } else if (key === "adminGrokInstructions") {

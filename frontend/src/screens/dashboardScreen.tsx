@@ -2,14 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { apiClient, DashboardRange, DashboardRecentTask, DashboardSummary } from "../api/client";
 import { User, canUse } from "../auth";
 import { AppShell } from "../components/AppShell";
-import { shellNavigate } from "../helpers/navigation";
+import { shellNavigate, shellNavigateAdmin } from "../helpers/navigation";
 import { StudioRoute } from "../router";
 
 // 2026-09-13: 로그인 랜딩 대시보드 (spec docs/superpowers/specs/2026-09-13-dashboard-landing-design.md,
 // 목업 A "데이터 우선"). 전역 정책 — 로그인한 모든 사용자에게 표시. 데이터는
 // GET /api/dashboard/summary 한 번으로 받고, 실패 시 마지막 성공 값을 유지한다.
 
-type Props = { user: User; onGoTo: (route: StudioRoute) => void };
+// area="admin"이면 관리자 콘솔 쉘(ADMIN 사이드바) 안에서 같은 대시보드를 그린다
+// (route admin.dashboard) — 스튜디오↔관리자 콘솔 전환의 기본 도착지.
+type Props = { user: User; onGoTo: (route: StudioRoute) => void; area?: "generate" | "admin" };
 
 const RANGE_STORAGE_KEY = "dobedub.dashboard.range";
 const REFRESH_INTERVAL_MS = 60_000;
@@ -29,7 +31,7 @@ function readStoredRange(): DashboardRange {
   return "7d";
 }
 
-export function DashboardScreen({ user, onGoTo }: Props) {
+export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
   const [range, setRangeState] = useState<DashboardRange>(readStoredRange);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,9 +99,9 @@ export function DashboardScreen({ user, onGoTo }: Props) {
   return (
     <AppShell
       user={user}
-      area="generate"
+      area={area}
       activeItem="dashboard"
-      onNavigate={(key) => shellNavigate(key, onGoTo)}
+      onNavigate={(key) => (area === "admin" ? shellNavigateAdmin(key, onGoTo) : shellNavigate(key, onGoTo))}
       headerEyebrow="HOME · DASHBOARD"
       headerTitle="시스템 상태 · 작업 현황"
       headerActions={(

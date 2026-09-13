@@ -32,9 +32,21 @@ def test_route_exists_and_is_the_login_landing():
 
 def test_route_has_no_permission_guard_and_a_title():
     guard = SHELL.split("ROUTE_REQUIRED_PERMISSION", 1)[1].split("};", 1)[0]
-    assert "home.dashboard" not in guard
-    assert '"home.dashboard": "대시보드"' in SHELL
+    assert "home.dashboard" not in guard and "admin.dashboard" not in guard
+    assert '"home.dashboard": "대시보드"' in SHELL and '"admin.dashboard": "대시보드"' in SHELL
     assert 'route === "home.dashboard"' in SHELL and "<DashboardScreen" in SHELL
+    assert 'route === "admin.dashboard"' in SHELL and 'area="admin"' in SHELL
+
+
+def test_area_switch_buttons_default_to_dashboard():
+    # 2026-09-13: 스튜디오 ↔ 관리자 콘솔 전환의 기본 도착지는 항상 대시보드
+    assert '| "admin.dashboard"' in ROUTER and '"admin.dashboard": "/studio/admin/home"' in ROUTER
+    assert 'onNavigateRoute("admin.dashboard")}>관리자 콘솔 →' in APP_SHELL
+    assert 'onNavigateRoute("home.dashboard")}>← 스튜디오' in APP_SHELL
+    assert 'onNavigateRoute("admin.roles")' not in APP_SHELL and 'onNavigateRoute("create.load")' not in APP_SHELL
+    admin_nav = NAVIGATION.split("export function shellNavigateAdmin(", 1)[1]
+    assert 'onGoTo("admin.dashboard")' in admin_nav
+    assert 'area === "admin" ? shellNavigateAdmin' in SCREEN
 
 
 def test_sidebar_home_group_is_global_and_on_every_area():

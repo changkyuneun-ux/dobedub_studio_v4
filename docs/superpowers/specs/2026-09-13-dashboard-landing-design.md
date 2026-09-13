@@ -1,6 +1,6 @@
 # 로그인 랜딩 대시보드(시스템 상태 · 작업 현황) 설계
 
-- 작성일: 2026-09-13 (v1.1 — 전역 표시 정책 반영: 대시보드는 로그인한 모든 사용자에게 권한 없이 표시)
+- 작성일: 2026-09-13 (v1.2 — 영역 전환 기본 도착지 = 대시보드 추가; v1.1 — 전역 표시 정책 반영: 대시보드는 로그인한 모든 사용자에게 권한 없이 표시)
 - 대상 화면: 스튜디오 → **HOME → 대시보드** (`home.dashboard`, 로그인 후 기본 랜딩)
 - 대상 코드: `backend/app/services/dashboard_service.py`(신규), `backend/app/api/v1/dashboard.py`(신규), `backend/app/services/permission_service.py`(리소스 카탈로그), `frontend/src/router.ts`, `frontend/src/main.tsx`, `frontend/src/StudioShell.tsx`, `frontend/src/components/AppShell.tsx`, `frontend/src/screens/dashboardScreen.tsx`(신규), `frontend/src/api/client.ts`, `frontend/src/styles.css`
 - 목업: `docs/superpowers/mockups/2026-09-13-dashboard-landing/dobedub-dashboard-landing.html` (캔버스 1페이지 = 확정 A, 2페이지 = 대안 B 보류)
@@ -38,6 +38,8 @@
 | 라우트 | `home.dashboard` → `/studio/home` |
 | 로그인 후 기본 라우트 | `create.load` → `home.dashboard`로 변경 (`router.ts` `studio:` 매핑, `main.tsx:111`, `StudioShell.tsx:1952` 랜딩 처리) |
 | 레거시 URL(`/studio`, 알 수 없는 세그먼트) | `home.dashboard`로 |
+| 관리자 콘솔 안의 대시보드 | `admin.dashboard` → `/studio/admin/home` (같은 `DashboardScreen`, `area="admin"`으로 ADMIN 사이드바 유지) |
+| 스튜디오 ↔ 관리자 콘솔 전환 버튼 | "관리자 콘솔 →" = `admin.dashboard`, "← 스튜디오" = `home.dashboard` — **전환 기본 도착지는 항상 대시보드** (이전: admin.roles / create.load) |
 | 사이드바 | `AppShell` 모든 area(local/generate/admin)에서 `HOME > 대시보드`를 최상단 그룹으로 표시. **권한 조건 없음**(로그인한 모든 사용자) |
 | 헤더 | eyebrow `HOME · DASHBOARD`, 제목 `시스템 상태 · 작업 현황`, 우측 `마지막 확인 HH:MM:SS KST · 60초마다 자동 갱신` + **새로고침** |
 
