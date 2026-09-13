@@ -55,16 +55,17 @@ class SandboxPodLifecycleTimestampTests(unittest.TestCase):
     def test_keeps_unparseable_event_without_inventing_a_time(self) -> None:
         self.assertIsNone(_lifecycle_event_timestamp("Provisioning requested by provider"))
 
-    @patch("backend.app.services.sandbox_pod_service._graphql_request")
-    def test_returns_runtime_metrics_without_exposing_provider_response_shape(self, graphql_request: object) -> None:
-        graphql_request.return_value = {
-            "pod": {
-                "runtime": {
-                    "uptimeInSeconds": 3661,
-                    "container": {"cpuPercent": 12.8, "memoryPercent": 34.2},
-                    "gpus": [{"id": "gpu-0", "gpuUtilPercent": 45.5, "memoryUtilPercent": 67.1}],
-                }
-            }
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_returns_runtime_metrics_without_exposing_provider_response_shape(self, request: object) -> None:
+        request.return_value = {
+            "id": "pod-123",
+            "status": "RUNNING",
+            "runtime": {
+                "uptime": 3661,
+                "cpu": {"util": 12.8},
+                "memory": {"util": 34.2},
+                "gpus": [{"id": "gpu-0", "util": 45.5, "memoryUtil": 67.1}],
+            },
         }
 
         result = _runtime_metrics(
@@ -78,6 +79,8 @@ class SandboxPodLifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(result["cpuPercent"], 12.8)
         self.assertEqual(result["gpus"][0]["memoryUtilPercent"], 67.1)
         self.assertEqual(result["storage"]["networkVolumeId"], "volume-1")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
+        self.assertEqual(request.call_args.args[2], "/pods/pod-123")
 
     @patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": True, "gpus": []})
     @patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY")
@@ -497,7 +500,7 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         self.assertEqual(result["selectedPodId"], "newpod00000001")
         bodies = [body for _, body in fake.posts("/pods")]
         self.assertEqual([b["gpuTypeIds"] for b in bodies], [[GPU_5090], [GPU_PRO4500]])
-        # REST v1 PodCreateInput: only known keys, no GraphQL-only flags.
+        # REST v1 PodCreateInput: only known keys, no REST v2-only flags.
         allowed = {"name", "templateId", "networkVolumeId", "gpuTypeIds", "gpuCount"}
         self.assertTrue(all(set(b) <= allowed for b in bodies), bodies)
         self.assertTrue(all("dataCenterIds" not in b for b in bodies))
@@ -749,21 +752,22 @@ class SandboxPodCatalogTests(unittest.TestCase):
         service._catalog_cache["at"] = 0.0
         service._catalog_cache["value"] = None
 
-    @patch("backend.app.services.sandbox_pod_service._graphql_request")
-    def test_catalog_reads_graphql_gpu_types_and_caches(self, graphql: object) -> None:
-        graphql.return_value = {"gpuTypes": [
-            {"id": GPU_PRO4500, "displayName": "RTX PRO 4500", "memoryInGb": 32, "securePrice": 0.72},
-            {"id": "NVIDIA L4", "displayName": "L4", "memoryInGb": 24, "securePrice": 0.49},
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_catalog_reads_rest_v2_gpu_catalog_and_caches(self, request: object) -> None:
+        request.return_value = {"gpus": [
+            {"id": GPU_PRO4500, "name": "RTX PRO 4500", "memory": 32, "price": {"secure": 0.72, "community": 0.34}},
+            {"id": "NVIDIA L4", "name": "L4", "memory": 24, "price": {"secure": 0.49}},
         ]}
 
         catalog = service._fetch_gpu_catalog(_settings())
 
-        self.assertIn("gpuTypes", graphql.call_args.args[1])
+        self.assertEqual(request.call_args.args[2], "/catalog/gpus")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
         self.assertEqual(catalog[GPU_PRO4500], {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500"})
-        graphql.side_effect = AssertionError("should be cached")
+        request.side_effect = AssertionError("should be cached")
         self.assertEqual(service._fetch_gpu_catalog(_settings())[GPU_PRO4500]["memoryInGb"], 32)
 
-    @patch("backend.app.services.sandbox_pod_service._graphql_request", side_effect=RuntimeError("Sandbox Pod runtime API HTTP 403"))
+    @patch("backend.app.services.sandbox_pod_service._request", side_effect=SandboxPodApiError(403, "forbidden"))
     def test_catalog_failure_returns_none(self, _: object) -> None:
         self.assertIsNone(service._fetch_gpu_catalog(_settings()))
 

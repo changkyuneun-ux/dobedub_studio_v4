@@ -71,6 +71,19 @@
 
 각 단계의 시도·결과는 audit log와 응답 본문에 남겨, 운영자가 "왜 이 파드/GPU로 떴는지"를 화면에서 바로 알 수 있어야 한다.
 
+### 2.3 RunPod API 사용 원칙 (2026-09-13 확정 — GraphQL 제거)
+
+| 용도 | API | 엔드포인트 |
+|---|---|---|
+| 파드 목록·조회·start·stop·create (모든 쓰기) | **REST v1** | `RUNPOD_SANDBOX_POD_REST_URL` = `https://rest.runpod.io/v1` |
+| 실시간 지표 (uptime, CPU/RAM/GPU 사용률) | **REST v2 읽기 전용** | `RUNPOD_SANDBOX_POD_REST_V2_URL` = `https://rest.runpod.io/v2` → `GET /pods/{id}` → `runtime{uptime, cpu.util, memory.util, gpus[].util/memoryUtil}` |
+| GPU 카탈로그 (VRAM·표시명·가격) | REST v2 읽기 전용 | `GET /catalog/gpus` → `{gpus:[{id,name,memory,price.secure}]}` |
+| GraphQL (`api.runpod.io/graphql`) | **사용 안 함** | `RUNPOD_SANDBOX_POD_GRAPHQL_URL`, `_GRAPHQL_API_KEY` 제거 |
+
+- v1 파드 객체에는 `runtime` 지표가 없어 v2 GET을 읽기 전용으로만 쓴다. 같은 호스트·같은 API 키(`RUNPOD_SANDBOX_POD_API_KEY`)라 추가 자격증명이 없다.
+- v2로 파드를 **만들지 않는다** — v2 create는 `template` 링크를 남기지 않고 `gpu.id` 단일값이라 v1과 동작이 다르다.
+- 지표·카탈로그 호출 실패는 상태/기동을 막지 않는다(best-effort, 기존과 동일).
+
 ## 3. 범위 밖
 
 - Serverless 엔드포인트(`RUNPOD_ENDPOINT_ID`)의 GPU 풀 변경

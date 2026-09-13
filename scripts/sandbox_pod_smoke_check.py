@@ -89,7 +89,7 @@ def main() -> None:
     ok &= check(all(pod.get("gpuTypeId") for pod in pods), "gpuTypeId present on every Pod (gpuTypeIds / gpuTypeId)")
     ok &= check(all(pod.get("pricePerHr") is not None for pod in pods), "pricePerHr present (pod.costPerHr)")
     ok &= check(all(pod.get("ramGb") is not None for pod in pods), "ramGb present (pod.memoryInGb)")
-    ok &= check(any(pod.get("vramGb") is not None for pod in pods), "vramGb resolved from GraphQL gpuTypes catalog (memoryInGb; needs GraphQL-capable key)")
+    ok &= check(any(pod.get("vramGb") is not None for pod in pods), "vramGb resolved from REST v2 GET /catalog/gpus (memory)")
     ok &= check(payload.get("resolvedBy") == "network-volume", "legacy fields resolved by network-volume", str(payload.get("resolvedBy")))
     ok &= check("settings" in payload and "autoSwitchOnStartFailure" in payload["settings"], "settings block present")
     ok &= check(isinstance(payload.get("attempts"), list), "attempts list present (GET → [])")

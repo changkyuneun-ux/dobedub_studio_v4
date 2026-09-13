@@ -4,7 +4,6 @@ import json
 import re
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -551,7 +550,7 @@ def _attempt_create(settings: Settings, attempts: list[dict]) -> tuple[dict, str
                     "gpuTypeIds": [gpu],
                     "gpuCount": settings.sandbox_pod_gpu_count,
                     # REST v1 PodCreateInput rejects unknown keys (HTTP 400 "Extra
-                    # input keys"). startJupyter/startSsh are GraphQL-only; Jupyter
+                    # input keys"). startJupyter/startSsh are GraphQL-only fields; Jupyter
                     # and SSH exposure come from the template's ports/env.
                 },
             )
@@ -644,25 +643,20 @@ _catalog_cache: dict[str, object] = {"at": 0.0, "value": None}
 def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
     """Best-effort GPU catalog → {gpuTypeId: {memoryInGb, securePrice, displayName}}.
 
-    REST v1 has no catalog endpoint (and the v2 host answers non-JSON to this
-    client), so the catalog comes from the GraphQL ``gpuTypes`` query that the
-    runtime-metrics path already uses. Cached for a few minutes; ``None`` when
-    unavailable — callers then skip VRAM filtering and fall back to local labels.
+    REST v1 has no catalog endpoint, so this reads REST v2 ``GET /catalog/gpus``
+    (same host and API key as the v1 Pod control calls). Cached for a few
+    minutes; ``None`` when unavailable — callers then skip VRAM filtering and
+    fall back to local labels.
     """
     now = time.monotonic()
     cached = _catalog_cache.get("value")
     if cached is not None and now - float(_catalog_cache.get("at") or 0.0) < _CATALOG_TTL_SECONDS:
         return cached  # type: ignore[return-value]
-    query = """
-        query SandboxGpuCatalog {
-          gpuTypes { id displayName memoryInGb securePrice }
-        }
-    """
     try:
-        response = _graphql_request(settings, query, {})
+        response = _request(settings, "GET", "/catalog/gpus", base_url=settings.sandbox_pod_rest_v2_url)
     except Exception:  # noqa: BLE001 - the catalog is optional; never break status/start on it
         return None
-    items = response.get("gpuTypes") if isinstance(response, dict) else None
+    items = response.get("gpus") if isinstance(response, dict) else response
     if not isinstance(items, list):
         return None
     catalog: dict[str, dict] = {}
@@ -672,10 +666,11 @@ def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
         gpu_id = str(item.get("id") or "").strip()
         if not gpu_id:
             continue
+        price = item.get("price") if isinstance(item.get("price"), dict) else {}
         catalog[gpu_id] = {
-            "memoryInGb": _number_or_none(item.get("memoryInGb")),
-            "securePrice": _number_or_none(item.get("securePrice")),
-            "displayName": str(item.get("displayName") or "").strip() or None,
+            "memoryInGb": _number_or_none(item.get("memory")),
+            "securePrice": _number_or_none(price.get("secure")),
+            "displayName": str(item.get("name") or "").strip() or None,
         }
     if catalog:
         _catalog_cache["at"] = now
@@ -1029,40 +1024,6 @@ def _request(settings: Settings, method: str, path: str, body: dict | None = Non
         raise SandboxPodApiError(None, f"non-JSON response from {url}: {payload[:120]!r}") from exc
 
 
-def _graphql_request(settings: Settings, query: str, variables: dict[str, str]) -> dict:
-    """Query RunPod's Pod runtime fields without exposing the API key to clients."""
-    api_key = settings.sandbox_pod_graphql_api_key.strip() or settings.sandbox_pod_api_key
-    query_string = urllib.parse.urlencode({"api_key": api_key})
-    url = f"{settings.sandbox_pod_graphql_url.rstrip('/')}?{query_string}"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
-        method="POST",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": RUNPOD_HTTP_USER_AGENT,
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=settings.sandbox_pod_timeout) as response:
-            payload = response.read().decode("utf-8")
-            parsed = json.loads(payload) if payload.strip() else {}
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Sandbox Pod runtime API HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Sandbox Pod runtime API 연결 실패: {exc.reason}") from exc
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Sandbox Pod runtime API 응답 형식이 올바르지 않습니다.")
-    errors = parsed.get("errors")
-    if errors:
-        raise RuntimeError("Sandbox Pod runtime API가 상태 정보를 반환하지 않았습니다.")
-    data = parsed.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("Sandbox Pod runtime API 응답 데이터가 없습니다.")
-    return data
-
-
 def _present_pod(settings: Settings, pod: dict, resolved_by: str) -> dict:
     pod_id = str(pod.get("id") or settings.sandbox_pod_id).strip()
     services = _http_services(pod_id, pod.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(pod))
@@ -1145,7 +1106,13 @@ def _http_services(pod_id: str, ports: list[object], *, jupyter_auth_required: b
 
 
 def _runtime_metrics(settings: Settings, pod_id: str, pod: dict) -> dict:
-    """Return best-effort runtime metrics. A metrics outage must not block Pod control."""
+    """Return best-effort runtime metrics. A metrics outage must not block Pod control.
+
+    Live utilization is not part of the REST v1 Pod object; it is read from
+    REST v2 ``GET /pods/{id}`` (``runtime.uptime``, ``runtime.cpu.util``,
+    ``runtime.memory.util``, ``runtime.gpus[].util/memoryUtil``), which is
+    served by the same host and accepts the same API key.
+    """
     storage = {
         "containerDiskInGb": _number_or_none(pod.get("containerDiskInGb")),
         "volumeInGb": _number_or_none(pod.get("volumeInGb")),
@@ -1156,36 +1123,25 @@ def _runtime_metrics(settings: Settings, pod_id: str, pod: dict) -> dict:
         "gpuType": _gpu_type_name(pod),
         "memoryInGb": _number_or_none(pod.get("memoryInGb")),
     }
-    query = """
-        query SandboxPodRuntime($podId: String!) {
-          pod(input: { podId: $podId }) {
-            runtime {
-              uptimeInSeconds
-              container { cpuPercent memoryPercent }
-              gpus { id gpuUtilPercent memoryUtilPercent }
-            }
-          }
-        }
-    """
     try:
-        response = _graphql_request(settings, query, {"podId": pod_id})
-        pod_data = response.get("pod") if isinstance(response, dict) else None
-        runtime = pod_data.get("runtime") if isinstance(pod_data, dict) else None
+        response = _request(settings, "GET", f"/pods/{pod_id}", base_url=settings.sandbox_pod_rest_v2_url)
+        runtime = response.get("runtime") if isinstance(response, dict) else None
         if not isinstance(runtime, dict):
             raise RuntimeError("Sandbox Pod runtime 정보가 아직 준비되지 않았습니다.")
-        container = runtime.get("container") if isinstance(runtime.get("container"), dict) else {}
+        cpu = runtime.get("cpu") if isinstance(runtime.get("cpu"), dict) else {}
+        memory = runtime.get("memory") if isinstance(runtime.get("memory"), dict) else {}
         gpus = runtime.get("gpus") if isinstance(runtime.get("gpus"), list) else []
         return {
             "available": True,
             "mode": "live",
-            "uptimeSeconds": _number_or_none(runtime.get("uptimeInSeconds")),
-            "cpuPercent": _number_or_none(container.get("cpuPercent")),
-            "memoryPercent": _number_or_none(container.get("memoryPercent")),
+            "uptimeSeconds": _number_or_none(runtime.get("uptime")),
+            "cpuPercent": _number_or_none(cpu.get("util")),
+            "memoryPercent": _number_or_none(memory.get("util")),
             "gpus": [
                 {
                     "id": str(gpu.get("id") or f"GPU {index + 1}"),
-                    "gpuUtilPercent": _number_or_none(gpu.get("gpuUtilPercent")),
-                    "memoryUtilPercent": _number_or_none(gpu.get("memoryUtilPercent")),
+                    "gpuUtilPercent": _number_or_none(gpu.get("util")),
+                    "memoryUtilPercent": _number_or_none(gpu.get("memoryUtil")),
                 }
                 for index, gpu in enumerate(gpus)
                 if isinstance(gpu, dict)
@@ -1251,7 +1207,7 @@ def _gpu_display_name(pod: dict) -> str | None:
 def _runtime_metric_fallback_message(error: RuntimeError) -> str:
     message = str(error)
     if "HTTP 403" in message:
-        return "실시간 CPU·메모리·GPU 사용률은 GraphQL 조회 권한이 있는 RunPod API 키가 필요합니다. 현재 Pod 구성 및 저장소 정보만 표시합니다."
+        return "실시간 CPU·메모리·GPU 사용률(REST v2 /pods/{id}) 조회 권한이 없는 API 키입니다. 현재 Pod 구성 및 저장소 정보만 표시합니다."
     return "실시간 런타임 상태를 불러오지 못했습니다. 현재 Pod 구성 및 저장소 정보만 표시합니다."
 
 
