@@ -12,6 +12,7 @@ from backend.app.services.dashboard_service import (
     _classify_status,
     _evaluate_alerts,
     _range_bounds,
+    _seconds_between_for_dialect,
     dashboard_summary,
 )
 
@@ -202,3 +203,14 @@ def test_sandbox_block_flags_duplicate_stopped_pods(db_session):
     assert result["sandbox"]["duplicateStoppedPodIds"] == ["p3"]
     assert "sandbox_duplicate_pod" in [a["id"] for a in result["alerts"]]
     dashboard_service._sandbox_cache["value"] = None
+
+
+def test_seconds_between_compiles_per_dialect():
+    # 2026-09-13 hotfix: 프로덕션 MySQL에서 julianday가 나가 500이 났다.
+    from sqlalchemy.dialects import mysql, postgresql, sqlite
+
+    later, earlier = WorkflowTask.started_at, WorkflowTask.created_at
+    assert "TIMESTAMPDIFF(SECOND" in str(_seconds_between_for_dialect("mysql", later, earlier).compile(dialect=mysql.dialect())).upper()
+    assert "TIMESTAMPDIFF(SECOND" in str(_seconds_between_for_dialect("mariadb", later, earlier).compile(dialect=mysql.dialect())).upper()
+    assert "EXTRACT(EPOCH" in str(_seconds_between_for_dialect("postgresql", later, earlier).compile(dialect=postgresql.dialect())).upper()
+    assert "JULIANDAY" in str(_seconds_between_for_dialect("sqlite", later, earlier).compile(dialect=sqlite.dialect())).upper()

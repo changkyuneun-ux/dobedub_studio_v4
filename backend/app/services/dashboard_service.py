@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import case, distinct, func, select
+from sqlalchemy import case, distinct, func, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import Settings, get_settings
@@ -141,7 +141,20 @@ def _status_upper():
 
 
 def _seconds_between(session: Session, later, earlier):
-    dialect = session.get_bind().dialect.name if session.get_bind() is not None else "sqlite"
+    """``later - earlier`` in seconds for the session's dialect.
+
+    2026-09-13 hotfix: production runs MySQL (pymysql) — the first release only
+    branched postgresql/sqlite and sent SQLite's ``julianday`` to MySQL
+    (``FUNCTION julianday does not exist``).
+    """
+    bind = session.get_bind()
+    dialect = bind.dialect.name if bind is not None else "sqlite"
+    return _seconds_between_for_dialect(dialect, later, earlier)
+
+
+def _seconds_between_for_dialect(dialect: str, later, earlier):
+    if dialect in {"mysql", "mariadb"}:
+        return func.timestampdiff(text("SECOND"), earlier, later)
     if dialect == "postgresql":
         return func.extract("epoch", later - earlier)
     return (func.julianday(later) - func.julianday(earlier)) * 86400.0
