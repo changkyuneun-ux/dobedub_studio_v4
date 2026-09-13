@@ -147,6 +147,20 @@ DB에는 파일 바이너리를 저장하지 않습니다. DB에는 `asset_id`, 
 - S3 backend는 장기 전환 후보일 뿐 현재 운영 task definition에는 설정하지 않습니다.
 - 로컬 개발 데이터와 EFS/RDS 운영 데이터는 자동 동기화하지 않습니다. 운영 data migration은 별도 승인·실행 대상입니다.
 
+## 이미지 컷 분할 로컬 처리
+
+`이미지 컷 분할`은 ECS 작업 큐나 서버 파일 저장소를 사용하지 않는 브라우저 로컬 기능입니다.
+
+- ECS task는 로그인, HTML/JS 번들, PDF/ZIP/컷 분할 정책 코드만 제공합니다.
+- 사용자의 PDF·이미지·ZIP 원본 바이트, 결과 PNG, `_debug/`, `summary.csv`, `manifest.json`은 ECS·EFS·S3·RDS로 업로드하지 않습니다.
+- 이 기능을 위해 FastAPI media upload/download API, DB migration, EFS 용량 증설, S3 bucket 정책을 추가하지 않습니다.
+- 컷 분할 실행은 브라우저 Web Worker에서 수행합니다. 화면 전환은 실행 중 worker와 상태 store를 유지하며, 새로고침/탭 닫기 후에는 IndexedDB에 저장된 File System Access handle과 출력 `manifest.json`을 기준으로 검증된 PNG 단위를 건너뛰고 누락 단위만 재처리합니다.
+- 입력 폴더는 read-only 권한으로 열고, 출력 작업 폴더만 readwrite 권한을 요청합니다. 시스템 폴더(`System`, `Library`, `Applications`, `Users`, `Volumes` 등)는 작업 폴더로 허용하지 않습니다.
+- PDF.js worker, 컷 분할 worker, ZIP/픽셀 처리 코드는 immutable frontend build asset으로 포함됩니다.
+- 운영 검증 시 브라우저 Network 탭, ECS 로그, EFS, S3, RDS에 원본 파일명·media MIME·media 크기 request body가 남지 않는지 확인합니다.
+
+배포 관점에서 이 기능은 “ECS 제공 + 브라우저 로컬 실행”입니다. ECS가 사용자 Mac/Windows 로컬 디렉토리에 직접 접근할 수 없으므로, 서버 처리로 전환하려면 업로드/다운로드 요구사항 변경 승인이 먼저 필요합니다.
+
 ## 이미지 빌드
 
 ```bash

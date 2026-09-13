@@ -1,6 +1,6 @@
 # DOBEDUB STUDIO (ComfyUI Video Studio App) v4
 
-RunPod Serverless ComfyUI에서 실행되는 WAN Image-to-Video 워크플로우를, 사내 사용자가 웹 UI로 실행·검수·관리할 수 있게 하는 프로젝트입니다. React(TypeScript) 프론트엔드와 FastAPI 백엔드가 한 서버에서 함께 동작하며, 프로젝트 내부 `workflows/`의 ComfyUI Export(API) JSON을 읽어 workflow/segment schema를 만들고, `.env` 설정에 따라 dry-run 또는 실제 RunPod Serverless endpoint로 작업을 제출합니다. 프롬프트는 정형화된 카탈로그(포지티브/네거티브 용어 트리)를 조합해 RunPod vLLM(Qwen)으로 생성합니다.
+RunPod Serverless ComfyUI에서 실행되는 WAN Image-to-Video 워크플로우를, 사내 사용자가 웹 UI로 실행·검수·관리할 수 있게 하는 프로젝트입니다. React(TypeScript) 프론트엔드와 FastAPI 백엔드가 한 서버에서 함께 동작하며, 프로젝트 내부 `workflows/`의 ComfyUI Export(API) JSON을 읽어 workflow/segment schema를 만들고, `.env` 설정에 따라 dry-run 또는 실제 RunPod Serverless endpoint로 작업을 제출합니다. 프롬프트는 정형화된 카탈로그(포지티브/네거티브 용어 트리)를 조합해 RunPod vLLM(Qwen)으로 생성합니다. 또한 `LOCAL` 영역의 `이미지 컷 분할`은 PDF·이미지·ZIP을 향후 I2V 입력용 PNG 컷으로 나누되, 원본과 결과를 서버로 업로드/다운로드하지 않고 데스크톱 Chrome/Edge 브라우저의 로컬 파일 시스템에서만 처리합니다.
 
 v4는 `design_handoff_dobedub_v3/`의 설계 문서를 기준으로 화면 전체를 업무 흐름(S1~S5) 단위로 전면 재구축한 버전입니다. 기능 단위로 흩어져 있던 구버전(v3) 모달·페이지 구조를 걷어내고, 사이드바 212px + 헤더 + 본문 + 우측 패널의 공통 레이아웃(`AppShell`)을 모든 화면이 공유하도록 다시 짰습니다.
 
@@ -69,7 +69,13 @@ http://127.0.0.1:8787/studio
 
 ## 업무 흐름과 화면 구성
 
-로그인 후 좌측 사이드바는 **GENERATE**(영상 생성 흐름)와 **ADMIN**(관리자 콘솔) 두 영역을 오가며, 두 영역 모두 하단에 **HELP**(User Manual · System Status · Metadata) 그룹을 둡니다. 아래 표의 화면 id는 `design_handoff_dobedub_v3/Screen Map.dc.html` 기준입니다.
+로그인 후 좌측 사이드바는 **LOCAL**(브라우저 로컬 파일 처리), **GENERATE**(영상 생성 흐름), **ADMIN**(관리자 콘솔) 영역을 제공합니다. `LOCAL`은 서버 작업 큐·EFS/S3/RDS 산출물 저장 구조와 분리되어 있으며, `GENERATE`와 `ADMIN`은 하단에 **HELP**(User Manual · System Status · Metadata) 그룹을 둡니다. 아래 표의 화면 id는 `design_handoff_dobedub_v3/Screen Map.dc.html` 기준입니다.
+
+### LOCAL — 브라우저 로컬 처리
+
+| 화면 | 라우트 | 설명 |
+|---|---|---|
+| 이미지 컷 분할 | `/studio/webtoon-cuts` | PDF/JPG/JPEG/PNG/WEBP/ZIP/폴더를 선택하거나 끌어놓아 `<입력명>_cuts`에 PNG 컷, `summary.csv`, `manifest.json`, `_debug/`를 생성합니다. ECS와 로컬 개발 서버는 동일한 화면·정책 코드만 제공하며 media bytes는 서버로 전송하지 않습니다. |
 
 ### 1 Access — 접속 · 안내
 

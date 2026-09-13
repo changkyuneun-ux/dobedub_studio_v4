@@ -154,6 +154,7 @@ def get_file(
             length = end - start + 1
             headers["Content-Range"] = f"bytes {start}-{end}/{stored.size_bytes}"
             headers["Content-Length"] = str(length)
+            headers["Content-Encoding"] = "identity"
             return StreamingResponse(
                 _iter_s3_object_range(
                     storage_key,
@@ -225,6 +226,7 @@ def get_file(
         length = end - start + 1
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
         headers["Content-Length"] = str(length)
+        headers["Content-Encoding"] = "identity"
         return StreamingResponse(
             _iter_file_range(
                 asset_path,

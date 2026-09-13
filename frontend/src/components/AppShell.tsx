@@ -38,7 +38,7 @@ export const AppShellChromeContext = React.createContext<AppShellChrome | null>(
 // 상태로 보여준다(design_handoff의 표시 방식과 동일) - "감사 로그"는 A-04에서
 // 구현이 끝나 더 이상 이 처리 대상이 아니다.
 
-export type AppShellArea = "generate" | "admin";
+export type AppShellArea = "local" | "generate" | "admin";
 
 type NavItem = {
   key: string;
@@ -60,6 +60,10 @@ const GENERATE_NAV_ITEMS: NavItem[] = [
   // 화면으로 통합 - 사이드바 메뉴도 컬렉션 관리 하나로 줄었다(컬렉션은 그 화면
   // 안의 필터로 이동).
   { key: "assets", label: "Collection 관리", permission: "history:read" }
+];
+
+const LOCAL_NAV_ITEMS: NavItem[] = [
+  { key: "webtoonCuts", label: "이미지 컷 분할", permission: "jobs:run" }
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.
@@ -114,14 +118,21 @@ export function AppShell({
   rightPanel,
   children
 }: AppShellProps) {
-  const navItems = area === "admin" ? ADMIN_NAV_ITEMS : GENERATE_NAV_ITEMS;
-  const groupLabel = area === "admin" ? "ADMIN" : "GENERATE";
-  const visibleNavItems = navItems.filter((item) => {
+  const navGroups = area === "admin"
+    ? [{ label: "ADMIN", items: ADMIN_NAV_ITEMS }]
+    : [
+      { label: "LOCAL", items: LOCAL_NAV_ITEMS },
+      { label: "GENERATE", items: GENERATE_NAV_ITEMS }
+    ];
+  const visibleNavGroups = navGroups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
     if (item.permissions?.length) {
       return item.permissions.every((permission) => canUse(user, permission));
     }
     return !item.permission || canUse(user, item.permission);
-  });
+    })
+  })).filter((group) => group.items.length);
   const chrome = React.useContext(AppShellChromeContext);
 
   // HELP 그룹: design_handoff 6b의 사이드바가 GENERATE 그룹 아래 두는 HELP 묶음
@@ -160,29 +171,33 @@ export function AppShell({
           </div>
         ) : null}
 
-        <div className="v3-sidebar-group-label">{groupLabel}</div>
-        <div className="v3-sidebar-nav">
-          {visibleNavItems.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
-              disabled={item.unimplemented}
-              aria-current={item.key === activeItem ? "page" : undefined}
-              onClick={() => {
-                if (!item.unimplemented) {
-                  onNavigate(item.key);
-                }
-              }}
-            >
-              <span>{item.label}</span>
-              {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
-            </button>
-          ))}
-        </div>
+        {visibleNavGroups.map((group) => (
+          <React.Fragment key={group.label}>
+            <div className="v3-sidebar-group-label">{group.label}</div>
+            <div className="v3-sidebar-nav">
+              {group.items.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
+                  disabled={item.unimplemented}
+                  aria-current={item.key === activeItem ? "page" : undefined}
+                  onClick={() => {
+                    if (!item.unimplemented) {
+                      onNavigate(item.key);
+                    }
+                  }}
+                >
+                  <span>{item.label}</span>
+                  {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
+                </button>
+              ))}
+            </div>
+          </React.Fragment>
+        ))}
 
         {/* HELP 그룹(GENERATE 영역에서만). ADMIN 영역은 자체 nav에 Status/Metadata를 이미 둔다. */}
-        {area === "generate" && chrome && visibleHelpItems.length ? (
+        {area !== "admin" && chrome && visibleHelpItems.length ? (
           <>
             <div className="v3-sidebar-group-label">HELP</div>
             <div className="v3-sidebar-nav">
