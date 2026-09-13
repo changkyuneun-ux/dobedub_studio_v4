@@ -38,6 +38,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
         return;
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
+        webtoonCutJobStore.reportInputError(error);
+        return;
       }
     }
     fileInput.current?.click();
@@ -51,6 +53,9 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
         return;
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
+        // 2026-09-13: 이전엔 조용히 삼켜 "폴더 선택 시 무반응"으로 보였다 - 화면에 표시
+        webtoonCutJobStore.reportInputError(error);
+        return;
       }
     }
     setDragging(false);
@@ -63,22 +68,31 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
       await webtoonCutJobStore.connectDefaultWorkspace(directory);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
+      webtoonCutJobStore.reportInputError(error);
     }
   }
 
   async function chooseFiles(files: FileList | null) {
     if (!files?.length) return;
-    await webtoonCutJobStore.selectFiles([...files]);
+    try {
+      await webtoonCutJobStore.selectFiles([...files]);
+    } catch (error) {
+      webtoonCutJobStore.reportInputError(error);
+    }
   }
 
   async function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    if (event.dataTransfer.items.length) {
-      await webtoonCutJobStore.selectDroppedItems(event.dataTransfer.items);
-      return;
+    try {
+      if (event.dataTransfer.items.length) {
+        await webtoonCutJobStore.selectDroppedItems(event.dataTransfer.items);
+        return;
+      }
+      await webtoonCutJobStore.selectFiles([...event.dataTransfer.files]);
+    } catch (error) {
+      webtoonCutJobStore.reportInputError(error);
     }
-    await webtoonCutJobStore.selectFiles([...event.dataTransfer.files]);
   }
 
   return (
@@ -126,6 +140,12 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
               onChange={(event) => void chooseFiles(event.target.files)}
             />
             <small>파일 또는 폴더 선택 / 끌어놓기. PDF · JPG · PNG · WEBP · GIF · ZIP · 폴더. 작업 요청 시 출력 폴더를 다시 묻지 않습니다. 작업 폴더 권한이 없으면 작업 요청은 비활성화됩니다.</small>
+            {snapshot.units.length ? (
+              <div className="v3-webtoon-cut-selected" aria-label="선택한 입력">
+                <strong title={snapshot.units.map((unit) => unit.sourcePath).join("\n")}>{snapshot.inputLabel}</strong>
+                <small>{snapshot.workLocation === "브라우저 선택 파일" ? "선택 파일" : `폴더 ${snapshot.inputName}`} · {snapshot.units.length}개</small>
+              </div>
+            ) : null}
           </div>
 
           <div className="v3-webtoon-cut-action">
@@ -154,8 +174,9 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
         <div className="v3-batch-section-title"><span>2</span><strong>진행 중 작업</strong><em>다른 화면 이동 후 재진입해도 현재 탭의 작업 핸들을 유지</em></div>
         <div className="v3-webtoon-cut-running">
           <div className="v3-webtoon-cut-progress">
-            <strong>{snapshot.jobId || "CUT-대기"}</strong>
-            <span>{snapshot.inputName || "입력 대기"}</span>
+            {/* 2026-09-13: job id 대신 처리 중인 원본 파일명을 주 표시로, job id는 보조로 */}
+            <strong title={snapshot.currentSourcePath || undefined}>{currentSourceLabel(snapshot.currentSourcePath, snapshot.inputLabel || snapshot.inputName, snapshot.status)}</strong>
+            <span>{snapshot.jobId ? `${snapshot.jobId} · ${snapshot.inputLabel || snapshot.inputName || "-"}` : "CUT-대기 · 입력 대기"}</span>
             <div className="v3-webtoon-cut-progressbar"><i style={{ width: `${progress}%` }} /></div>
             <small>{snapshot.completedUnits} / {snapshot.totalUnits} · {progress}%</small>
           </div>
@@ -232,4 +253,10 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
       </section>
     </AppShell>
   );
+}
+
+function currentSourceLabel(currentSourcePath: string, inputName: string, status: string): string {
+  if (currentSourcePath) return currentSourcePath.split("/").pop() || currentSourcePath;
+  if (status === "running") return "처리 준비 중";
+  return inputName || "입력 대기";
 }

@@ -159,7 +159,15 @@ function toDirectoryPort(directory: FileSystemDirectoryHandle | DirectoryPort): 
 }
 
 function isDirectoryPort(directory: FileSystemDirectoryHandle | DirectoryPort): directory is DirectoryPort {
-  return typeof (directory as DirectoryPort).entries === "function";
+  // 2026-09-13: 브라우저의 실제 FileSystemDirectoryHandle도 entries()를 갖지만
+  // [name, handle] 튜플을 내놓기 때문에 DirectoryPort로 오인하면 collectInputs가
+  // entry.name=undefined로 순회하다 TypeError를 던진다(폴더 선택 무반응 버그).
+  // 네이티브 핸들은 values()/keys()를 추가로 가지므로 이를 기준으로 구분한다.
+  if (typeof globalThis.FileSystemDirectoryHandle !== "undefined" && directory instanceof globalThis.FileSystemDirectoryHandle) {
+    return false;
+  }
+  const candidate = directory as DirectoryPort & { values?: unknown };
+  return typeof candidate.entries === "function" && typeof candidate.values !== "function";
 }
 
 class BrowserFilePort implements FilePort {
