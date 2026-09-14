@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bytes, MemoryDirectory } from "./__fixtures__/memoryDirectory";
-import { canRunWebtoonCutInWorker, findSelectedInputIndexForUnitId, outputsAfterReviewReplacement, resolveReviewTargetOutput, reviewTargetOutputs, webtoonCutJobStore, type WebtoonCutOutput, type WebtoonCutUnit } from "./webtoonCutStore";
+import { canRunWebtoonCutInWorker, findSelectedInputIndexForUnitId, hasResumableProgress, outputsAfterReviewReplacement, resolveReviewTargetOutput, reviewTargetOutputs, webtoonCutJobStore, type WebtoonCutOutput, type WebtoonCutUnit } from "./webtoonCutStore";
 
 describe("webtoon cut UI store", () => {
   it("keeps file jobs disabled until a non-system work folder is connected", async () => {
@@ -35,6 +35,35 @@ describe("webtoon cut UI store", () => {
       notice: ""
     });
     expect(workspace.files()).toContain("sample_cuts");
+  });
+
+  it("treats a manifest with no completed units as nothing to resume", async () => {
+    // 2026-09-14: 새로고침 직후엔 진짜 "실행 중" 작업이 있을 수 없다(워커/네트워크
+    // 상태가 전부 사라짐) — output 폴더의 manifest에 완료된 단위가 하나도 없다면
+    // 이전에 한 번도 실행되지 않은 입력 선택일 뿐이므로 복원 대상이 아니다.
+    const outputDir = new MemoryDirectory("sample_cuts", {
+      "manifest.json": new TextEncoder().encode(JSON.stringify({ ledger: [{ unitId: "a", status: "pending" }] }))
+    });
+
+    expect(await hasResumableProgress(outputDir as unknown as FileSystemDirectoryHandle)).toBe(false);
+  });
+
+  it("treats a manifest with at least one completed unit as resumable", async () => {
+    // 탭이 중간에 닫히는 등 정상 중단 경로를 타지 못해 일부 단위가 이미 완료된 채
+    // manifest.json이 남아있는 경우에만 "이어서 처리" 복원이 의미가 있다.
+    const outputDir = new MemoryDirectory("sample_cuts", {
+      "manifest.json": new TextEncoder().encode(JSON.stringify({
+        ledger: [{ unitId: "a", status: "completed" }, { unitId: "b", status: "pending" }]
+      }))
+    });
+
+    expect(await hasResumableProgress(outputDir as unknown as FileSystemDirectoryHandle)).toBe(true);
+  });
+
+  it("treats a missing manifest as nothing to resume", async () => {
+    const outputDir = new MemoryDirectory("sample_cuts", {});
+
+    expect(await hasResumableProgress(outputDir as unknown as FileSystemDirectoryHandle)).toBe(false);
   });
 
   it("maps review ledger unit ids back to the selected image input for reprocessing", () => {

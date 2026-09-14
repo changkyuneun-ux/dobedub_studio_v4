@@ -2,7 +2,7 @@ import { createElement, Fragment, useEffect, useSyncExternalStore, type ReactNod
 import { ENGINE_VERSION, MANIFEST_SCHEMA_VERSION, PAGE_POLICY, PDF_RENDER_SCALE, STRIP_POLICY, TRANSITION_POLICY } from "./constants";
 import { discoverInputs, type FilePort } from "./filesystem";
 import { classifySourceName, sourceUnitId, type SourceInputItem } from "./inputSources";
-import { runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
+import { readExistingManifest, runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
 import { clearPersistedInputs, hasHandlePermission, loadPersistedWebtoonCutSession, persistInputDirectoryHandle, persistInputFileHandles, persistWorkspaceHandle } from "./persistence";
 import { serializeSummary } from "./artifacts";
 import type { GeneratedOutput, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WorkerEvent } from "./types";
@@ -292,7 +292,7 @@ export const webtoonCutJobStore = {
         return;
       }
       await this.selectDirectory(persisted.inputDirectoryHandle);
-      setSnapshot({ notice: "이전 폴더 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+      await finishRestoreOrClearIfNoProgress("이전 폴더 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다.");
       return;
     }
     if (persisted.inputMode === "files" && persisted.fileHandles?.length) {
@@ -302,7 +302,7 @@ export const webtoonCutJobStore = {
         return;
       }
       await this.selectFileHandles(persisted.fileHandles);
-      setSnapshot({ notice: "이전 파일 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+      await finishRestoreOrClearIfNoProgress("이전 파일 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다.");
     }
   },
   async selectDroppedItems(items: DataTransferItemList) {
@@ -434,6 +434,36 @@ export const webtoonCutJobStore = {
     }
   }
 };
+
+/**
+ * 2026-09-14: 사용자 요청 - "진행 중 작업"이 실제로 없으면 새로고침 후 복원하지 않고
+ * 입력 대기 상태로 되돌린다. 새로고침이 일어나는 순간 실행 중이던 워커/네트워크 상태는
+ * 전부 사라지므로, F5 직후에는 진짜 "실행 중" 작업이 존재할 수 없다 — 유일하게 재개할
+ * 가치가 있는 경우는 이전 실행이 output 폴더에 남긴 manifest.json에 실제로 완료된
+ * 단위(status: "completed")가 하나라도 있을 때뿐이다(=중간에 탭이 닫히는 등으로 정상
+ * 중단 경로를 타지 못한 진짜 미완료 작업). 그 외(한 번도 실행하지 않고 입력만 선택해둔
+ * 경우 등)는 복원할 "진행 중 작업"이 없는 것이므로 조용히 초기화한다.
+ */
+export async function hasResumableProgress(root: FileSystemDirectoryHandle): Promise<boolean> {
+  const manifest = await readExistingManifest(root);
+  return Boolean(manifest?.ledger?.some((unit) => unit.status === "completed"));
+}
+
+async function finishRestoreOrClearIfNoProgress(resumeNotice: string) {
+  const resumable = outputRootHandle ? await hasResumableProgress(outputRootHandle) : false;
+  if (resumable) {
+    setSnapshot({ notice: resumeNotice });
+    return;
+  }
+  await clearPersistedInputs();
+  releasePreviewUrls(snapshot.units);
+  selectedInputs = [];
+  outputRootHandle = null;
+  // createInitialSnapshot()는 defaultWorkspaceHandle 모듈 변수를 그대로 반영하므로
+  // 위에서 복원해둔 작업 폴더 연결(defaultWorkspaceReady/Name)은 그대로 유지된다.
+  snapshot = { ...createInitialSnapshot(snapshot.sessionOwnerId), notice: "" };
+  emit();
+}
 
 async function resetInputsAfterCancel() {
   await clearPersistedInputs();

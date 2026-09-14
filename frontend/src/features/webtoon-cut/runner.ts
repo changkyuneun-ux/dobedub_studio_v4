@@ -275,7 +275,7 @@ function countFlags(ledger: UnitLedgerEntry[]) {
   return counts;
 }
 
-async function readExistingManifest(root: DirectoryPort | FileSystemDirectoryHandle): Promise<WebtoonCutManifest | null> {
+export async function readExistingManifest(root: DirectoryPort | FileSystemDirectoryHandle): Promise<WebtoonCutManifest | null> {
   try {
     const handle = await root.getFileHandle("manifest.json");
     const file = await handle.getFile();
