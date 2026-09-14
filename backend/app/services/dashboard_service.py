@@ -8,6 +8,7 @@ failure is isolated into ``sandbox.error`` so the rest of the dashboard renders.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,8 +45,13 @@ FAILURE_SPIKE_MIN_COUNT = 3
 FAILURE_SPIKE_MIN_SAMPLE = 5
 FAILURE_SPIKE_RATE = 0.30
 
+# 2026-09-13 성능: Sandbox 블록은 stale-while-revalidate. 요청은 캐시(만료돼도)를 즉시 돌려주고
+# 갱신은 백그라운드 스레드가 한다. 캐시가 아예 없으면 pending=True로 응답하고 프론트가 잠시 후
+# 재조회한다 — RunPod 호출(수 초, 최대 20초)이 대시보드 응답 시간에 더해지지 않게.
 _SANDBOX_CACHE_TTL_SECONDS = 30.0
 _sandbox_cache: dict[str, object] = {"at": 0.0, "value": None}
+_sandbox_refresh_lock = threading.Lock()
+_sandbox_refreshing = False
 
 
 # --- pure helpers ------------------------------------------------------------
@@ -314,7 +320,8 @@ def _worker(session: Session) -> dict:
 def _recent_hour(session: Session, until: datetime) -> dict:
     since = until - timedelta(hours=1)
     status = _status_upper()
-    window = [_live_tasks(), WorkflowTask.updated_at >= since, WorkflowTask.updated_at < until]
+    # created_at 하한(30일)으로 인덱스 범위 스캔을 유도한다(updated_at에는 인덱스가 없음).
+    window = [_live_tasks(), WorkflowTask.created_at >= until - timedelta(days=30), WorkflowTask.updated_at >= since, WorkflowTask.updated_at < until]
     row = session.execute(
         select(
             func.sum(case((status.in_(FAILED_STATUSES), 1), else_=0)),
@@ -359,41 +366,81 @@ def _system_block(settings: Settings) -> dict:
     }
 
 
-def _sandbox_block(settings: Settings, session: Session, *, use_cache: bool = True) -> dict:
-    now = time.monotonic()
-    cached = _sandbox_cache.get("value")
-    if use_cache and cached is not None and now - float(_sandbox_cache.get("at") or 0.0) < _SANDBOX_CACHE_TTL_SECONDS:
-        return dict(cached)  # type: ignore[arg-type]
-    from backend.app.services.sandbox_pod_service import sandbox_pod_is_configured, sandbox_pod_status
+def _sandbox_block(settings: Settings, session: Session, *, use_cache: bool = True, sync: bool = False) -> dict:
+    """Return the Sandbox tile block without blocking on RunPod.
+
+    ``sync=True`` (tests / explicit refresh) computes inline. Otherwise a fresh cache is
+    returned as-is, a stale cache is returned while a background refresh runs, and an
+    empty cache yields ``pending=True`` (the frontend re-polls shortly after).
+    """
+    from backend.app.services.sandbox_pod_service import sandbox_pod_is_configured
 
     if not sandbox_pod_is_configured(settings):
-        value = _empty_sandbox(configured=False)
-    else:
+        return _empty_sandbox(configured=False)
+    now = time.monotonic()
+    cached = _sandbox_cache.get("value")
+    fresh = cached is not None and now - float(_sandbox_cache.get("at") or 0.0) < _SANDBOX_CACHE_TTL_SECONDS
+    if sync or not use_cache:
+        return _refresh_sandbox_cache(settings)
+    if cached is not None and fresh:
+        return dict(cached)  # type: ignore[arg-type]
+    _start_sandbox_refresh(settings)
+    if cached is not None:
+        return {**cached, "stale": True}  # type: ignore[dict-item]
+    return {**_empty_sandbox(configured=True), "pending": True}
+
+
+def _start_sandbox_refresh(settings: Settings) -> None:
+    global _sandbox_refreshing
+    with _sandbox_refresh_lock:
+        if _sandbox_refreshing:
+            return
+        _sandbox_refreshing = True
+
+    def _run() -> None:
+        global _sandbox_refreshing
         try:
-            status = sandbox_pod_status(settings, session, include_live=False)
-            pods = list(status.get("pods") or [])
-            stopped_by_gpu: dict[str, list[str]] = {}
-            for pod in pods:
-                if str(pod.get("desiredStatus") or "").upper() == "EXITED" and pod.get("gpuTypeId"):
-                    stopped_by_gpu.setdefault(str(pod["gpuTypeId"]), []).append(str(pod.get("podId")))
-            duplicates = [pod_id for ids in stopped_by_gpu.values() if len(ids) > 1 for pod_id in ids[1:]]
-            value = {
-                "configured": True,
-                "activePodId": status.get("activePodId"),
-                "activePodName": status.get("activePodName") or status.get("podName"),
-                "desiredStatus": status.get("desiredStatus"),
-                "gpuTier": status.get("gpuTier"),
-                "gpuTypeId": status.get("gpuTypeId"),
-                "podCount": len(pods),
-                "runningCount": sum(1 for pod in pods if str(pod.get("desiredStatus") or "").upper() == "RUNNING"),
-                "conflict": bool(status.get("conflict")),
-                "duplicateStoppedPodIds": duplicates,
-                "error": None,
-            }
-        except Exception as exc:  # noqa: BLE001 - isolate RunPod failures into the tile
-            LOGGER.warning("dashboard sandbox block failed: %s", exc)
-            value = {**_empty_sandbox(configured=True), "error": f"{type(exc).__name__}: {exc}"}
-    _sandbox_cache["at"] = now
+            _refresh_sandbox_cache(settings)
+        finally:
+            with _sandbox_refresh_lock:
+                _sandbox_refreshing = False
+
+    threading.Thread(target=_run, name="dashboard-sandbox-refresh", daemon=True).start()
+
+
+def _refresh_sandbox_cache(settings: Settings) -> dict:
+    """Call RunPod (list only, no probes) and store the tile block. Uses its own DB session."""
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.sandbox_pod_service import sandbox_pod_status
+
+    db = SessionLocal()
+    try:
+        status = sandbox_pod_status(settings, db, include_live=False)
+        pods = list(status.get("pods") or [])
+        stopped_by_gpu: dict[str, list[str]] = {}
+        for pod in pods:
+            if str(pod.get("desiredStatus") or "").upper() == "EXITED" and pod.get("gpuTypeId"):
+                stopped_by_gpu.setdefault(str(pod["gpuTypeId"]), []).append(str(pod.get("podId")))
+        duplicates = [pod_id for ids in stopped_by_gpu.values() if len(ids) > 1 for pod_id in ids[1:]]
+        value = {
+            "configured": True,
+            "activePodId": status.get("activePodId"),
+            "activePodName": status.get("activePodName") or status.get("podName"),
+            "desiredStatus": status.get("desiredStatus"),
+            "gpuTier": status.get("gpuTier"),
+            "gpuTypeId": status.get("gpuTypeId"),
+            "podCount": len(pods),
+            "runningCount": sum(1 for pod in pods if str(pod.get("desiredStatus") or "").upper() == "RUNNING"),
+            "conflict": bool(status.get("conflict")),
+            "duplicateStoppedPodIds": duplicates,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001 - isolate RunPod failures into the tile
+        LOGGER.warning("dashboard sandbox block failed: %s", exc)
+        value = {**_empty_sandbox(configured=True), "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        db.close()
+    _sandbox_cache["at"] = time.monotonic()
     _sandbox_cache["value"] = value
     return dict(value)
 
@@ -411,6 +458,8 @@ def _empty_sandbox(*, configured: bool) -> dict:
         "conflict": False,
         "duplicateStoppedPodIds": [],
         "error": None,
+        "pending": False,
+        "stale": False,
     }
 
 
@@ -425,6 +474,7 @@ def dashboard_summary(
     now: datetime | None = None,
     settings: Settings | None = None,
     include_sandbox: bool = True,
+    sandbox_sync: bool = False,
 ) -> dict:
     settings = settings or get_settings()
     current = now or utc_now().replace(tzinfo=None)
@@ -432,7 +482,7 @@ def dashboard_summary(
     limit = max(1, min(int(limit or RECENT_LIMIT_DEFAULT), RECENT_LIMIT_MAX))
     worker = _worker(session)
     db = migration_status(session)
-    sandbox = _sandbox_block(settings, session) if include_sandbox else _empty_sandbox(configured=False)
+    sandbox = _sandbox_block(settings, session, sync=sandbox_sync) if include_sandbox else _empty_sandbox(configured=False)
     recent_hour = _recent_hour(session, until)
     return {
         "range": range_key,

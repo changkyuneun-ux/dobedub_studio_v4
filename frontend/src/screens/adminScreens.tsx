@@ -514,6 +514,27 @@ function sandboxPrice(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "-";
 }
 
+// 2026-09-13: RunPod 카탈로그 재고 등급 → 배지 라벨/톤. 조회 실패·미조회(null/undefined)는
+// 배지를 아예 표시하지 않는다(정보 없음과 "재고 없음(NONE)"을 혼동하지 않도록).
+const SANDBOX_STOCK_LABEL: Record<string, string> = {
+  HIGH: "재고 충분",
+  MEDIUM: "재고 보통",
+  LOW: "재고 부족",
+  NONE: "재고 없음",
+};
+const SANDBOX_STOCK_TONE: Record<string, string> = {
+  HIGH: "is-ready",
+  MEDIUM: "is-pending",
+  LOW: "is-pending",
+  NONE: "is-failed",
+};
+
+function sandboxStockBadge(level?: string | null): { label: string; tone: string } | null {
+  const key = String(level || "").toUpperCase();
+  if (!key || !(key in SANDBOX_STOCK_LABEL)) return null;
+  return { label: SANDBOX_STOCK_LABEL[key], tone: SANDBOX_STOCK_TONE[key] };
+}
+
 function sandboxAttemptTarget(attempt: SandboxPodAttempt) {
   if (attempt.stage === "create") return sandboxGpuLabel({ gpuTypeId: attempt.gpuTypeId });
   if (attempt.podName) return attempt.podName.replace(/^dobedub_comfyUI_Sandbox_?/, "") || attempt.podName;
@@ -872,6 +893,17 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
                       <strong>{sandboxPodName(pod)}</strong>
                       {pod.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}
                       {pod.gpuTier === "primary" ? <span className="v3-status-badge is-ready">primary</span> : null}
+                      {(() => {
+                        const stock = sandboxStockBadge(pod.gpuStockLevel);
+                        return stock ? (
+                          <span
+                            className={`v3-status-badge ${stock.tone}`}
+                            title="같은 GPU 타입을 지금 새로 생성할 때의 RunPod 재고(참고용) — 이 파드 자체의 가용성과는 다릅니다."
+                          >
+                            {stock.label}
+                          </span>
+                        ) : null;
+                      })()}
                     </span>
                     <span className="v3-sandbox-pod-id">{pod.podId} · {pod.gpuTypeId || sandboxGpuLabel(pod)}</span>
                   </span>

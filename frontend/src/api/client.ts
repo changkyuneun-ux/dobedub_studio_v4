@@ -211,6 +211,9 @@ export type SandboxPodSummary = {
   vramGb?: number | null;
   ramGb?: number | null;
   pricePerHr?: number | null;
+  // 2026-09-13: RunPod 카탈로그 재고 등급(NONE/LOW/MEDIUM/HIGH). 카탈로그 미조회 시 null —
+  // "이 파드 자체가 지금 가용한지"가 아니라 "같은 GPU를 새로 만들면 얼마나 쉽게 뜨는지"의 참고 정보.
+  gpuStockLevel?: "NONE" | "LOW" | "MEDIUM" | "HIGH" | string | null;
   desiredStatus?: string;
   runtimeStatus?: string;
   lastStartedAt?: string | null;
@@ -373,6 +376,10 @@ export type DashboardSummary = {
     conflict: boolean;
     duplicateStoppedPodIds: string[];
     error?: string | null;
+    /** 서버 캐시 없음 → 백그라운드 갱신 중(프론트가 잠시 후 재조회) */
+    pending?: boolean;
+    /** 캐시 만료분을 즉시 돌려주고 백그라운드 갱신 중 */
+    stale?: boolean;
   };
   worker: { active: number; queued: number; maxActiveTasksTotal: number; maxActiveTasksPerUser: number };
   db: { alembicCurrent?: string | null; alembicHead?: string | null; migrationRequired: boolean; error?: string | null };

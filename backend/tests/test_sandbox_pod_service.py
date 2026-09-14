@@ -116,6 +116,13 @@ class SandboxPodResolutionTests(unittest.TestCase):
     VOLUME = "18jhx6rxjd"
     TEMPLATE = "nh1d177m2w"
 
+    def setUp(self) -> None:
+        # 2026-09-13 성능: _resolve_pods()의 짧은 TTL 목록 캐시가 이전 테스트의 응답을
+        # 들고 넘어오지 않도록 매 테스트 시작 전 비운다.
+        service._pods_list_cache["at"] = 0.0
+        service._pods_list_cache["value"] = None
+        service._pods_list_cache["volumeId"] = None
+
     def _settings(self) -> Settings:
         return Settings(
             sandbox_pod_api_key="test-key",
@@ -349,6 +356,13 @@ def _settings(**overrides) -> Settings:
 
 
 class SandboxPodMultiPodTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 2026-09-13 성능: _resolve_pods()의 짧은 TTL 목록 캐시가 이전 테스트의 응답을
+        # 들고 넘어오지 않도록 매 테스트 시작 전 비운다.
+        service._pods_list_cache["at"] = 0.0
+        service._pods_list_cache["value"] = None
+        service._pods_list_cache["volumeId"] = None
+
     def _patches(self, fake, catalog=None):
         return [
             patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake),
@@ -405,6 +419,28 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         self.assertEqual(result["pods"][0]["gpuTier"], "primary")
         self.assertEqual(result["pods"][1]["pricePerHr"], 2.19)
         self.assertEqual(result["attempts"], [])
+
+    def test_status_pod_list_carries_catalog_stock_level(self) -> None:
+        # 2026-09-13: sandbox pod 목록에서 재고(gpuStockLevel)를 표시하는 요구사항.
+        # 카탈로그에 재고가 있으면 그대로, 없으면(캐시 미조회 등) None으로 노출한다.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        catalog = {
+            GPU_5090: {"memoryInGb": 32, "securePrice": 0.99, "displayName": "RTX 5090", "stockLevel": "MEDIUM"},
+            GPU_PRO6000: {"memoryInGb": 96, "securePrice": 2.19, "displayName": "RTX PRO 6000", "stockLevel": "HIGH"},
+        }
+
+        result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=catalog)
+
+        by_id = {pod["podId"]: pod for pod in result["pods"]}
+        self.assertEqual(by_id["caiuvooekq9qqw"]["gpuStockLevel"], "MEDIUM")
+        self.assertEqual(by_id["3i50u1x4pyz0vr"]["gpuStockLevel"], "HIGH")
+
+    def test_status_pod_list_stock_level_is_none_without_catalog(self) -> None:
+        fake = _RunPodScript([_pod_5090()])
+
+        result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=None)
+
+        self.assertIsNone(result["pods"][0]["gpuStockLevel"])
 
     def test_status_probes_each_running_pod_once_and_skips_detail_when_list_is_complete(self) -> None:
         # 2026-09-13 성능: 표시 파드에 8188 프로브가 두 번 나가던 중복 제거 + 목록 응답이
@@ -789,6 +825,30 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._run(stop_sandbox_pod, fake, _settings(), None, None, prefs=SandboxPodPrefs())
 
+    # --- 2026-09-13 성능: 파드 목록 조회 캐시 ---------------------------------
+
+    def test_resolve_pods_list_cache_avoids_duplicate_get_pods_calls(self) -> None:
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        settings = _settings()
+
+        def list_calls() -> list:
+            return [c for c in fake.calls if c[0] == "GET" and c[1].startswith("/pods?")]
+
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 1)
+
+        # 짧은 TTL 안의 두 번째 조회는 캐시를 재사용하고 RunPod GET /pods를 다시 부르지 않는다.
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 1)
+
+        # Stop처럼 상태를 바꾸는 액션은 항상 use_cache=False로 최신 목록을 다시 읽는다.
+        self._run(stop_sandbox_pod, fake, settings, None, "3i50u1x4pyz0vr", prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 2)
+
+        # 액션 이후 캐시를 비웠으므로 다음 상태 조회는 새로 GET /pods를 부른다.
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 3)
+
 
 class SandboxPodCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -798,15 +858,21 @@ class SandboxPodCatalogTests(unittest.TestCase):
     @patch("backend.app.services.sandbox_pod_service._request")
     def test_catalog_reads_rest_v2_gpu_catalog_and_caches(self, request: object) -> None:
         request.return_value = {"gpus": [
-            {"id": GPU_PRO4500, "name": "RTX PRO 4500", "memory": 32, "price": {"secure": 0.72, "community": 0.34}},
+            {"id": GPU_PRO4500, "name": "RTX PRO 4500", "memory": 32, "price": {"secure": 0.72, "community": 0.34}, "availability": "HIGH"},
             {"id": "NVIDIA L4", "name": "L4", "memory": 24, "price": {"secure": 0.49}},
         ]}
 
         catalog = service._fetch_gpu_catalog(_settings())
 
-        self.assertEqual(request.call_args.args[2], "/catalog/gpus")
+        # 2026-09-13: 재고(availability)를 함께 받기 위해 include=AVAILABILITY&product=POD를 붙인다.
+        self.assertEqual(request.call_args.args[2], "/catalog/gpus?include=AVAILABILITY&product=POD")
         self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
-        self.assertEqual(catalog[GPU_PRO4500], {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500"})
+        self.assertEqual(
+            catalog[GPU_PRO4500],
+            {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500", "stockLevel": "HIGH"},
+        )
+        # availability가 없는 항목은 stockLevel이 None(표시 안 함)이어야 한다.
+        self.assertIsNone(catalog["NVIDIA L4"]["stockLevel"])
         request.side_effect = AssertionError("should be cached")
         self.assertEqual(service._fetch_gpu_catalog(_settings())[GPU_PRO4500]["memoryInGb"], 32)
 

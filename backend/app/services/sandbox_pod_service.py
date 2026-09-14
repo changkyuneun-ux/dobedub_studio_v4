@@ -166,7 +166,7 @@ def start_sandbox_pod(
     _require_configuration(settings)
     prefs = prefs or _load_prefs(db)
     attempts: list[dict] = []
-    pods = _resolve_pods(settings)
+    pods = _resolve_pods(settings, use_cache=False)
 
     conflict_ids = _conflict_pod_ids(pods)
     if conflict_ids:
@@ -196,6 +196,7 @@ def start_sandbox_pod(
             _persist_selection(db, target["id"], actor_id)
             status = _build_status(settings, pods, _with_selected(prefs, target["id"]), attempts=attempts)
             status["message"] = "Sandbox Pod 시작을 요청했습니다. RUNNING 상태와 HTTP 서비스 준비 여부를 새로고침으로 확인하세요."
+            _invalidate_pods_cache()
             return status
 
         _switch_off_others(settings, pods, target["id"], attempts)
@@ -209,6 +210,7 @@ def start_sandbox_pod(
                 f"정지된 {_pod_display(started)} 파드를 다시 시작했습니다. "
                 "HTTP 서비스 준비 여부를 새로고침으로 확인하세요."
             )
+            _invalidate_pods_cache()
             return status
 
         if prefs.auto_switch_on_start_failure:
@@ -227,6 +229,7 @@ def start_sandbox_pod(
                     f"선택한 {_pod_display(target)} 파드는 재고 부족으로 기동하지 못해 "
                     f"{_pod_display(candidate)} 파드를 대신 시작했습니다."
                 )
+                _invalidate_pods_cache()
                 return status
     else:
         # No target: nothing on the volume yet or every Pod is gone. Still make
@@ -250,6 +253,7 @@ def start_sandbox_pod(
         resolved_by=f"create:{gpu}",
     )
     status["message"] = _create_message(settings, gpu, attempts, target)
+    _invalidate_pods_cache()
     return status
 
 
@@ -263,7 +267,7 @@ def stop_sandbox_pod(
 ) -> dict:
     _require_configuration(settings)
     prefs = prefs or _load_prefs(db)
-    pods = _resolve_pods(settings)
+    pods = _resolve_pods(settings, use_cache=False)
     target = None
     if pod_id:
         target = next((pod for pod in pods if str(pod.get("id")) == pod_id), None)
@@ -284,6 +288,7 @@ def stop_sandbox_pod(
     status = _build_status(settings, pods, prefs, attempts=attempts)
     status["stoppedPodId"] = str(target["id"])
     status["message"] = f"{_pod_display(target)} 파드 중지를 요청했습니다."
+    _invalidate_pods_cache()
     return status
 
 
@@ -298,7 +303,7 @@ def terminate_sandbox_pod(
     """Delete a stopped Pod from the volume (manual clean-up). Running Pods are refused."""
     _require_configuration(settings)
     prefs = prefs or _load_prefs(db)
-    pods = _resolve_pods(settings)
+    pods = _resolve_pods(settings, use_cache=False)
     if not pod_id:
         raise ValueError("삭제할 Pod ID를 지정하세요.")
     target = next((pod for pod in pods if str(pod.get("id")) == pod_id), None)
@@ -319,6 +324,7 @@ def terminate_sandbox_pod(
     status["terminatedPodId"] = pod_id
     status["terminatedPodName"] = target.get("name") or None
     status["message"] = f"{_pod_display(target)} 파드를 삭제했습니다. /workspace 볼륨의 데이터는 유지됩니다."
+    _invalidate_pods_cache()
     return status
 
 
@@ -406,16 +412,47 @@ def _persist_selection(db, pod_id: str | None, actor_id: str | None, *, allow_no
 # ---------------------------------------------------------------------------
 
 
-def _resolve_pods(settings: Settings) -> list[dict]:
+_PODS_LIST_TTL_SECONDS = 4.0
+_pods_list_cache: dict[str, object] = {"at": 0.0, "value": None, "volumeId": None}
+
+
+def _invalidate_pods_cache() -> None:
+    """Force the next ``_resolve_pods(use_cache=True)`` to hit RunPod again.
+
+    Called after every mutating action (start/stop/create/terminate) so an
+    operator sees the effect of their own action immediately instead of a
+    stale pre-mutation list for up to ``_PODS_LIST_TTL_SECONDS``.
+    """
+    _pods_list_cache["at"] = 0.0
+    _pods_list_cache["value"] = None
+
+
+def _resolve_pods(settings: Settings, *, use_cache: bool = True) -> list[dict]:
     """Return every non-terminated Pod attached to the Sandbox Network Volume.
 
     Without a volume selector the legacy single-Pod resolution is used so
     template / name / ID based deployments keep working.
+
+    2026-09-13 성능: ``GET /pods`` 목록 조회 자체를 짧은 TTL(수 초)로 캐시한다.
+    같은 프로세스 안에서 대시보드 폴링과 관리자 화면이 거의 동시에 목록을 요청하는
+    경우가 잦아, 이 캐시가 RunPod 왕복을 그 창 안에서 최대 1회로 줄인다. 시작/정지/
+    생성/삭제처럼 상태를 바꾸는 호출은 ``use_cache=False``로 항상 최신 목록을 읽고,
+    끝난 뒤 :func:`_invalidate_pods_cache`로 캐시를 비워 다음 조회가 새 상태를 보게
+    한다.
     """
     volume_id = settings.sandbox_pod_network_volume_id.strip()
     if not volume_id:
         pod, _ = _resolve_pod(settings)
         return [pod]
+    if use_cache:
+        now = time.monotonic()
+        cached = _pods_list_cache.get("value")
+        if (
+            cached is not None
+            and _pods_list_cache.get("volumeId") == volume_id
+            and now - float(_pods_list_cache.get("at") or 0.0) < _PODS_LIST_TTL_SECONDS
+        ):
+            return cached  # type: ignore[return-value]
     response = _request(settings, "GET", "/pods?includeNetworkVolume=true")
     items = response if isinstance(response, list) else response.get("items") or response.get("pods") or []
     matches = [
@@ -425,11 +462,17 @@ def _resolve_pods(settings: Settings) -> list[dict]:
         and _status_of(pod) != "TERMINATED"
     ]
     if not matches:
-        return []
-    # 2026-09-13 성능: 파드별 상세 조회를 병렬로, 목록 응답에 필요한 필드가 이미
-    # 있으면 생략한다(직렬 N회 → 최대 1회 지연).
-    with ThreadPoolExecutor(max_workers=min(8, len(matches))) as pool:
-        return list(pool.map(lambda pod: _hydrate_pod_if_needed(settings, pod), matches))
+        result: list[dict] = []
+    else:
+        # 2026-09-13 성능: 파드별 상세 조회를 병렬로, 목록 응답에 필요한 필드가 이미
+        # 있으면 생략한다(직렬 N회 → 최대 1회 지연).
+        with ThreadPoolExecutor(max_workers=min(8, len(matches))) as pool:
+            result = list(pool.map(lambda pod: _hydrate_pod_if_needed(settings, pod), matches))
+    if use_cache:
+        _pods_list_cache["at"] = time.monotonic()
+        _pods_list_cache["value"] = result
+        _pods_list_cache["volumeId"] = volume_id
+    return result
 
 
 _HYDRATE_REQUIRED_KEYS = ("ports", "memoryInGb", "costPerHr")
@@ -710,19 +753,30 @@ _catalog_cache: dict[str, object] = {"at": 0.0, "value": None}
 
 
 def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
-    """Best-effort GPU catalog → {gpuTypeId: {memoryInGb, securePrice, displayName}}.
+    """Best-effort GPU catalog → {gpuTypeId: {memoryInGb, securePrice, displayName, stockLevel}}.
 
     REST v1 has no catalog endpoint, so this reads REST v2 ``GET /catalog/gpus``
-    (same host and API key as the v1 Pod control calls). Cached for a few
-    minutes; ``None`` when unavailable — callers then skip VRAM filtering and
-    fall back to local labels.
+    (same host and API key as the v1 Pod control calls), requesting
+    ``include=AVAILABILITY&product=POD`` so each item also carries RunPod's own
+    ``availability`` grade (NONE/LOW/MEDIUM/HIGH) alongside price/VRAM — no
+    separate credential or endpoint needed. Cached for a few minutes (same TTL
+    as before this field existed; ``stockLevel`` can be up to that long stale,
+    which is acceptable for an informational badge — callers must not use it
+    to decide whether a start/create will actually succeed);
+    ``None`` when unavailable — callers then skip VRAM filtering and fall back
+    to local labels.
     """
     now = time.monotonic()
     cached = _catalog_cache.get("value")
     if cached is not None and now - float(_catalog_cache.get("at") or 0.0) < _CATALOG_TTL_SECONDS:
         return cached  # type: ignore[return-value]
     try:
-        response = _request(settings, "GET", "/catalog/gpus", base_url=settings.sandbox_pod_rest_v2_url)
+        response = _request(
+            settings,
+            "GET",
+            "/catalog/gpus?include=AVAILABILITY&product=POD",
+            base_url=settings.sandbox_pod_rest_v2_url,
+        )
     except Exception:  # noqa: BLE001 - the catalog is optional; never break status/start on it
         return None
     items = response.get("gpus") if isinstance(response, dict) else response
@@ -740,6 +794,7 @@ def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
             "memoryInGb": _number_or_none(item.get("memory")),
             "securePrice": _number_or_none(price.get("secure")),
             "displayName": str(item.get("name") or "").strip() or None,
+            "stockLevel": str(item.get("availability") or "").strip().upper() or None,
         }
     if catalog:
         _catalog_cache["at"] = now
@@ -966,8 +1021,10 @@ def _pod_summary(
     services = _http_services(pod_id, pod.get("ports") or [], jupyter_auth_required=_jupyter_auth_required(pod))
     gpu = _gpu_type_name(pod)
     vram = None
+    stock_level = None
     if catalog and gpu and gpu in catalog:
         vram = catalog[gpu].get("memoryInGb")
+        stock_level = catalog[gpu].get("stockLevel")
     if vram is None:
         vram = _number_or_none(pod.get("gpuMemoryInGb"))
     if runtime_status is None:
@@ -981,6 +1038,10 @@ def _pod_summary(
         "vramGb": vram,
         "ramGb": _number_or_none(pod.get("memoryInGb")),
         "pricePerHr": _price_of(pod),
+        # 2026-09-13: RunPod 카탈로그의 재고 등급(NONE/LOW/MEDIUM/HIGH). 이 파드의 GPU
+        # 타입을 "지금 다시 만든다면" 얼마나 쉽게 뜨는지에 대한 참고 정보이며, 이미
+        # 실행/정지 중인 이 파드 자체의 가용성과는 무관하다(카탈로그 미조회 시 null).
+        "gpuStockLevel": stock_level,
         "desiredStatus": status,
         "runtimeStatus": runtime_status,
         **timestamp_fields(

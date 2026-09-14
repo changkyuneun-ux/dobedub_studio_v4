@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 
-_CACHE_TTL_SECONDS = 60.0
+_CACHE_TTL_SECONDS = 600.0  # 2026-09-13 성능: 리비전은 런타임 중 바뀌지 않는다(배포 시 프로세스 재시작)
 _cache: dict[str, object] = {"at": 0.0, "value": None}
 
 

@@ -174,7 +174,7 @@ def test_sandbox_block_isolates_runpod_failure(db_session):
     with patch("backend.app.services.dashboard_service.migration_status", return_value={"alembicCurrent": "a", "alembicHead": "a", "migrationRequired": False, "error": None}), \
             patch("backend.app.services.sandbox_pod_service.sandbox_pod_is_configured", return_value=True), \
             patch("backend.app.services.sandbox_pod_service.sandbox_pod_status", side_effect=RuntimeError("runpod down")):
-        result = dashboard_summary(db_session, range_key="7d", now=NOW, settings=get_settings())
+        result = dashboard_summary(db_session, range_key="7d", now=NOW, settings=get_settings(), sandbox_sync=True)
     assert result["sandbox"]["configured"] is True
     assert "runpod down" in result["sandbox"]["error"]
     assert result["kpi"]["submitted"] == 6
@@ -198,7 +198,7 @@ def test_sandbox_block_flags_duplicate_stopped_pods(db_session):
     with patch("backend.app.services.dashboard_service.migration_status", return_value={"alembicCurrent": "a", "alembicHead": "a", "migrationRequired": False, "error": None}), \
             patch("backend.app.services.sandbox_pod_service.sandbox_pod_is_configured", return_value=True), \
             patch("backend.app.services.sandbox_pod_service.sandbox_pod_status", return_value=status):
-        result = dashboard_summary(db_session, range_key="7d", now=NOW, settings=get_settings())
+        result = dashboard_summary(db_session, range_key="7d", now=NOW, settings=get_settings(), sandbox_sync=True)
     assert result["sandbox"]["podCount"] == 3 and result["sandbox"]["runningCount"] == 1
     assert result["sandbox"]["duplicateStoppedPodIds"] == ["p3"]
     assert "sandbox_duplicate_pod" in [a["id"] for a in result["alerts"]]
@@ -214,3 +214,24 @@ def test_seconds_between_compiles_per_dialect():
     assert "TIMESTAMPDIFF(SECOND" in str(_seconds_between_for_dialect("mariadb", later, earlier).compile(dialect=mysql.dialect())).upper()
     assert "EXTRACT(EPOCH" in str(_seconds_between_for_dialect("postgresql", later, earlier).compile(dialect=postgresql.dialect())).upper()
     assert "JULIANDAY" in str(_seconds_between_for_dialect("sqlite", later, earlier).compile(dialect=sqlite.dialect())).upper()
+
+
+def test_sandbox_block_never_blocks_the_request(db_session, monkeypatch):
+    # 2026-09-13 성능: 캐시 없음 → pending 즉시 응답(백그라운드 갱신), 캐시 만료 → stale 즉시 응답.
+    from backend.app.services import dashboard_service
+
+    dashboard_service._sandbox_cache["value"] = None
+    started: list[str] = []
+    monkeypatch.setattr(dashboard_service, "_start_sandbox_refresh", lambda settings: started.append("refresh"))
+    with patch("backend.app.services.sandbox_pod_service.sandbox_pod_is_configured", return_value=True):
+        first = dashboard_service._sandbox_block(get_settings(), db_session)
+    assert first["pending"] is True and first["configured"] is True
+    assert started == ["refresh"]
+
+    dashboard_service._sandbox_cache["value"] = {**dashboard_service._empty_sandbox(configured=True), "podCount": 2}
+    dashboard_service._sandbox_cache["at"] = 0.0  # expired
+    with patch("backend.app.services.sandbox_pod_service.sandbox_pod_is_configured", return_value=True):
+        stale = dashboard_service._sandbox_block(get_settings(), db_session)
+    assert stale["podCount"] == 2 and stale["stale"] is True
+    assert started == ["refresh", "refresh"]
+    dashboard_service._sandbox_cache["value"] = None
