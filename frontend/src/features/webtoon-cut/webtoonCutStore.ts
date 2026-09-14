@@ -439,14 +439,21 @@ export const webtoonCutJobStore = {
  * 2026-09-14: 사용자 요청 - "진행 중 작업"이 실제로 없으면 새로고침 후 복원하지 않고
  * 입력 대기 상태로 되돌린다. 새로고침이 일어나는 순간 실행 중이던 워커/네트워크 상태는
  * 전부 사라지므로, F5 직후에는 진짜 "실행 중" 작업이 존재할 수 없다 — 유일하게 재개할
- * 가치가 있는 경우는 이전 실행이 output 폴더에 남긴 manifest.json에 실제로 완료된
- * 단위(status: "completed")가 하나라도 있을 때뿐이다(=중간에 탭이 닫히는 등으로 정상
- * 중단 경로를 타지 못한 진짜 미완료 작업). 그 외(한 번도 실행하지 않고 입력만 선택해둔
- * 경우 등)는 복원할 "진행 중 작업"이 없는 것이므로 조용히 초기화한다.
+ * 가치가 있는 경우는 이전 실행이 중간에 중단되어 아직 끝나지 않은 경우뿐이다.
+ *
+ * 2026-09-14 수정: 최초 구현은 "ledger에 completed 단위가 하나라도 있으면 재개 대상"으로
+ * 판정했는데, 이는 정상적으로 끝까지 완료된 작업의 manifest도 그대로 만족시켜 버그를
+ * 재현시켰다(수영복.zip 6/6 완료 후 새로고침해도 "0/1 · 0%" 카드가 다시 나타남).
+ * runner.ts의 finalizeManifest()를 보면 manifest.status는 다음 세 값 중 하나로만 기록된다:
+ *   - "paused": 취소 시그널 등으로 루프가 끝까지 돌지 못하고 중간에 끊긴 경우(=진짜 미완료)
+ *   - "completed" / "completed_with_review": 루프가 끝까지 정상적으로 돌아 작업이 끝난 경우
+ * 따라서 "재개할 가치가 있는 진행 중 작업"인지는 ledger의 completed 개수가 아니라
+ * manifest.status가 "paused"인지로만 판단해야 한다. completed/completed_with_review는
+ * 이미 끝난 작업이므로 복원 대상이 아니며, 새로고침 시 조용히 초기화되어야 한다.
  */
 export async function hasResumableProgress(root: FileSystemDirectoryHandle): Promise<boolean> {
   const manifest = await readExistingManifest(root);
-  return Boolean(manifest?.ledger?.some((unit) => unit.status === "completed"));
+  return manifest?.status === "paused";
 }
 
 async function finishRestoreOrClearIfNoProgress(resumeNotice: string) {
