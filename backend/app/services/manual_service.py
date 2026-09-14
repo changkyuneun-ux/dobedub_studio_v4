@@ -13,6 +13,9 @@ def inline_markdown(text: str) -> str:
     escaped = html.escape(text or "")
     escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    # ==텍스트== : 정책/주의사항 등 본문 중간에서 색상 강조가 필요한 구간에 사용한다.
+    # (블록 전체를 강조하려면 :::warning 등 콜아웃 블록을 사용할 것 — render_manual_markdown 참고)
+    escaped = re.sub(r"==([^=]+)==", r'<mark class="manual-emphasis">\1</mark>', escaped)
     # 매뉴얼 내부 목차 앵커와 앱이 제공하는 정적 문서(/docs/...)를 함께 지원한다.
     # 정적 문서는 새 탭에서 열어 iframe으로 표시된 매뉴얼 본문을 유지한다.
     escaped = re.sub(
@@ -96,6 +99,51 @@ def render_manual_toc(lines: list[str]) -> str:
     return f'<nav class="manual-toc" aria-label="사용자 매뉴얼 목차">{render_items(root)}</nav>'
 
 
+_CALLOUT_LABELS = {
+    "danger": "위험",
+    "warning": "주의",
+    "info": "안내",
+    "tip": "팁",
+}
+
+
+def render_manual_callout(callout_type: str, title: str, body_lines: list[str]) -> str:
+    """정책·주의사항 등을 색상/굵기로 강조하는 콜아웃 블록을 렌더링한다.
+
+    Markdown 소스 문법:
+        :::warning 제목(선택)
+        본문 (일반 문단 · - 불릿 지원)
+        :::
+    지원 타입: danger(빨강) · warning(주황) · info(파랑) · tip(녹색). 알 수 없는 타입은 info로 처리한다.
+    """
+    normalized_type = callout_type if callout_type in _CALLOUT_LABELS else "info"
+    label = _CALLOUT_LABELS[normalized_type]
+    heading = f'<p class="manual-callout-title">{html.escape(label)}{" · " + inline_markdown(title) if title else ""}</p>'
+    body_parts: list[str] = []
+    list_open = False
+    for raw_line in body_lines:
+        line = raw_line.strip()
+        if not line:
+            if list_open:
+                body_parts.append("</ul>")
+                list_open = False
+            continue
+        bullet = re.match(r"^[-*]\s+(.+)$", line)
+        if bullet:
+            if not list_open:
+                body_parts.append("<ul>")
+                list_open = True
+            body_parts.append(f"<li>{inline_markdown(bullet.group(1))}</li>")
+            continue
+        if list_open:
+            body_parts.append("</ul>")
+            list_open = False
+        body_parts.append(f"<p>{inline_markdown(line)}</p>")
+    if list_open:
+        body_parts.append("</ul>")
+    return f'<div class="manual-callout is-{normalized_type}">{heading}{"".join(body_parts)}</div>'
+
+
 def render_manual_markdown(markdown: str) -> str:
     lines = markdown.splitlines()
     parts = []
@@ -132,6 +180,19 @@ def render_manual_markdown(markdown: str) -> str:
         if not stripped:
             close_list()
             i += 1
+            continue
+        callout_open = re.match(r"^:::(\w+)\s*(.*)$", stripped)
+        if callout_open and stripped != ":::":
+            close_list()
+            callout_type = callout_open.group(1).lower()
+            callout_title = callout_open.group(2).strip()
+            i += 1
+            callout_body: list[str] = []
+            while i < len(lines) and lines[i].strip() != ":::":
+                callout_body.append(lines[i])
+                i += 1
+            i += 1  # 닫는 ::: 건너뛰기
+            parts.append(render_manual_callout(callout_type, callout_title, callout_body))
             continue
         if stripped.startswith("|") and "|" in stripped[1:]:
             close_list()
@@ -243,6 +304,19 @@ def _manual_html_page_cached(manual_path_text: str, _modified_ns: int) -> str:
       figcaption {{ color: var(--muted); font-size: 13px; margin-top: 8px; text-align: center; }}
       mark.manual-hit {{ background: #fde68a; border-radius: 3px; color: #111827; padding: 0 2px; }}
       mark.manual-hit.is-current {{ background: #fb923c; color: #111827; }}
+      mark.manual-emphasis {{ background: none; color: #dc2626; font-weight: 700; font-size: 1.05em; padding: 0; }}
+      .manual-callout {{ border: 1px solid var(--line); border-left-width: 6px; border-radius: 8px; margin: 16px 0 22px; padding: 14px 18px 4px; }}
+      .manual-callout p {{ margin: 0 0 10px; }}
+      .manual-callout ul {{ margin: 0 0 10px 20px; }}
+      .manual-callout-title {{ font-size: 15px; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; }}
+      .manual-callout.is-danger {{ background: #fef2f2; border-color: #fca5a5; border-left-color: #dc2626; }}
+      .manual-callout.is-danger .manual-callout-title {{ color: #b91c1c; }}
+      .manual-callout.is-warning {{ background: #fffbeb; border-color: #fcd34d; border-left-color: #d97706; }}
+      .manual-callout.is-warning .manual-callout-title {{ color: #b45309; }}
+      .manual-callout.is-info {{ background: #eff6ff; border-color: #93c5fd; border-left-color: #2563eb; }}
+      .manual-callout.is-info .manual-callout-title {{ color: #1d4ed8; }}
+      .manual-callout.is-tip {{ background: #f0fdf4; border-color: #86efac; border-left-color: #16a34a; }}
+      .manual-callout.is-tip .manual-callout-title {{ color: #15803d; }}
       .manual-table-wrap {{ overflow-x: auto; margin: 14px 0 20px; }}
       table {{ border-collapse: collapse; min-width: 720px; width: 100%; }}
       th {{ background: #2563eb; color: #fff; font-weight: 700; }}
