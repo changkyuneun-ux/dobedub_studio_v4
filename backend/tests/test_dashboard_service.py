@@ -8,9 +8,12 @@ import pytest
 from backend.app.core.config import get_settings
 from backend.app.db.models import BatchJob, TaskExecutionPolicy, User, WorkflowTask
 from backend.app.services.dashboard_service import (
+    DAILY_STATUS_KINDS,
     RANGE_KEYS,
     _classify_status,
+    _daily_volume,
     _evaluate_alerts,
+    _kst_day_range,
     _range_bounds,
     _seconds_between_for_dialect,
     dashboard_summary,
@@ -130,12 +133,112 @@ def test_recent_by_user_by_workflow(summary):
 
 def test_worker_system_db_and_top_level_contract(summary):
     assert summary["worker"] == {"active": 1, "queued": 1, "maxActiveTasksTotal": 5, "maxActiveTasksPerUser": 3}
-    assert set(summary["system"]) == {"comfy", "promptLlm", "workflows"}
+    assert set(summary["system"]) == {"comfy", "promptLlm", "grok", "workflows"}
     assert set(summary["system"]["comfy"]) == {"configured", "executionMode", "dryRun"}
+    assert set(summary["system"]["grok"]) == {"configured", "enabled", "model", "timeoutSeconds"}
+    assert set(summary["system"]["workflows"]) == {"count", "activeCount"}
     assert summary["sandbox"]["configured"] is False
     assert summary["db"]["migrationRequired"] is False
-    assert set(summary) >= {"range", "since", "until", "kpi", "recent", "byUser", "byWorkflow", "system", "sandbox", "worker", "db", "alerts", "checkedAt", "checkedAtKst"}
+    assert set(summary) >= {
+        "range", "since", "until", "kpi", "recent", "dailyVolume", "dailyVolumeFilters", "filterOptions",
+        "byUser", "byWorkflow", "system", "sandbox", "worker", "db", "alerts", "checkedAt", "checkedAtKst",
+    }
     assert summary["range"] == "7d"
+
+
+# --- 2026-09-14: 일자별 작업량 그래프 + 활성 워크플로 수 + Grok 타일 -----------------------
+
+
+def test_system_grok_block_reflects_settings():
+    import dataclasses
+    from backend.app.services.dashboard_service import _system_block
+    settings = dataclasses.replace(
+        get_settings(),
+        grok_enabled=True,
+        grok_api_key="xai-real-key",
+        grok_model="grok-4-1-fast-reasoning",
+        grok_request_timeout_seconds=120,
+    )
+    block = _system_block(settings)
+    assert block["grok"] == {
+        "configured": True,
+        "enabled": True,
+        "model": "grok-4-1-fast-reasoning",
+        "timeoutSeconds": 120,
+    }
+
+
+def test_system_grok_block_not_configured_with_placeholder_key():
+    import dataclasses
+    from backend.app.services.dashboard_service import _system_block
+    settings = dataclasses.replace(get_settings(), grok_enabled=True, grok_api_key="your_grok_api_key")
+    block = _system_block(settings)
+    assert block["grok"]["configured"] is False
+
+
+def test_dashboard_summary_workflows_active_count(summary):
+    workflows = summary["system"]["workflows"]
+    assert workflows["count"] is not None
+    assert workflows["activeCount"] is not None
+    assert workflows["activeCount"] <= workflows["count"]
+
+
+def test_kst_day_range_spans_inclusive_calendar_days():
+    since, until, _ = _range_bounds("7d", NOW)
+    days = _kst_day_range(since, until)
+    assert len(days) == 7
+    assert days == sorted(days)
+    assert days[-1] == "2026-09-13"  # NOW의 KST 달력일
+
+
+def test_daily_volume_buckets_by_kst_day_and_fills_empty_days(db_session):
+    _seed(db_session)
+    since, until, _ = _range_bounds("7d", NOW)
+    days = _daily_volume(db_session, since, until)
+    assert {kind for kind in DAILY_STATUS_KINDS} <= set(days[0].keys())
+    assert len(days) == 7
+    by_date = {row["date"]: row for row in days}
+    total_submitted = sum(row["submitted"] for row in days)
+    assert total_submitted == 6  # kpi.submitted와 동일(t1..t6)
+    assert sum(row["completed"] for row in days) == 2
+    assert sum(row["failed"] for row in days) == 2
+    # kpi["active"](진행 중+대기 통합 게이지)와 달리, statusKind는 RUNNING=active/PENDING_SUBMIT=queued로 나뉜다
+    assert sum(row["active"] for row in days) == 1
+    assert sum(row["queued"] for row in days) == 1
+    # 하루도 비어있지 않고 0으로 채워져 있어야 함
+    assert all(isinstance(row["submitted"], int) for row in by_date.values())
+
+
+def test_daily_volume_applies_filters(db_session):
+    _seed(db_session)
+    since, until, _ = _range_bounds("7d", NOW)
+    filtered = _daily_volume(db_session, since, until, user_id="u2")
+    assert sum(row["submitted"] for row in filtered) == 2  # t2(u2), t3(u2)
+
+    filtered_workflow = _daily_volume(db_session, since, until, workflow_id="character_ref_i2v.json")
+    assert sum(row["submitted"] for row in filtered_workflow) == 2  # t4, t5
+
+    filtered_status = _daily_volume(db_session, since, until, status_kind="failed")
+    assert sum(row["submitted"] for row in filtered_status) == 2  # t3, t4
+
+
+def test_dashboard_summary_daily_volume_respects_query_filters(db_session):
+    _seed(db_session)
+    with patch("backend.app.services.dashboard_service.migration_status", return_value={"alembicCurrent": "a", "alembicHead": "a", "migrationRequired": False, "error": None}):
+        filtered_summary = dashboard_summary(
+            db_session, range_key="7d", now=NOW, settings=get_settings(), include_sandbox=False,
+            filter_user_id="u2",
+        )
+    assert sum(row["submitted"] for row in filtered_summary["dailyVolume"]) == 2
+    assert filtered_summary["dailyVolumeFilters"] == {"user": "u2", "workflow": None, "status": None}
+
+
+def test_filter_options_lists_distinct_users_and_workflows(summary):
+    options = summary["filterOptions"]
+    user_ids = {item["id"] for item in options["users"]}
+    workflow_ids = {item["id"] for item in options["workflows"]}
+    assert {"u1", "u2"} <= user_ids
+    assert {"wan22_i2v_720p.json", "character_ref_i2v.json"} <= workflow_ids
 
 
 def test_alert_rules():

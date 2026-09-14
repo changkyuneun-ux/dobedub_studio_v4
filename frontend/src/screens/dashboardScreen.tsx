@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiClient, DashboardRange, DashboardRecentTask, DashboardSummary } from "../api/client";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { apiClient, DashboardDailyVolume, DashboardFilterOption, DashboardRange, DashboardSummary } from "../api/client";
 import { User, canUse } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { shellNavigate, shellNavigateAdmin } from "../helpers/navigation";
@@ -37,16 +37,25 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
-  const [filters, setFilters] = useState({ user: "", workflow: "", status: "" });
+  // 2026-09-14: 필터는 더 이상 "최근 작업" 테이블을 클라이언트에서 자르지 않고,
+  // 서버의 일자별 작업량 집계(dailyVolume)를 다시 요청하는 조건으로 쓰인다.
+  const [filters, setFiltersState] = useState({ user: "", workflow: "", status: "" });
   const rangeRef = useRef(range);
   rangeRef.current = range;
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
   const pendingRetryRef = useRef<number | null>(null);
 
-  const load = useCallback(async (nextRange?: DashboardRange) => {
+  const load = useCallback(async (nextRange?: DashboardRange, nextFilters?: typeof filters) => {
     const target = nextRange || rangeRef.current;
+    const targetFilters = nextFilters || filtersRef.current;
     setLoading(true);
     try {
-      const response = await apiClient.dashboardSummary(target);
+      const response = await apiClient.dashboardSummary(target, 20, {
+        user: targetFilters.user || undefined,
+        workflow: targetFilters.workflow || undefined,
+        status: targetFilters.status || undefined,
+      });
       setSummary(response);
       setError("");
       setLastCheckedAt(new Date());
@@ -64,6 +73,11 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
       setLoading(false);
     }
   }, []);
+
+  function setFilters(next: typeof filters) {
+    setFiltersState(next);
+    void load(undefined, next);
+  }
 
   useEffect(() => {
     void load();
@@ -92,17 +106,8 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
     return () => onGoTo(route);
   };
 
-  const recentRows = useMemo(() => {
-    const rows = summary?.recent || [];
-    return rows.filter((row) => (
-      (!filters.user || (row.user.name || row.user.id || "") === filters.user)
-      && (!filters.workflow || row.workflowName === filters.workflow)
-      && (!filters.status || row.statusKind === filters.status)
-    ));
-  }, [summary, filters]);
-
-  const userOptions = useMemo(() => uniq((summary?.recent || []).map((row) => row.user.name || row.user.id || "")), [summary]);
-  const workflowOptions = useMemo(() => uniq((summary?.recent || []).map((row) => row.workflowName)), [summary]);
+  const userOptions = summary?.filterOptions.users || [];
+  const workflowOptions = summary?.filterOptions.workflows || [];
 
   const checkedLabel = lastCheckedAt ? formatClock(lastCheckedAt) : "-";
   const rangeLabel = RANGE_OPTIONS.find((option) => option.value === range)?.label || range;
@@ -158,15 +163,15 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
             <div className="v3-card v3-dash-recent">
               <div className="v3-card-header">
                 <div className="v3-card-header-title">
-                  <span>최근 작업</span>
+                  <span>작업량 추이</span>
                   <div className="v3-dash-chips">
                     <select className="v3-dash-filter" value={filters.user} onChange={(event) => setFilters({ ...filters, user: event.target.value })} aria-label="작업자 필터">
                       <option value="">작업자 전체</option>
-                      {userOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                      {userOptions.map((option) => <option key={option.id || option.name} value={option.id || ""}>{option.name}</option>)}
                     </select>
                     <select className="v3-dash-filter" value={filters.workflow} onChange={(event) => setFilters({ ...filters, workflow: event.target.value })} aria-label="워크플로 필터">
                       <option value="">워크플로 전체</option>
-                      {workflowOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                      {workflowOptions.map((option) => <option key={option.id || option.name} value={option.id || ""}>{option.name}</option>)}
                     </select>
                     <select className="v3-dash-filter" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} aria-label="상태 필터">
                       <option value="">상태 전체</option>
@@ -181,7 +186,7 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
                   ? <button className="v3-link-button" type="button" onClick={() => onGoTo("review.history")}>작업 이력 전체 보기 →</button>
                   : null}
               </div>
-              <RecentTasksTable rows={recentRows} empty={summary.recent.length === 0 ? `${rangeLabel} 내 작업이 없습니다.` : "필터에 맞는 작업이 없습니다."} />
+              <DailyVolumeChart days={summary.dailyVolume} rangeLabel={rangeLabel} />
             </div>
 
             <div className="v3-dash-side">
@@ -212,9 +217,8 @@ function SystemTiles({ summary, go }: { summary: DashboardSummary; go: (route: S
   const { system, sandbox, worker, db } = summary;
   const comfyState = !system.comfy.configured && !system.comfy.dryRun ? "off" : system.comfy.dryRun ? "warn" : "on";
   const comfyLabel = system.comfy.dryRun ? "DRY-RUN" : system.comfy.configured ? "ONLINE" : "NOT CONFIGURED";
-  const llmMock = (system.promptLlm.provider || "").toLowerCase() === "mock";
-  const llmState = !system.promptLlm.configured ? "off" : llmMock ? "muted" : "on";
-  const llmLabel = !system.promptLlm.configured ? "NOT CONFIGURED" : llmMock ? "MOCK" : "ONLINE";
+  const grokState = !system.grok.enabled ? "muted" : !system.grok.configured ? "off" : "on";
+  const grokLabel = !system.grok.enabled ? "DISABLED" : !system.grok.configured ? "NOT CONFIGURED" : "ONLINE";
   const sandboxStatus = (sandbox.desiredStatus || "").toUpperCase();
   const sandboxState = sandbox.pending ? "muted" : sandbox.error || sandbox.conflict ? "off" : sandboxStatus === "RUNNING" ? "on" : "muted";
   const sandboxLabel = sandbox.pending ? "조회 중…" : sandbox.error ? "FAIL" : sandbox.conflict ? "CONFLICT" : !sandbox.configured ? "NOT CONFIGURED" : sandbox.podCount === 0 ? "NO POD" : sandboxStatus || "-";
@@ -228,9 +232,9 @@ function SystemTiles({ summary, go }: { summary: DashboardSummary; go: (route: S
         <strong>{comfyLabel}</strong>
         <small>실행 모드 {system.comfy.executionMode}</small>
       </Tile>
-      <Tile label="QWEN PROMPT LLM" state={llmState} onClick={go("admin.status", "system:read")}>
-        <strong>{llmLabel}</strong>
-        <small>{[system.promptLlm.provider, system.promptLlm.model, system.promptLlm.timeoutSeconds ? `timeout ${system.promptLlm.timeoutSeconds}s` : ""].filter(Boolean).join(" · ") || "-"}</small>
+      <Tile label="GROK IMAGE PROMPT" state={grokState} onClick={go("admin.status", "system:read")}>
+        <strong>{grokLabel}</strong>
+        <small>{[system.grok.model, system.grok.timeoutSeconds ? `timeout ${system.grok.timeoutSeconds}s` : ""].filter(Boolean).join(" · ") || "-"}</small>
       </Tile>
       <Tile label="SANDBOX POD" state={sandboxState} onClick={go("admin.sandbox", "sandbox:read")}>
         <span className="v3-dash-tile-row">
@@ -249,12 +253,12 @@ function SystemTiles({ summary, go }: { summary: DashboardSummary; go: (route: S
         </small>
       </Tile>
       <Tile label="RUNPOD WORKER" state={workerState} onClick={go("admin.taskPolicy", "roles:read")}>
-        <span className="v3-dash-tile-row"><strong>{worker.active} / {worker.maxActiveTasksTotal}</strong><small>동시 실행</small></span>
+        <span className="v3-dash-tile-row"><strong>{formatNumber(worker.active)} / {formatNumber(worker.maxActiveTasksTotal)}</strong><small>동시 실행</small></span>
         <span className="v3-dash-bar"><i style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }} /></span>
-        <small>대기열 {worker.queued} · 정책: 최대 {worker.maxActiveTasksTotal} · 사용자당 {worker.maxActiveTasksPerUser}</small>
+        <small>대기열 {formatNumber(worker.queued)} · 정책: 최대 {formatNumber(worker.maxActiveTasksTotal)} · 사용자당 {formatNumber(worker.maxActiveTasksPerUser)}</small>
       </Tile>
       <Tile label="WORKFLOWS · DB" state={dbState} onClick={go("admin.workflows", "workflows:read")}>
-        <strong>{system.workflows.count ?? "-"} 정의 · {db.migrationRequired ? "마이그레이션 필요" : db.error ? "확인 불가" : "정상"}</strong>
+        <strong>active {formatNumber(system.workflows.activeCount)}개 · {db.migrationRequired ? "마이그레이션 필요" : db.error ? "확인 불가" : "정상"}</strong>
         <small title={db.error || undefined}>{db.error ? db.error : `alembic ${db.alembicCurrent || "-"}${db.migrationRequired ? ` → ${db.alembicHead}` : " · 최신"}`}</small>
       </Tile>
     </div>
@@ -279,12 +283,12 @@ function KpiStrip({ summary }: { summary: DashboardSummary }) {
   const delta = kpi.submittedDeltaPercent;
   return (
     <div className="v3-dash-kpi-grid">
-      <Kpi label="제출" value={kpi.submitted} sub={delta == null ? "직전 기간 데이터 없음" : `직전 기간 대비 ${delta > 0 ? "+" : ""}${delta}%`} />
-      <Kpi label="완료" value={kpi.completed} tone="ok" sub={kpi.successRate == null ? "완료/실패 없음" : `성공률 ${(kpi.successRate * 100).toFixed(1)}%`} />
-      <Kpi label="진행 중" value={kpi.active} tone="running" sub={`큐 대기 ${kpi.queued} 포함`} />
-      <Kpi label="실패" value={kpi.failed} tone="fail" sub={`dispatch 오류 ${kpi.failedDispatch} · 타임아웃 ${kpi.failedTimeout}`} />
+      <Kpi label="제출" value={formatNumber(kpi.submitted)} sub={delta == null ? "직전 기간 데이터 없음" : `직전 기간 대비 ${delta > 0 ? "+" : ""}${delta}%`} />
+      <Kpi label="완료" value={formatNumber(kpi.completed)} tone="ok" sub={kpi.successRate == null ? "완료/실패 없음" : `성공률 ${(kpi.successRate * 100).toFixed(1)}%`} />
+      <Kpi label="진행 중" value={formatNumber(kpi.active)} tone="running" sub={`큐 대기 ${formatNumber(kpi.queued)} 포함`} />
+      <Kpi label="실패" value={formatNumber(kpi.failed)} tone="fail" sub={`dispatch 오류 ${formatNumber(kpi.failedDispatch)} · 타임아웃 ${formatNumber(kpi.failedTimeout)}`} />
       <Kpi label="평균 실행" value={formatDuration(kpi.avgElapsedSeconds)} sub={`지연 평균 ${formatDuration(kpi.avgDelaySeconds)}`} />
-      <Kpi label="활성 작업자" value={kpi.activeUsers} sub={`Batch ${kpi.batchJobsInProgress}건 진행 중`} />
+      <Kpi label="활성 작업자" value={formatNumber(kpi.activeUsers)} sub={`Batch ${formatNumber(kpi.batchJobsInProgress)}건 진행 중`} />
     </div>
   );
 }
@@ -299,27 +303,40 @@ function Kpi({ label, value, sub, tone }: { label: string; value: React.ReactNod
   );
 }
 
-function RecentTasksTable({ rows, empty }: { rows: DashboardRecentTask[]; empty: string }) {
-  if (!rows.length) return <div className="v3-empty-panel">{empty}</div>;
+function DailyVolumeChart({ days, rangeLabel }: { days: DashboardDailyVolume[]; rangeLabel: string }) {
+  const total = days.reduce((sum, day) => sum + day.submitted, 0);
+  if (!days.length || total === 0) {
+    return <div className="v3-empty-panel">{`${rangeLabel} 내 작업이 없습니다.`}</div>;
+  }
+  const max = days.reduce((top, day) => Math.max(top, day.submitted), 1);
+  const showEveryLabel = days.length <= 8;
   return (
-    <div className="v3-dash-table-wrap">
-      <table className="v3-dash-table">
-        <thead>
-          <tr><th>시각</th><th>작업자</th><th>워크플로</th><th>워커</th><th>상태</th><th className="is-right">실행</th></tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.taskId} title={row.taskId}>
-              <td className="is-mono is-muted">{formatTaskTime(row.createdAtKst || row.createdAt)}</td>
-              <td>{row.user.name || row.user.id || "-"}</td>
-              <td className="is-mono">{row.workflowName}</td>
-              <td className="is-mono is-muted">{row.workerName || "-"}</td>
-              <td><span className={`v3-status-badge ${statusBadgeClass(row.statusKind)}`}>{statusLabel(row)}</span></td>
-              <td className="is-mono is-right">{row.statusKind === "failed" ? shortError(row) : row.statusKind === "queued" ? "—" : formatDuration(row.elapsedSeconds)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="v3-dash-volume-wrap">
+      <div className="v3-dash-volume-legend">
+        <span className="is-completed">완료</span>
+        <span className="is-active">진행 중</span>
+        <span className="is-queued">대기</span>
+        <span className="is-failed">실패</span>
+      </div>
+      <div className="v3-dash-volume-chart">
+        {days.map((day, index) => {
+          const showLabel = showEveryLabel || index === 0 || index === days.length - 1 || index % 5 === 0;
+          const title = `${day.date} · 제출 ${day.submitted} (완료 ${day.completed} · 진행 중 ${day.active} · 대기 ${day.queued} · 실패 ${day.failed})`;
+          return (
+            <div key={day.date} className="v3-dash-volume-col" title={title}>
+              <div className="v3-dash-volume-bar" style={{ height: `${Math.max(2, Math.round((day.submitted / max) * 100))}%` }}>
+                {day.completed > 0 && <i className="is-completed" style={{ flexGrow: day.completed }} />}
+                {day.active > 0 && <i className="is-active" style={{ flexGrow: day.active }} />}
+                {day.queued > 0 && <i className="is-queued" style={{ flexGrow: day.queued }} />}
+                {day.failed > 0 && <i className="is-failed" style={{ flexGrow: day.failed }} />}
+                {day.other > 0 && <i className="is-other" style={{ flexGrow: day.other }} />}
+              </div>
+              <span className="v3-dash-volume-value">{day.submitted > 0 ? formatNumber(day.submitted) : ""}</span>
+              <small className="v3-dash-volume-label">{showLabel ? formatDayLabel(day.date) : ""}</small>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -382,8 +399,14 @@ function DashboardSkeleton({ error }: { error: string }) {
 
 // --- helpers --------------------------------------------------------------------
 
-function uniq(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right, "ko"));
+export function formatNumber(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "-";
+  return new Intl.NumberFormat("ko-KR").format(value);
+}
+
+function formatDayLabel(dateIso: string): string {
+  const [, month, day] = dateIso.split("-");
+  return month && day ? `${month}/${day}` : dateIso;
 }
 
 function formatClock(value: Date): string {
@@ -405,33 +428,3 @@ export function formatDuration(seconds?: number | null): string {
   return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
 }
 
-function formatTaskTime(value?: string | null): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value.slice(11, 16) || value;
-  const today = new Date();
-  const sameDay = date.toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" }) === today.toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" });
-  const time = date.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" });
-  if (sameDay) return time;
-  const day = date.toLocaleDateString("en-CA", { month: "2-digit", day: "2-digit", timeZone: "Asia/Seoul" });
-  return `${day} ${time}`;
-}
-
-function statusBadgeClass(kind: DashboardRecentTask["statusKind"]): string {
-  if (kind === "completed") return "is-ready";
-  if (kind === "failed") return "is-failed";
-  if (kind === "active" || kind === "queued") return "is-running";
-  return "is-muted";
-}
-
-function statusLabel(row: DashboardRecentTask): string {
-  if (row.statusKind === "queued") return "QUEUED";
-  return row.status || "-";
-}
-
-function shortError(row: DashboardRecentTask): string {
-  if (row.status === "TIMED_OUT") return "timeout";
-  if (row.status === "CANCELLED") return "cancelled";
-  if (row.lastDispatchError) return "dispatch";
-  return "failed";
-}

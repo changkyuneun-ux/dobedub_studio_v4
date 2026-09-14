@@ -222,6 +222,32 @@ def is_workflow_active(workflow_id: str) -> bool:
     return bool(item.get("active", True))
 
 
+def count_active_workflows() -> tuple[int, int]:
+    """전체 워크플로 정의 수와 그중 활성(active) 상태인 수를 반환한다.
+
+    Sandbox 대시보드 WORKFLOWS 타일에서 "N 정의" 대신 "active N개"를 보여주기
+    위해 추가됨(2026-09-14). list_admin_workflows()처럼 메타데이터 전체를
+    읽지 않고 레지스트리의 active 플래그만 확인해 가볍게 계산한다.
+    """
+    settings = get_settings()
+    try:
+        workflows = parse_workflow_list(settings.workflows_dir)
+    except Exception:  # noqa: BLE001
+        return 0, 0
+    registry_items = load_workflow_registry().get("items", {})
+    total = 0
+    active = 0
+    for workflow in workflows:
+        workflow_id = workflow.get("id")
+        if is_retired_workflow(workflow_id):
+            continue
+        total += 1
+        item = registry_items.get(str(workflow_id)) or {}
+        if bool(item.get("active", True)):
+            active += 1
+    return total, active
+
+
 def list_admin_workflows() -> dict:
     settings = get_settings()
     workflows = parse_workflow_list(settings.workflows_dir)

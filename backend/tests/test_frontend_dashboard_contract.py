@@ -61,9 +61,12 @@ def test_sidebar_home_group_is_global_and_on_every_area():
 
 
 def test_client_calls_the_global_summary_api():
-    assert '"/api/dashboard/summary?range=' in CLIENT.replace("`", '"')
+    # 2026-09-14: 일자별 작업량 그래프 필터(user/workflow/status)를 쿼리 파라미터로 보내기 위해
+    # 템플릿 리터럴 대신 URLSearchParams로 바뀜 — 엔드포인트 경로만 확인한다.
+    assert "/api/dashboard/summary?" in CLIENT
     assert "export type DashboardSummary" in CLIENT
     assert 'export type DashboardRange = "today" | "7d" | "30d"' in CLIENT
+    assert "export type DashboardDailyVolume" in CLIENT
 
 
 def test_screen_blocks_and_refresh_policy():
