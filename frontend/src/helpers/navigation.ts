@@ -4,7 +4,9 @@ import { StudioRoute } from "../router";
 // assets)는 화면마다 반복되는 공통 골격이라 각 Create*Screen이 받는 onGoTo(실제
 // StudioRoute 이동)를 통해 여기서 한 곳에서만 매핑한다.
 export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void) {
-  if (key === "workspace" || key === "promptManagement") {
+  if (key === "dashboard") {
+    onGoTo("home.dashboard");
+  } else if (key === "workspace" || key === "promptManagement") {
     onGoTo("create.promptManagement");
   } else if (key === "webtoonCuts") {
     onGoTo("webtoonCuts");
@@ -27,7 +29,9 @@ export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void)
 // AdminConsoleModal)이 제거되며 더 이상 폴백 대상이 아니라, 알 수 없는 key는 3b
 // (역할 & 권한)로 보낸다. A-04: adminAuditLog(감사 로그)도 같은 방식으로 추가했다.
 export function shellNavigateAdmin(key: string, onGoTo: (route: StudioRoute) => void) {
-  if (key === "adminCatalog") {
+  if (key === "dashboard") {
+    onGoTo("admin.dashboard");
+  } else if (key === "adminCatalog") {
     onGoTo("admin.catalogHierarchy");
   } else if (key === "adminGrokInstructions") {
     onGoTo("admin.grokInstructions");

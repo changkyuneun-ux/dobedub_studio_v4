@@ -78,6 +78,11 @@
 export type StudioRoute =
   | "access.login"
   | "access.manual"
+  // 2026-09-13: 로그인 랜딩 대시보드(HOME 그룹, 전역 표시)
+  | "home.dashboard"
+  // 2026-09-13: 관리자 콘솔 쉘 안의 대시보드(같은 화면, ADMIN 사이드바). 스튜디오↔관리자
+  // 콘솔 전환 버튼의 기본 도착지.
+  | "admin.dashboard"
   | "webtoonCuts"
   | "create.load"
   | "create.promptManagement"
@@ -113,7 +118,8 @@ const LEGACY_LAST_SEGMENT_ROUTE: Record<string, StudioRoute> = {
   manual: "access.manual",
   // E-06: create.workspace/admin.console 둘 다 라우트 자체가 제거됐으므로, 옛
   // 북마크는 각 흐름의 실제 첫 화면(2a/3b)으로 보낸다.
-  studio: "create.load",
+  // 2026-09-13: 로그인 랜딩이 대시보드로 바뀌어 옛 /studio 북마크도 대시보드로 보낸다.
+  studio: "home.dashboard",
   history: "review.history",
   admin: "admin.roles",
   status: "admin.status",
@@ -123,6 +129,7 @@ const LEGACY_LAST_SEGMENT_ROUTE: Record<string, StudioRoute> = {
 const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.login": "/studio/access/login",
   "access.manual": "/studio/access/manual",
+  "home.dashboard": "/studio/home",
   "webtoonCuts": "/studio/webtoon-cuts",
   "create.load": "/studio/create/load",
   "create.promptManagement": "/studio/create/prompts",
@@ -133,6 +140,7 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "review.history": "/studio/review/history",
   "review.reuse": "/studio/review/reuse",
   "review.assets": "/studio/review/assets",
+  "admin.dashboard": "/studio/admin/home",
   "admin.systemPrompt": "/studio/admin/system-prompt",
   "admin.sandbox": "/studio/admin/sandbox",
   "admin.taskPolicy": "/studio/admin/task-policy",
@@ -181,9 +189,8 @@ export function routeFromLocation(pathname: string, hasUser: boolean): StudioRou
   if (legacy) {
     return legacy;
   }
-  // E-06: create.workspace(옛 catch-all 타깃)가 라우트에서 제거됐으므로, 알 수
-  // 없는 경로는 create 흐름의 실제 첫 화면(2a)으로 보낸다.
-  return "create.load";
+  // 2026-09-13: 알 수 없는 경로는 로그인 랜딩(대시보드)으로 보낸다(이전: create.load).
+  return "home.dashboard";
 }
 
 export function routePath(route: StudioRoute): string {

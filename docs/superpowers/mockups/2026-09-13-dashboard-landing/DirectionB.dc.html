@@ -1,0 +1,146 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; background: #f6f7f6; color: #16191a; font-family: "IBM Plex Sans", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif; font-size: 12.5px; }
+    * { box-sizing: border-box; }
+    a { color: #0f7a55; } a:hover { color: #12a06a; }
+    .mono { font-family: "Roboto Mono", "SFMono-Regular", Consolas, monospace; }
+    .nav-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 7px; color: #3d4644; font-size: 12.5px; }
+    .nav-item.active { background: #e9f5ef; color: #0f7a55; font-weight: 600; }
+    .group-label { color: #98a09d; font-family: "Roboto Mono", monospace; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 0 16px 8px; }
+    .card { background: #fff; border: 1px solid #e2e5e3; border-radius: 11px; display: flex; flex-direction: column; overflow: hidden; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #eef0ef; padding: 12px 16px; }
+    .card-title { font-size: 13px; font-weight: 600; }
+    .card-meta { color: #98a09d; font-family: "Roboto Mono", monospace; font-size: 10px; letter-spacing: .04em; }
+    .badge { border-radius: 5px; font-family: "Roboto Mono", monospace; font-size: 10px; font-weight: 500; padding: 3px 8px; white-space: nowrap; }
+    .badge.ready { background: #e9f5ef; color: #0f7a55; }
+    .badge.failed { background: #fdeceb; color: #c0392b; }
+    .badge.running { background: #e7f0ff; color: #2368bd; }
+    .badge.pending { background: #fdf3e7; color: #8a5a00; }
+    .tile { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border-radius: 11px; border: 1px solid #e2e5e3; background: #fff; }
+    .tile.ok { border-color: #cfe3d9; background: #e9f5ef; }
+    .tile.warn { border-color: #f0d7b0; background: #fdf3e7; }
+    .tl { display: grid; grid-template-columns: 52px 14px minmax(0, 1fr); gap: 10px; align-items: start; }
+    .tl-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: #12a06a; }
+    .btn2 { background: #fff; border: 1px solid #e2e5e3; border-radius: 7px; color: #3d4644; font-size: 12px; font-weight: 600; padding: 7px 12px; }
+  </style>
+</helmet>
+
+<div style="display: grid; grid-template-columns: 212px minmax(0, 1fr); width: 1440px; height: 900px; background: #f6f7f6;">
+  <nav style="display: flex; flex-direction: column; background: #fff; border-right: 1px solid #e2e5e3; padding: 16px 0; height: 900px;">
+    <div style="display: flex; align-items: center; gap: 9px; padding: 0 16px 18px;">
+      <div style="width: 22px; height: 22px; border-radius: 6px; background: #12a06a;"></div>
+      <div style="font-size: 14px; font-weight: 700; letter-spacing: -0.01em;">DOBEDUB</div>
+    </div>
+    <div style="padding: 0 16px 16px;">
+      <div style="background: #e9f5ef; border: 1px solid #cfe3d9; border-radius: 7px; color: #0f7a55; font-size: 11.5px; font-weight: 600; padding: 7px 10px; text-align: center;">관리자 콘솔 →</div>
+    </div>
+    <div class="group-label">HOME</div>
+    <div style="display: flex; flex-direction: column; gap: 1px; padding: 0 8px 0 20px;"><div class="nav-item active"><span>대시보드</span></div></div>
+    <div class="group-label" style="padding-top: 18px;">LOCAL</div>
+    <div style="display: flex; flex-direction: column; gap: 1px; padding: 0 8px 0 20px;"><div class="nav-item"><span>이미지 컷 분할</span></div></div>
+    <div class="group-label" style="padding-top: 18px;">GENERATE</div>
+    <div style="display: flex; flex-direction: column; gap: 1px; padding: 0 8px 0 20px;">
+      <div class="nav-item"><span>작업 이력</span></div>
+      <div class="nav-item"><span>Batch 처리</span></div>
+      <div class="nav-item"><span>Grok 프롬프트 생성</span></div>
+      <div class="nav-item"><span>Runpod ComfyUI 요청</span></div>
+      <div class="nav-item"><span>Collection 관리</span></div>
+    </div>
+    <div class="group-label" style="padding-top: 18px;">HELP</div>
+    <div style="display: flex; flex-direction: column; gap: 1px; padding: 0 8px 0 20px;">
+      <div class="nav-item"><span>User Manual</span></div>
+      <div class="nav-item"><span>Metadata</span></div>
+    </div>
+    <div style="margin-top: auto; border-top: 1px solid #e2e5e3; padding: 12px 16px 4px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 4px;">
+        <div style="display: flex; flex-direction: column; font-size: 12px; font-weight: 600;">장균은<span class="mono" style="color: #98a09d; font-size: 9px; font-weight: 500; letter-spacing: .04em;">SUPER_ADMIN</span></div>
+        <div style="border: 1px solid #e2e5e3; border-radius: 6px; color: #3d4644; font-size: 11px; padding: 5px 9px;">로그아웃</div>
+      </div>
+    </div>
+  </nav>
+
+  <div style="display: flex; flex-direction: column; min-width: 0; height: 900px;">
+    <header style="display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid #e2e5e3; padding: 14px 22px;">
+      <div>
+        <div class="mono" style="color: #98a09d; font-size: 10px; font-weight: 500; letter-spacing: .06em;">HOME · DASHBOARD</div>
+        <div style="font-size: 17px; font-weight: 700; letter-spacing: -0.015em; margin-top: 2px;">좋은 아침입니다, 장균은 님</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="mono" style="color: #98a09d; font-size: 10px;">09:41 KST · 자동 갱신</span>
+        <div class="btn2">새로고침</div>
+      </div>
+    </header>
+
+    <div style="display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; padding: 18px 22px; overflow: auto;">
+      <div style="display: flex; flex-direction: column; gap: 14px;">
+        <!-- 큰 상태 타일 -->
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;">
+          <div class="tile ok">
+            <span class="mono" style="color: #0f7a55; font-size: 10px; font-weight: 700; letter-spacing: .06em;">생성 파이프라인</span>
+            <span style="font-size: 22px; font-weight: 700;">정상</span>
+            <span style="color: #3d4644; font-size: 12px;">ComfyUI · Qwen · DB 모두 응답 중</span>
+          </div>
+          <div class="tile ok">
+            <span class="mono" style="color: #0f7a55; font-size: 10px; font-weight: 700; letter-spacing: .06em;">SANDBOX POD</span>
+            <span style="font-size: 22px; font-weight: 700;">READY · RTX 5090</span>
+            <span style="color: #3d4644; font-size: 12px;">2 pods · 1 running · 볼륨 정상</span>
+          </div>
+          <div class="tile warn">
+            <span class="mono" style="color: #8a5a00; font-size: 10px; font-weight: 700; letter-spacing: .06em;">RUNPOD WORKER</span>
+            <span style="font-size: 22px; font-weight: 700;">3 / 5 사용 중</span>
+            <span style="color: #3d4644; font-size: 12px;">대기열 2 · 최근 1시간 타임아웃 3건</span>
+          </div>
+        </div>
+
+        <!-- 오늘 요약 -->
+        <div class="card">
+          <div class="card-head"><span class="card-title">오늘 작업</span><span class="card-meta">09-13 00:00 → 지금</span></div>
+          <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));">
+            <div style="display: grid; gap: 5px; padding: 16px; border-right: 1px solid #eef0ef;"><span class="mono" style="color: #98a09d; font-size: 10px; font-weight: 700;">제출</span><strong style="font-size: 28px;">31</strong></div>
+            <div style="display: grid; gap: 5px; padding: 16px; border-right: 1px solid #eef0ef;"><span class="mono" style="color: #98a09d; font-size: 10px; font-weight: 700;">완료</span><strong style="font-size: 28px; color: #0f7a55;">24</strong></div>
+            <div style="display: grid; gap: 5px; padding: 16px; border-right: 1px solid #eef0ef;"><span class="mono" style="color: #98a09d; font-size: 10px; font-weight: 700;">진행 중</span><strong style="font-size: 28px; color: #2368bd;">5</strong></div>
+            <div style="display: grid; gap: 5px; padding: 16px;"><span class="mono" style="color: #98a09d; font-size: 10px; font-weight: 700;">실패</span><strong style="font-size: 28px; color: #c0392b;">2</strong></div>
+          </div>
+        </div>
+
+        <!-- 작업자 카드 -->
+        <div class="card">
+          <div class="card-head"><span class="card-title">지금 작업 중인 사람</span><span class="card-meta">활성 작업자 4</span></div>
+          <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px 16px;">
+            <div style="display: flex; flex-direction: column; gap: 6px; border: 1px solid #e2e5e3; border-radius: 8px; padding: 12px;"><strong style="font-size: 13px;">김민지</strong><span class="mono" style="color: #6b7472; font-size: 11px;">wan22_i2v_720p</span><span class="badge running" style="align-self: flex-start;">RUNNING · 1m 20s</span></div>
+            <div style="display: flex; flex-direction: column; gap: 6px; border: 1px solid #e2e5e3; border-radius: 8px; padding: 12px;"><strong style="font-size: 13px;">박서준</strong><span class="mono" style="color: #6b7472; font-size: 11px;">webtoon_cut_i2v</span><span class="badge running" style="align-self: flex-start;">QUEUED</span></div>
+            <div style="display: flex; flex-direction: column; gap: 6px; border: 1px solid #e2e5e3; border-radius: 8px; padding: 12px;"><strong style="font-size: 13px;">이하늘</strong><span class="mono" style="color: #6b7472; font-size: 11px;">Batch · 12/40</span><span class="badge running" style="align-self: flex-start;">BATCH</span></div>
+            <div style="display: flex; flex-direction: column; gap: 6px; border: 1px solid #e2e5e3; border-radius: 8px; padding: 12px;"><strong style="font-size: 13px;">최유진</strong><span class="mono" style="color: #6b7472; font-size: 11px;">wan22_i2v_720p</span><span class="badge pending" style="align-self: flex-start;">REVIEW 대기</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 활동 타임라인 -->
+      <div class="card">
+        <div class="card-head"><span class="card-title">활동</span><a href="#" style="font-size: 11.5px; font-weight: 600; text-decoration: none;">작업 이력 →</a></div>
+        <div style="display: flex; flex-direction: column; gap: 14px; padding: 14px 16px;">
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:38</span><span class="tl-dot" style="background: #2368bd;"></span><div><div style="font-size: 12px;"><strong>김민지</strong> · wan22_i2v_720p 시작</div><div class="mono" style="color: #98a09d; font-size: 10.5px;">wk-3f2a</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:35</span><span class="tl-dot" style="background: #2368bd;"></span><div><div style="font-size: 12px;"><strong>박서준</strong> · webtoon_cut_i2v 대기열 진입</div><div class="mono" style="color: #98a09d; font-size: 10.5px;">worker 3/5 사용 중</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:31</span><span class="tl-dot"></span><div><div style="font-size: 12px;"><strong>장균은</strong> · wan22_i2v_720p 완료 3m 58s</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:27</span><span class="tl-dot" style="background: #c0392b;"></span><div><div style="font-size: 12px;"><strong>김민지</strong> · character_ref_i2v 실패</div><div class="mono" style="color: #c0392b; font-size: 10.5px;">timeout · wk-7be1</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:12</span><span class="tl-dot" style="background: #d08300;"></span><div><div style="font-size: 12px;"><strong>Sandbox Pod</strong> · 전환 후 시작 (PRO 6000 → RTX 5090)</div><div class="mono" style="color: #98a09d; font-size: 10.5px;">by 장균은</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">09:02</span><span class="tl-dot" style="background: #d08300;"></span><div><div style="font-size: 12px;"><strong>최유진</strong> · 검수 필요 항목 1건</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">08:55</span><span class="tl-dot"></span><div><div style="font-size: 12px;"><strong>장균은</strong> · character_ref_i2v 완료 3m 22s</div></div></div>
+          <div class="tl"><span class="mono" style="color: #98a09d; font-size: 11px;">08:40</span><span class="tl-dot"></span><div><div style="font-size: 12px;"><strong>이하늘</strong> · Batch 40건 제출</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

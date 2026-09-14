@@ -64,6 +64,15 @@ function isFailedRunpodStatus(status?: string) {
   return normalized === "FAILED" || normalized === "TIMED_OUT";
 }
 
+// 2026-09-13 지침 §6: 상태 3중 인코딩(색+점+텍스트) + 행 좌측 3px 바. 판정 로직(runpodResultStatusTone)은
+// 그대로 두고 배지 톤 → 행 바 클래스만 파생한다(완료·취소는 바 없음).
+function runpodRowToneClass(tone: string) {
+  if (tone === "is-failed") return "is-tone-fail";
+  if (tone === "is-running") return "is-tone-run";
+  if (tone === "is-pending") return "is-tone-wait";
+  return "";
+}
+
 function runpodResultStatusTone(status?: string) {
   if (isSuccessStatus(status)) return "is-ready";
   if (isCancelledStatus(status)) return "is-muted";
@@ -520,16 +529,19 @@ export function Create3aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="TASK HISTORY"
       headerTitle="작업 이력"
+      headerActions={historyTab === "runpod" ? <span className="v3-header-meta">{runpodHistoryTotal}건 · KST</span> : null}
       sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 10건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
         historyTab === "prompt" ? (
           <PromptGrokResponseDetail item={selectedPromptHistoryItem} />
         ) : (
           <>
+            {/* 지침 §4: 우측 패널은 무엇에 대한 것인지 헤더로 선언한다(전체 요약 vs 행 상세). */}
+            <div className="v3-panel-context">← 왼쪽 조회 결과 요약</div>
             <div className="v3-panel-title-row">
               <div>
                 <div className="v3-panel-title">RunPod 조회 통계</div>
-                <p className="v3-muted-text" style={{ margin: "4px 0 0" }}>현재 필터 기준</p>
+                <p className="v3-muted-text" style={{ margin: "4px 0 0" }}>현재 필터({runpodAppliedFilters.filter((filter) => !filter.value.startsWith("전체")).map((filter) => filter.label).join(" · ") || "없음"}) 기준 {runpodHistoryStats.total}건</p>
               </div>
               <span className="v3-status-badge is-ready">{pageStart}-{pageEnd} / {runpodHistoryTotal}</span>
             </div>
@@ -617,7 +629,15 @@ export function Create3aScreen({
         <PromptGenerationHistory user={user} onSelectGrokItem={setSelectedPromptHistoryItem} />
       ) : (
         <>
-      <div className="v3-runpod-history-toolbar">
+      {/* 2026-09-13 지침 §4·§5: ①조회 조건 → ②선택 작업 → ③조회 결과 번호 섹션. 필터 카드는 Batch ID
+          후보 드롭다운(.v3-batch-candidate-list, position:absolute)이 카드 밖으로 나가야 하므로
+          overflow:visible(is-overflow-visible)을 유지한다 — 카드 기본 overflow:hidden에 잘리면 안 된다. */}
+      <div className="v3-card v3-history-step-card is-overflow-visible">
+        <div className="v3-history-step-head">
+          <span className="v3-step-badge">1</span>
+          <strong>조회 조건</strong>
+          <small>필터를 바꾸면 아래 표와 우측 요약이 함께 갱신됩니다</small>
+        </div>
         <div className="v3-runpod-filter-bar v3-runpod-history-filters">
           <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
           <label>실행일<input type="date" value={runpodRunDate} onChange={(event) => { setRunpodRunDate(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
@@ -667,9 +687,62 @@ export function Create3aScreen({
           <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
           <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed" | "cancelled"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option><option value="cancelled">취소</option></select></label>
         </div>
-        <div className="v3-inline-actions v3-runpod-history-actions">
+      </div>
+
+      {/* ②선택 작업 바. 개수 바인딩은 각 액션이 실제로 처리하는 집합을 그대로 쓴다(지침 §5 "선택 대상이 필요한 버튼은
+          개수를 라벨에 포함"): 재실행·삭제 = selectedRunpodItems(이 페이지의 종료 상태 선택분), 다운로드 =
+          selectedDownloadItems(결과물 URL 있는 선택분), ZIP = selectedRunpodTaskIds(현재 필터 전체 선택 포함 ID 전체).
+          헤더의 "선택 N건"은 선택 ID 전체 수이며, 페이지 밖 선택이 있으면 괄호로 이 페이지 분을 병기한다. */}
+      <div className="v3-selection-bar">
+        <div className="v3-selection-bar-head">
+          <span className="v3-step-badge is-accent">2</span>
+          <span className="v3-selection-bar-title">선택 {selectedRunpodTaskIds.length}건에 대한 작업{selectedRunpodTaskIds.length !== selectedRunpodItems.length ? ` (이 페이지 ${selectedRunpodItems.length}건)` : ""}</span>
+          <div className="v3-selection-bar-actions">
+            <button
+              className="v3-primary-button"
+              type="button"
+              disabled={runpodBulkReworking || !selectedRunpodItems.length}
+              onClick={reworkSelectedRunpodItems}
+            >
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3.4 2.2 11.4 7l-8 4.8z" /></svg>
+              선택 재실행 ({selectedRunpodItems.length})
+            </button>
+            <button
+              className="v3-secondary-button"
+              type="button"
+              disabled={!selectedDownloadItems.length}
+              onClick={() => selectedDownloadItems.forEach((item) => onDownload(item))}
+            >
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><line x1="7" y1="2" x2="7" y2="9" /><path d="M4.2 6.4 7 9.2l2.8-2.8" /><line x1="2.6" y1="11.6" x2="11.4" y2="11.6" /></svg>
+              선택 다운로드 ({selectedDownloadItems.length})
+            </button>
+            <button
+              className="v3-secondary-button"
+              type="button"
+              disabled={!selectedBatchJob || !selectedRunpodTaskIds.length}
+              onClick={() => void downloadSelectedBatchZip()}
+            >
+              선택 ZIP ({selectedRunpodTaskIds.length})
+            </button>
+            {canDelete ? (
+              <>
+                <span className="v3-selection-bar-divider" aria-hidden="true" />
+                <button
+                  className="v3-danger-button"
+                  type="button"
+                  disabled={!selectedRunpodItems.length}
+                  onClick={() => onRequestBulkDelete(selectedRunpodItems)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><rect x="3.4" y="4.2" width="7.2" height="7.6" rx="1.4" /><line x1="2.2" y1="4.2" x2="11.8" y2="4.2" /><line x1="5.6" y1="2.2" x2="8.4" y2="2.2" /></svg>
+                  선택 삭제 ({selectedRunpodItems.length})
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="v3-selection-bar-quiet">
           <button
-            className="v3-secondary-button"
+            className="v3-secondary-button is-quiet"
             type="button"
             disabled={!selectedBatchJob || runpodSelectionLoading}
             onClick={() => void selectAllFilteredRunpodTasks()}
@@ -677,59 +750,32 @@ export function Create3aScreen({
             {runpodSelectionLoading ? "선택 중..." : "현재 필터 전체 선택"}
           </button>
           <button
-            className="v3-primary-button"
-            type="button"
-            disabled={runpodBulkReworking || !selectedRunpodItems.length}
-            onClick={reworkSelectedRunpodItems}
-          >
-            선택 재실행 ({selectedRunpodItems.length})
-          </button>
-          <button
-            className="v3-secondary-button"
+            className="v3-secondary-button is-quiet"
             type="button"
             disabled={runpodBulkReworking || !canReworkFilteredRunpodItems}
             onClick={reworkFilteredRunpodItems}
           >
-            조회 오류 재실행
+            조회 오류 재실행{runpodReplayCandidateCount ? ` (${runpodReplayCandidateCount})` : ""}
           </button>
           <button
-            className="v3-secondary-button"
+            className="v3-secondary-button is-quiet"
             type="button"
             disabled={!selectedBatchJob}
             onClick={downloadFilteredBatchZip}
           >
             배치 ZIP
           </button>
-          <button
-            className="v3-secondary-button"
-            type="button"
-            disabled={!selectedBatchJob || !selectedRunpodTaskIds.length}
-            onClick={() => void downloadSelectedBatchZip()}
-          >
-            선택 ZIP ({selectedRunpodTaskIds.length})
-          </button>
-          <button
-            className="v3-secondary-button"
-            type="button"
-            disabled={!selectedDownloadItems.length}
-            onClick={() => selectedDownloadItems.forEach((item) => onDownload(item))}
-          >
-            선택 다운로드 ({selectedDownloadItems.length})
-          </button>
-          {canDelete ? (
-            <button
-              className="v3-danger-button"
-              type="button"
-              disabled={!selectedRunpodItems.length}
-              onClick={() => onRequestBulkDelete(selectedRunpodItems)}
-            >
-              선택 삭제 ({selectedRunpodItems.length})
-            </button>
-          ) : null}
         </div>
       </div>
       <div className="v3-card v3-runpod-history-table">
-        <div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
+        <div className="v3-history-step-head">
+          <span className="v3-step-badge">3</span>
+          <strong>조회 결과</strong>
+          <span className="v3-history-count-chip">{runpodHistoryTotal}건 중 {pageStart}–{pageEnd}</span>
+        </div>
+        {/* 16컬럼 그리드 정합성: head와 row가 같은 RUNPOD_HISTORY_GRID를 쓰고, 행 좌측 3px 상태 바는
+            border-left로 그려 컬럼 수·폭을 바꾸지 않는다. head에도 같은 폭의 투명 border-left를 둔다(.v3-history-head). */}
+        <div className="v3-review-table-head v3-history-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
           <span><input type="checkbox" aria-label="현재 페이지 종료 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
         </div>
         {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
@@ -752,7 +798,7 @@ export function Create3aScreen({
           return (
             <div
               key={item.taskId}
-              className={`v3-review-table-row v3-history-row ${isSelected ? "is-selected" : ""}`}
+              className={`v3-review-table-row v3-history-row ${runpodRowToneClass(resultStatusTone)} ${isSelected ? "is-selected" : ""}`}
               style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID, cursor: "pointer" }}
               onClick={() => onSelect(item)}
             >
@@ -842,7 +888,7 @@ export function Create3aScreen({
             <button className="v3-page-button" type="button" disabled={runpodPage <= 1} onClick={() => setRunpodPage((value) => value - 1)}>이전</button>
             <span className="v3-page-button is-current">{runpodPage}</span>
             <button className="v3-page-button" type="button" disabled={runpodPage >= runpodPageCount} onClick={() => setRunpodPage((value) => value + 1)}>다음</button>
-            <span className="v3-pagination-meta">10건 / 페이지</span>
+            <span className="v3-pagination-meta">10건 / 페이지 · 표는 가로 스크롤로 16컬럼 전체 확인</span>
           </div>
         </div>
       </div>

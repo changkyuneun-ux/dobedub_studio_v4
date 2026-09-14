@@ -134,3 +134,30 @@ def test_control_endpoints_require_sandbox_control(api_client):
     assert api_client.post("/api/admin/sandbox-pod/start", headers=headers).status_code == 403
     assert api_client.put("/api/admin/sandbox-pod/settings", json={}, headers=headers).status_code == 403
     assert api_client.post("/api/admin/sandbox-pod/terminate", json={"podId": "x"}, headers=headers).status_code == 403
+
+
+def test_status_live_flag_and_live_endpoint(api_client, monkeypatch):
+    # 2026-09-13 2단계 로딩: ?live=false는 include_live=False로 전달, /live는 sandbox_pod_live 호출.
+    _seed_users()
+    seen: dict[str, object] = {}
+
+    def fake_status(settings, db, *, include_live=True):
+        seen["include_live"] = include_live
+        return {"configured": True, "pods": [], "attempts": []}
+
+    def fake_live(settings, db):
+        seen["live"] = True
+        return {"configured": True, "podId": "p1", "runtimeStatus": "READY", "systemStatus": None, "pods": []}
+
+    monkeypatch.setattr("backend.app.api.v1.sandbox_pod.sandbox_pod_status", fake_status)
+    monkeypatch.setattr("backend.app.api.v1.sandbox_pod.sandbox_pod_live", fake_live)
+    headers = _headers("sandbox-admin", role="SUPER_ADMIN")
+
+    assert api_client.get("/api/admin/sandbox-pod?live=false", headers=headers).status_code == 200
+    assert seen["include_live"] is False
+    assert api_client.get("/api/admin/sandbox-pod", headers=headers).status_code == 200
+    assert seen["include_live"] is True
+    response = api_client.get("/api/admin/sandbox-pod/live", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["runtimeStatus"] == "READY"
+    assert seen.get("live") is True

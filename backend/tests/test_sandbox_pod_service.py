@@ -5,6 +5,9 @@ from unittest.mock import patch
 
 from backend.app.core.config import Settings
 from backend.app.services.sandbox_pod_service import (
+    _gpu_type_name,
+    _hydrate_pod,
+    _hydrate_pod_if_needed,
     _lifecycle_event_timestamp,
     _present_pod,
     _request,
@@ -79,8 +82,36 @@ class SandboxPodLifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(result["cpuPercent"], 12.8)
         self.assertEqual(result["gpus"][0]["memoryUtilPercent"], 67.1)
         self.assertEqual(result["storage"]["networkVolumeId"], "volume-1")
-        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
         self.assertEqual(request.call_args.args[2], "/pods/pod-123")
+
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_hydrate_pod_reads_detail_from_rest_v2_not_v1(self, request: object) -> None:
+        # 2026-09-14: RunPod's v1 GET /pods/{id} does not carry GPU identification
+        # (no gpuTypeId/gpu.id) — only REST v2's pod detail does (confirmed against
+        # RunPod's own docs: docs.runpod.io/api-reference-v2/pods/get-a-pod). This
+        # call used to omit base_url (defaulting to v1), so a pod whose /pods LIST
+        # entry lacked GPU info never got it filled in, leaving VRAM/재고 blank in
+        # the admin screen even after the catalog/runtime-metrics host was fixed.
+        request.return_value = {"gpu": {"id": "NVIDIA GeForce RTX 5090"}, "memoryInGb": 60}
+
+        result = _hydrate_pod(Settings(sandbox_pod_api_key="test-key"), {"id": "pod-123"}, strict=False)
+
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
+        self.assertEqual(request.call_args.args[2], "/pods/pod-123")
+        self.assertEqual(_gpu_type_name(result), "NVIDIA GeForce RTX 5090")
+
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_hydrate_pod_if_needed_fills_in_gpu_missing_from_the_list_response(self, request: object) -> None:
+        # Mirrors a real RunPod v1 /pods LIST entry: ports/memoryInGb/costPerHr
+        # present but no gpu type field at all (as reproduced against a live pod).
+        list_pod = {"id": "pod-123", "ports": ["8188/http"], "memoryInGb": 60, "costPerHr": 0.99}
+        request.return_value = {"gpu": {"id": "NVIDIA GeForce RTX 5090"}}
+
+        result = _hydrate_pod_if_needed(Settings(sandbox_pod_api_key="test-key"), list_pod)
+
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
+        self.assertEqual(_gpu_type_name(result), "NVIDIA GeForce RTX 5090")
 
     @patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": True, "gpus": []})
     @patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY")
@@ -115,6 +146,13 @@ class SandboxPodResolutionTests(unittest.TestCase):
 
     VOLUME = "18jhx6rxjd"
     TEMPLATE = "nh1d177m2w"
+
+    def setUp(self) -> None:
+        # 2026-09-13 성능: _resolve_pods()의 짧은 TTL 목록 캐시가 이전 테스트의 응답을
+        # 들고 넘어오지 않도록 매 테스트 시작 전 비운다.
+        service._pods_list_cache["at"] = 0.0
+        service._pods_list_cache["value"] = None
+        service._pods_list_cache["volumeId"] = None
 
     def _settings(self) -> Settings:
         return Settings(
@@ -156,7 +194,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
     def test_volume_selector_ignores_template_filter_and_picks_running_pod(self, request: object) -> None:
         pods = self._pods()
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -173,7 +211,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
     def test_template_filter_still_applies_when_only_template_is_configured(self, request: object) -> None:
         pods = self._pods()
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -192,7 +230,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
         pods = self._pods()
         pods[1]["desiredStatus"] = "EXITED"
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -225,6 +263,7 @@ from backend.app.services.sandbox_pod_service import (  # noqa: E402
     SandboxPodUnavailable,
     _classify_error,
     _gpu_candidates,
+    sandbox_pod_live,
     sandbox_pod_status,
     start_sandbox_pod,
     stop_sandbox_pod,
@@ -290,7 +329,10 @@ class _RunPodScript:
         self.calls: list[tuple[str, str, dict | None]] = []
 
     def __call__(self, request, timeout):
-        path = request.full_url.replace("https://rest.runpod.io/v1", "")
+        # 2026-09-14: _hydrate_pod's detail fetch now targets REST v2 (api.runpod.io)
+        # for GPU info, while everything else still uses v1 (rest.runpod.io) — strip
+        # whichever host prefix is present so this fake serves both transparently.
+        path = request.full_url.replace("https://rest.runpod.io/v1", "").replace("https://api.runpod.io/v2", "")
         method = request.get_method()
         body = json.loads(request.data) if request.data else None
         self.calls.append((method, path, body))
@@ -348,6 +390,13 @@ def _settings(**overrides) -> Settings:
 
 
 class SandboxPodMultiPodTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 2026-09-13 성능: _resolve_pods()의 짧은 TTL 목록 캐시가 이전 테스트의 응답을
+        # 들고 넘어오지 않도록 매 테스트 시작 전 비운다.
+        service._pods_list_cache["at"] = 0.0
+        service._pods_list_cache["value"] = None
+        service._pods_list_cache["volumeId"] = None
+
     def _patches(self, fake, catalog=None):
         return [
             patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake),
@@ -404,6 +453,87 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         self.assertEqual(result["pods"][0]["gpuTier"], "primary")
         self.assertEqual(result["pods"][1]["pricePerHr"], 2.19)
         self.assertEqual(result["attempts"], [])
+
+    def test_status_pod_list_carries_catalog_stock_level(self) -> None:
+        # 2026-09-13: sandbox pod 목록에서 재고(gpuStockLevel)를 표시하는 요구사항.
+        # 카탈로그에 재고가 있으면 그대로, 없으면(캐시 미조회 등) None으로 노출한다.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        catalog = {
+            GPU_5090: {"memoryInGb": 32, "securePrice": 0.99, "displayName": "RTX 5090", "stockLevel": "MEDIUM"},
+            GPU_PRO6000: {"memoryInGb": 96, "securePrice": 2.19, "displayName": "RTX PRO 6000", "stockLevel": "HIGH"},
+        }
+
+        result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=catalog)
+
+        by_id = {pod["podId"]: pod for pod in result["pods"]}
+        self.assertEqual(by_id["caiuvooekq9qqw"]["gpuStockLevel"], "MEDIUM")
+        self.assertEqual(by_id["3i50u1x4pyz0vr"]["gpuStockLevel"], "HIGH")
+
+    def test_status_pod_list_stock_level_is_none_without_catalog(self) -> None:
+        fake = _RunPodScript([_pod_5090()])
+
+        result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=None)
+
+        self.assertIsNone(result["pods"][0]["gpuStockLevel"])
+
+    def test_status_pod_list_logs_when_gpu_missing_from_catalog(self) -> None:
+        # 2026-09-14: 카탈로그 조회는 성공했지만 이 파드의 gpu id가 카탈로그 키와 안 맞는
+        # 경우도 VRAM/재고가 조용히 비어 있게 되므로 관측 이벤트가 남아야 한다.
+        from backend.app.core import observability
+
+        fake = _RunPodScript([_pod_5090()])
+        catalog = {GPU_PRO6000: {"memoryInGb": 96, "securePrice": 2.19, "displayName": "RTX PRO 6000", "stockLevel": "HIGH"}}
+
+        with patch.object(observability.OBSERVABILITY_LOGGER, "info") as info:
+            result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=catalog)
+
+        self.assertIsNone(result["pods"][0]["gpuStockLevel"])
+        payloads = [json.loads(call.args[0]) for call in info.call_args_list]
+        failure = next(p for p in payloads if p["event"] == "sandbox_pod.catalog_failure")
+        self.assertEqual(failure["Reason"], "gpu_not_in_catalog")
+        self.assertEqual(failure["detail"], GPU_5090)
+
+    def test_status_probes_each_running_pod_once_and_skips_detail_when_list_is_complete(self) -> None:
+        # 2026-09-13 성능: 표시 파드에 8188 프로브가 두 번 나가던 중복 제거 + 목록 응답이
+        # 완전하면 GET /pods/{id} 상세 조회 생략 확인.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        probe = patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY")
+        metrics = patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": False, "mode": "configuration", "gpus": []})
+        with patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake), \
+                patch("backend.app.services.sandbox_pod_service._fetch_gpu_catalog", return_value=None), \
+                probe as probe_mock, metrics as metrics_mock:
+            result = sandbox_pod_status(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"))
+
+        running = [pod for pod in fake.pods.values() if pod["desiredStatus"] == "RUNNING"]
+        self.assertEqual(probe_mock.call_count, len(running))
+        self.assertEqual(metrics_mock.call_count, 1)
+        self.assertEqual(result["runtimeStatus"], "READY")
+        self.assertEqual([m for m, p, _ in fake.calls if m == "GET" and p.startswith("/pods/")], [])
+
+    def test_two_phase_loading_status_without_live_then_live_endpoint(self) -> None:
+        # 2026-09-13 2단계 로딩: include_live=False는 프로브·지표를 호출하지 않고 pending으로,
+        # sandbox_pod_live는 표시 파드의 준비 상태·지표와 파드별 runtimeStatus만 돌려준다.
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        metrics_value = {"available": True, "mode": "live", "gpus": [], "uptimeSeconds": 5}
+        with patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen", side_effect=fake), \
+                patch("backend.app.services.sandbox_pod_service._fetch_gpu_catalog", return_value=None), \
+                patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY") as probe_mock, \
+                patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value=metrics_value) as metrics_mock:
+            listed = sandbox_pod_status(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"), include_live=False)
+            self.assertEqual(probe_mock.call_count, 0)
+            self.assertEqual(metrics_mock.call_count, 0)
+            self.assertEqual(listed["runtimeStatus"], "RUNNING")
+            self.assertEqual(listed["systemStatus"]["mode"], "pending")
+            self.assertEqual([pod["podId"] for pod in listed["pods"]], ["caiuvooekq9qqw", "3i50u1x4pyz0vr"])
+
+            live = sandbox_pod_live(_settings(), prefs=SandboxPodPrefs(selected_pod_id="3i50u1x4pyz0vr"))
+            self.assertEqual(live["podId"], "3i50u1x4pyz0vr")
+            self.assertEqual(live["runtimeStatus"], "READY")
+            self.assertEqual(live["systemStatus"], metrics_value)
+            self.assertIn("준비되었습니다", live["message"])
+            self.assertEqual({pod["podId"]: pod["runtimeStatus"] for pod in live["pods"]}["3i50u1x4pyz0vr"], "READY")
+            self.assertEqual(probe_mock.call_count, 1)
+            self.assertEqual(metrics_mock.call_count, 1)
 
     def test_status_without_running_pod_uses_selected_then_most_recent(self) -> None:
         fake = _RunPodScript([_pod_5090(), _pod_pro6000("EXITED")])
@@ -746,6 +876,30 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._run(stop_sandbox_pod, fake, _settings(), None, None, prefs=SandboxPodPrefs())
 
+    # --- 2026-09-13 성능: 파드 목록 조회 캐시 ---------------------------------
+
+    def test_resolve_pods_list_cache_avoids_duplicate_get_pods_calls(self) -> None:
+        fake = _RunPodScript([_pod_5090(), _pod_pro6000()])
+        settings = _settings()
+
+        def list_calls() -> list:
+            return [c for c in fake.calls if c[0] == "GET" and c[1].startswith("/pods?")]
+
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 1)
+
+        # 짧은 TTL 안의 두 번째 조회는 캐시를 재사용하고 RunPod GET /pods를 다시 부르지 않는다.
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 1)
+
+        # Stop처럼 상태를 바꾸는 액션은 항상 use_cache=False로 최신 목록을 다시 읽는다.
+        self._run(stop_sandbox_pod, fake, settings, None, "3i50u1x4pyz0vr", prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 2)
+
+        # 액션 이후 캐시를 비웠으므로 다음 상태 조회는 새로 GET /pods를 부른다.
+        self._run(sandbox_pod_status, fake, settings, prefs=SandboxPodPrefs())
+        self.assertEqual(len(list_calls()), 3)
+
 
 class SandboxPodCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -755,21 +909,41 @@ class SandboxPodCatalogTests(unittest.TestCase):
     @patch("backend.app.services.sandbox_pod_service._request")
     def test_catalog_reads_rest_v2_gpu_catalog_and_caches(self, request: object) -> None:
         request.return_value = {"gpus": [
-            {"id": GPU_PRO4500, "name": "RTX PRO 4500", "memory": 32, "price": {"secure": 0.72, "community": 0.34}},
+            {"id": GPU_PRO4500, "name": "RTX PRO 4500", "memory": 32, "price": {"secure": 0.72, "community": 0.34}, "availability": "HIGH"},
             {"id": "NVIDIA L4", "name": "L4", "memory": 24, "price": {"secure": 0.49}},
         ]}
 
         catalog = service._fetch_gpu_catalog(_settings())
 
-        self.assertEqual(request.call_args.args[2], "/catalog/gpus")
-        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
-        self.assertEqual(catalog[GPU_PRO4500], {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500"})
+        # 2026-09-13: 재고(availability)를 함께 받기 위해 include=AVAILABILITY&product=POD를 붙인다.
+        self.assertEqual(request.call_args.args[2], "/catalog/gpus?include=AVAILABILITY&product=POD")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
+        self.assertEqual(
+            catalog[GPU_PRO4500],
+            {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500", "stockLevel": "HIGH"},
+        )
+        # availability가 없는 항목은 stockLevel이 None(표시 안 함)이어야 한다.
+        self.assertIsNone(catalog["NVIDIA L4"]["stockLevel"])
         request.side_effect = AssertionError("should be cached")
         self.assertEqual(service._fetch_gpu_catalog(_settings())[GPU_PRO4500]["memoryInGb"], 32)
 
     @patch("backend.app.services.sandbox_pod_service._request", side_effect=SandboxPodApiError(403, "forbidden"))
     def test_catalog_failure_returns_none(self, _: object) -> None:
         self.assertIsNone(service._fetch_gpu_catalog(_settings()))
+
+    @patch("backend.app.services.sandbox_pod_service._request", side_effect=SandboxPodApiError(403, "forbidden"))
+    def test_catalog_failure_emits_observability_event(self, _: object) -> None:
+        # 2026-09-14: 카탈로그 조회 실패는 조용히 삼켜지더라도(VRAM/재고는 그대로 비어
+        # 있어야 함) 관측 이벤트로는 반드시 남아야 진단이 가능하다.
+        from backend.app.core import observability
+
+        with patch.object(observability.OBSERVABILITY_LOGGER, "info") as info:
+            self.assertIsNone(service._fetch_gpu_catalog(_settings()))
+
+        payload = json.loads(info.call_args.args[0])
+        self.assertEqual(payload["event"], "sandbox_pod.catalog_failure")
+        self.assertEqual(payload["Reason"], "SandboxPodApiError")
+        self.assertEqual(payload["SandboxPodCatalogFailureCount"], 1)
 
     @patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen")
     def test_request_wraps_non_json_body(self, urlopen: object) -> None:

@@ -161,8 +161,9 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
 
     assert "apiClient.promptHistory({ page, generationStatus: generationFilter, runpodStatus: runpodFilter, batchId: selectedPromptBatchJobId })" in source
     assert "apiClient.runpodHistory({ page: runpodPage, workflowId: runpodWorkflowFilter, resultStatus: runpodResultFilter, workerId: runpodWorkerFilter, runDate: runpodRunDate, batchId: selectedBatchJobId, jobId: runpodJobSearch.trim() })" in source
-    assert "v3-runpod-history-toolbar" in source
-    assert "v3-runpod-history-actions" in source
+    # 2026-09-13 식별성 지침: 툴바 → ①조회 조건 카드(드롭다운 overflow 허용) + ②선택 작업 바
+    assert "v3-history-step-card is-overflow-visible" in source
+    assert "v3-selection-bar" in source
     assert "runpodResponse?.filename" in source
     assert "promptHistory" in source
     assert "runpodHistory" in source
@@ -234,7 +235,7 @@ def test_runpod_history_preview_columns_show_assets_instead_of_generic_view_text
 def test_runpod_history_shows_video_and_generation_times_before_download() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
-    table = source.split('<div className="v3-review-table-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>', 1)[1].split("{selectedRunpodPromptItem ?", 1)[0]
+    table = source.split('<div className="v3-review-table-head v3-history-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>', 1)[1].split("{selectedRunpodPromptItem ?", 1)[0]
 
     assert "durationSeconds?: number" in client
     assert "function formatRunpodHistoryTime" in source
@@ -278,7 +279,7 @@ def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:
 def test_runpod_history_replay_actions_stay_on_runpod_history() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
-    toolbar = source.split('v3-runpod-history-actions', 1)[1].split('<div className="v3-card v3-runpod-history-table">', 1)[0]
+    toolbar = source.split('className="v3-selection-bar"', 1)[1].split('<div className="v3-card v3-runpod-history-table">', 1)[0]
 
     assert "reworkRunpodHistoryItems" in client
     assert "전체 재실행" not in source
@@ -302,7 +303,8 @@ def test_runpod_history_right_panel_shows_filtered_statistics_dashboard() -> Non
     assert "response.stats || EMPTY_RUNPOD_HISTORY_STATS" in source
     assert "filteredHistory.reduce" not in source
     assert "RunPod 조회 통계" in source
-    assert "현재 필터 기준" in source
+    assert "왼쪽 조회 결과 요약" in source  # 2026-09-13 지침 §4: 패널이 무엇에 대한 것인지 헤더로 선언
+    assert ") 기준 {runpodHistoryStats.total}건" in source
     assert "총건" in source
     assert "완료" in source
     assert "실패" in source
@@ -698,3 +700,30 @@ def test_runpod_request_screen_renders_item_failure_message() -> None:
     assert "draft.failureMessage" in runpod_screen
     assert "v3-runpod-failure-message" in runpod_screen
     assert ".v3-runpod-failure-message" in css
+
+
+def test_runpod_history_identity_guideline_grid_overflow_and_counts() -> None:
+    """2026-09-13 작업자 UI 식별성 지침 — ①16컬럼 그리드 정합성 ②카드 내 드롭다운 overflow ③액션별 선택 수량 바인딩."""
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    # ① head/row가 같은 RUNPOD_HISTORY_GRID(16컬럼)를 쓰고, 상태 바는 border-left로만 그린다(컬럼 추가 없음)
+    grid = source.split("const RUNPOD_HISTORY_GRID = \"", 1)[1].split("\"", 1)[0]
+    assert len(grid.split(") ")) + grid.count("px ") - grid.count("minmax(") >= 0  # sanity: parses
+    assert grid.count("minmax(") + len([tok for tok in grid.replace(")", ") ").split() if tok.endswith("px") and "(" not in tok]) == 16
+    assert source.count("style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID") == 2
+    assert ".v3-history-head, .v3-history-row { border-left: 3px solid transparent; }" in css
+    assert "v3-history-row ${runpodRowToneClass(resultStatusTone)}" in source
+
+    # ② Batch ID 후보 드롭다운이 카드 밖으로 나가야 하므로 필터 카드는 overflow:visible
+    assert ".v3-card.is-overflow-visible { overflow: visible; }" in css
+    filter_card = source.split('className="v3-card v3-history-step-card is-overflow-visible"', 1)[1].split('className="v3-selection-bar"', 1)[0]
+    assert "v3-batch-candidate-list" in filter_card
+
+    # ③ 액션별 개수 = 실제 처리 집합 (재실행·삭제=selectedRunpodItems, 다운로드=selectedDownloadItems, ZIP=selectedRunpodTaskIds)
+    bar = source.split('className="v3-selection-bar"', 1)[1].split('<div className="v3-card v3-runpod-history-table">', 1)[0]
+    assert "선택 재실행 ({selectedRunpodItems.length})" in bar and "onClick={reworkSelectedRunpodItems}" in bar
+    assert "선택 삭제 ({selectedRunpodItems.length})" in bar and "onRequestBulkDelete(selectedRunpodItems)" in bar
+    assert "선택 다운로드 ({selectedDownloadItems.length})" in bar and "selectedDownloadItems.forEach((item) => onDownload(item))" in bar
+    assert "선택 ZIP ({selectedRunpodTaskIds.length})" in bar and "downloadSelectedBatchZip()" in bar
+    assert "선택 {selectedRunpodTaskIds.length}건에 대한 작업" in bar

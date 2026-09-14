@@ -221,6 +221,45 @@ def observe_sandbox_pod_event(*, kind: str, pod_id: str | None, gpu_type_id: str
     OBSERVABILITY_LOGGER.info(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
 
 
+_CATALOG_FAILURE_METRIC = "SandboxPodCatalogFailureCount"
+
+
+def observe_sandbox_pod_catalog_failure(*, reason: str, detail: str | None) -> None:
+    """One EMF record when the RunPod GPU catalog fetch is unusable (spec 2026-09-14).
+
+    ``_fetch_gpu_catalog`` swallows every failure so a Sandbox Pod status/start
+    call never breaks on the catalog being optional — but that used to mean a
+    failure left the admin screen's VRAM/재고 columns silently blank with no
+    way to tell why. ``reason`` is a bounded label (exception class name, or
+    "gpu_not_in_catalog" for a successful-but-unmatched lookup) so it is safe
+    as a CloudWatch metric dimension; ``detail`` (free-form, e.g. the exception
+    message or the unmatched gpu id) is logged alongside for Logs Insights only.
+    """
+    settings = get_settings()
+    if not settings.observability_enabled:
+        return
+    payload = {
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [
+                {
+                    "Namespace": "DOBEDUB/Studio",
+                    "Dimensions": [["Environment", "Reason"]],
+                    "Metrics": [{"Name": _CATALOG_FAILURE_METRIC, "Unit": "Count"}],
+                }
+            ],
+        },
+        "event": "sandbox_pod.catalog_failure",
+        "environment": settings.observability_environment,
+        "reason": reason,
+        "detail": detail,
+        "Environment": settings.observability_environment,
+        "Reason": reason,
+        _CATALOG_FAILURE_METRIC: 1,
+    }
+    OBSERVABILITY_LOGGER.info(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+
+
 def _request_emf_payload(
     *,
     environment: str,

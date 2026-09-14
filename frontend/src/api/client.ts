@@ -211,6 +211,9 @@ export type SandboxPodSummary = {
   vramGb?: number | null;
   ramGb?: number | null;
   pricePerHr?: number | null;
+  // 2026-09-13: RunPod 카탈로그 재고 등급(NONE/LOW/MEDIUM/HIGH). 카탈로그 미조회 시 null —
+  // "이 파드 자체가 지금 가용한지"가 아니라 "같은 GPU를 새로 만들면 얼마나 쉽게 뜨는지"의 참고 정보.
+  gpuStockLevel?: "NONE" | "LOW" | "MEDIUM" | "HIGH" | string | null;
   desiredStatus?: string;
   runtimeStatus?: string;
   lastStartedAt?: string | null;
@@ -274,7 +277,7 @@ export type SandboxPodStatus = {
   httpServices: SandboxPodHttpService[];
   systemStatus?: {
     available: boolean;
-    mode?: "live" | "configuration" | "unavailable";
+    mode?: "live" | "configuration" | "unavailable" | "pending";
     uptimeSeconds?: number | null;
     cpuPercent?: number | null;
     memoryPercent?: number | null;
@@ -293,6 +296,96 @@ export type SandboxPodStatus = {
     };
     message?: string;
   };
+};
+
+// 2단계 로딩 2단계(GET /api/admin/sandbox-pod/live): 표시 파드의 8188 준비 상태·runtime
+// 지표와 파드별 runtimeStatus만. 목록·설정은 sandboxPodStatus({ live: false })가 담당.
+export type SandboxPodLive = {
+  configured: boolean;
+  podId?: string | null;
+  desiredStatus?: string;
+  runtimeStatus?: string | null;
+  systemStatus?: SandboxPodStatus["systemStatus"] | null;
+  message?: string | null;
+  pods: Array<{ podId: string; runtimeStatus: string }>;
+  checkedAt?: string | null;
+  checkedAtUtc?: string | null;
+  checkedAtKst?: string | null;
+};
+
+// 2026-09-13 로그인 랜딩 대시보드(GET /api/dashboard/summary) — 전역 API, 인증만 필요.
+export type DashboardRange = "today" | "7d" | "30d";
+
+export type DashboardRecentTask = {
+  taskId: string;
+  createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
+  user: { id?: string | null; name?: string | null };
+  workflowId: string;
+  workflowName: string;
+  workerName?: string | null;
+  status: string;
+  statusKind: "completed" | "failed" | "queued" | "active" | "other";
+  elapsedSeconds?: number | null;
+  lastDispatchError?: string | null;
+  batchJobId?: string | null;
+};
+
+export type DashboardAlert = { id: string; level: "warning" | "danger" | "info"; message: string; route?: StudioRouteLike | null };
+type StudioRouteLike = string;
+
+export type DashboardSummary = {
+  range: DashboardRange;
+  since?: string | null;
+  sinceKst?: string | null;
+  until?: string | null;
+  untilKst?: string | null;
+  kpi: {
+    submitted: number;
+    submittedDeltaPercent?: number | null;
+    completed: number;
+    successRate?: number | null;
+    active: number;
+    queued: number;
+    failed: number;
+    failedDispatch: number;
+    failedTimeout: number;
+    avgElapsedSeconds?: number | null;
+    avgDelaySeconds?: number | null;
+    activeUsers: number;
+    batchJobsInProgress: number;
+  };
+  recent: DashboardRecentTask[];
+  byUser: Array<{ userId?: string | null; name: string; submitted: number; failed: number }>;
+  byWorkflow: Array<{ workflowId: string; workflowName: string; submitted: number; avgElapsedSeconds?: number | null }>;
+  system: {
+    comfy: { configured: boolean; executionMode: string; dryRun: boolean };
+    promptLlm: { configured: boolean; provider?: string | null; model?: string | null; timeoutSeconds?: number | null };
+    workflows: { count?: number | null };
+  };
+  sandbox: {
+    configured: boolean;
+    activePodId?: string | null;
+    activePodName?: string | null;
+    desiredStatus?: string | null;
+    gpuTier?: string | null;
+    gpuTypeId?: string | null;
+    podCount: number;
+    runningCount: number;
+    conflict: boolean;
+    duplicateStoppedPodIds: string[];
+    error?: string | null;
+    /** 서버 캐시 없음 → 백그라운드 갱신 중(프론트가 잠시 후 재조회) */
+    pending?: boolean;
+    /** 캐시 만료분을 즉시 돌려주고 백그라운드 갱신 중 */
+    stale?: boolean;
+  };
+  worker: { active: number; queued: number; maxActiveTasksTotal: number; maxActiveTasksPerUser: number };
+  db: { alembicCurrent?: string | null; alembicHead?: string | null; migrationRequired: boolean; error?: string | null };
+  alerts: DashboardAlert[];
+  checkedAt?: string | null;
+  checkedAtKst?: string | null;
 };
 
 export type ConfigControl = {
@@ -1672,7 +1765,11 @@ export const apiClient = {
     requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
       method: "POST"
     }),
-  sandboxPodStatus: () => requestJson<SandboxPodStatus>("/api/admin/sandbox-pod"),
+  dashboardSummary: (range: DashboardRange, limit = 20) =>
+    requestJson<DashboardSummary>(`/api/dashboard/summary?range=${encodeURIComponent(range)}&limit=${limit}`),
+  sandboxPodStatus: (options?: { live?: boolean }) =>
+    requestJson<SandboxPodStatus>(options?.live === false ? "/api/admin/sandbox-pod?live=false" : "/api/admin/sandbox-pod"),
+  sandboxPodLive: () => requestJson<SandboxPodLive>("/api/admin/sandbox-pod/live"),
   selectSandboxPod: (podId: string) =>
     requestJson<SandboxPodStatus>("/api/admin/sandbox-pod/select", { method: "POST", body: JSON.stringify({ podId }) }),
   startSandboxPod: (podId?: string | null) =>

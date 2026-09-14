@@ -106,9 +106,8 @@ function App() {
     sessionStorage.setItem(SESSION_USER_STORAGE_KEY, JSON.stringify(nextSession));
     setUser(nextSession.user);
     setSessionExpiresAt(nextSession.expiresAt);
-    // 로그인 직후 랜딩은 구버전 전체 워크스페이스가 아니라 신규 S1(2a) 화면이다.
-    // E-02: design_handoff 2 Create.dc.html 흐름의 실제 첫 단계.
-    navigate("create.load");
+    // 2026-09-13: 로그인 직후 랜딩은 대시보드(HOME · 전역 표시). 이전에는 S1(2a) 화면.
+    navigate("home.dashboard");
   }
 
   function handleLogout() {
