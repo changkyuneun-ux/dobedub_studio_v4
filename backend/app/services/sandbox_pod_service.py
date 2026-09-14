@@ -1165,7 +1165,14 @@ def _hydrate_pod(settings: Settings, pod: dict, *, strict: bool = True) -> dict:
     if not pod_id:
         return pod
     try:
-        detail = _request(settings, "GET", f"/pods/{pod_id}")
+        # 2026-09-14: v1 GET /pods/{id} does not carry GPU identification (no
+        # gpuTypeId/gpu.id) — only REST v2's pod detail does (confirmed against
+        # RunPod's own docs: docs.runpod.io/api-reference-v2/pods/get-a-pod).
+        # This call used to default to v1 (base_url unset), so hydration silently
+        # never filled in gpuTypeId for pods whose list entry lacked it, leaving
+        # VRAM/재고 blank downstream in _pod_summary even after the v2 catalog/
+        # runtime-metrics host was fixed elsewhere.
+        detail = _request(settings, "GET", f"/pods/{pod_id}", base_url=settings.sandbox_pod_rest_v2_url)
     except RuntimeError:
         if strict:
             raise

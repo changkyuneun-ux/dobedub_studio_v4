@@ -5,6 +5,9 @@ from unittest.mock import patch
 
 from backend.app.core.config import Settings
 from backend.app.services.sandbox_pod_service import (
+    _gpu_type_name,
+    _hydrate_pod,
+    _hydrate_pod_if_needed,
     _lifecycle_event_timestamp,
     _present_pod,
     _request,
@@ -81,6 +84,34 @@ class SandboxPodLifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(result["storage"]["networkVolumeId"], "volume-1")
         self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
         self.assertEqual(request.call_args.args[2], "/pods/pod-123")
+
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_hydrate_pod_reads_detail_from_rest_v2_not_v1(self, request: object) -> None:
+        # 2026-09-14: RunPod's v1 GET /pods/{id} does not carry GPU identification
+        # (no gpuTypeId/gpu.id) — only REST v2's pod detail does (confirmed against
+        # RunPod's own docs: docs.runpod.io/api-reference-v2/pods/get-a-pod). This
+        # call used to omit base_url (defaulting to v1), so a pod whose /pods LIST
+        # entry lacked GPU info never got it filled in, leaving VRAM/재고 blank in
+        # the admin screen even after the catalog/runtime-metrics host was fixed.
+        request.return_value = {"gpu": {"id": "NVIDIA GeForce RTX 5090"}, "memoryInGb": 60}
+
+        result = _hydrate_pod(Settings(sandbox_pod_api_key="test-key"), {"id": "pod-123"}, strict=False)
+
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
+        self.assertEqual(request.call_args.args[2], "/pods/pod-123")
+        self.assertEqual(_gpu_type_name(result), "NVIDIA GeForce RTX 5090")
+
+    @patch("backend.app.services.sandbox_pod_service._request")
+    def test_hydrate_pod_if_needed_fills_in_gpu_missing_from_the_list_response(self, request: object) -> None:
+        # Mirrors a real RunPod v1 /pods LIST entry: ports/memoryInGb/costPerHr
+        # present but no gpu type field at all (as reproduced against a live pod).
+        list_pod = {"id": "pod-123", "ports": ["8188/http"], "memoryInGb": 60, "costPerHr": 0.99}
+        request.return_value = {"gpu": {"id": "NVIDIA GeForce RTX 5090"}}
+
+        result = _hydrate_pod_if_needed(Settings(sandbox_pod_api_key="test-key"), list_pod)
+
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
+        self.assertEqual(_gpu_type_name(result), "NVIDIA GeForce RTX 5090")
 
     @patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": True, "gpus": []})
     @patch("backend.app.services.sandbox_pod_service._runtime_status", return_value="READY")
@@ -163,7 +194,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
     def test_volume_selector_ignores_template_filter_and_picks_running_pod(self, request: object) -> None:
         pods = self._pods()
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -180,7 +211,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
     def test_template_filter_still_applies_when_only_template_is_configured(self, request: object) -> None:
         pods = self._pods()
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -199,7 +230,7 @@ class SandboxPodResolutionTests(unittest.TestCase):
         pods = self._pods()
         pods[1]["desiredStatus"] = "EXITED"
 
-        def fake_request(settings, method, path, body=None):
+        def fake_request(settings, method, path, body=None, **kwargs):
             if path.startswith("/pods?"):
                 return pods
             pod_id = path.rsplit("/", 1)[-1]
@@ -298,7 +329,10 @@ class _RunPodScript:
         self.calls: list[tuple[str, str, dict | None]] = []
 
     def __call__(self, request, timeout):
-        path = request.full_url.replace("https://rest.runpod.io/v1", "")
+        # 2026-09-14: _hydrate_pod's detail fetch now targets REST v2 (api.runpod.io)
+        # for GPU info, while everything else still uses v1 (rest.runpod.io) — strip
+        # whichever host prefix is present so this fake serves both transparently.
+        path = request.full_url.replace("https://rest.runpod.io/v1", "").replace("https://api.runpod.io/v2", "")
         method = request.get_method()
         body = json.loads(request.data) if request.data else None
         self.calls.append((method, path, body))
