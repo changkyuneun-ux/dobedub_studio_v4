@@ -4,6 +4,11 @@ export function luminance(r: number, g: number, b: number) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/** cv2.cvtColor(..., COLOR_BGR2GRAY)와 동일한 가중치(BT.601). grid_split.py의 gray_v에 대응. */
+export function grayValue(r: number, g: number, b: number) {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
 export function chroma(r: number, g: number, b: number) {
   return Math.max(r, g, b) - Math.min(r, g, b);
 }

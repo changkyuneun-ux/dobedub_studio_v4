@@ -47,6 +47,39 @@ export function borderlessInfographic(width: number, height: number): ImageData 
   return image;
 }
 
+export function decorativeBlob(width: number, height: number, cx: number, cy: number, radius: number): ImageData {
+  const image = blankImage(width, height);
+  const y0 = Math.max(0, cy - radius);
+  const y1 = Math.min(height - 1, cy + radius);
+  const x0 = Math.max(0, cx - radius);
+  const x1 = Math.min(width - 1, cx + radius);
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      if (Math.abs(x - cx) + Math.abs(y - cy) <= radius) {
+        const offset = (y * width + x) * 4;
+        image.data[offset] = 20;
+        image.data[offset + 1] = 20;
+        image.data[offset + 2] = 20;
+        image.data[offset + 3] = 255;
+      }
+    }
+  }
+  return image;
+}
+
+export function fourPanelPageWithDecoration(width: number, height: number): ImageData {
+  const image = fourPanelPage(width, height);
+  const decoration = decorativeBlob(width, height, Math.round(width / 2), height - 150, 90);
+  for (let i = 0; i < image.data.length; i += 4) {
+    if (decoration.data[i] < 128) {
+      image.data[i] = decoration.data[i];
+      image.data[i + 1] = decoration.data[i + 1];
+      image.data[i + 2] = decoration.data[i + 2];
+    }
+  }
+  return image;
+}
+
 function drawBorder(data: Uint8ClampedArray, width: number, region: PixelRegion, color: [number, number, number], thickness: number) {
   fillRect(data, width, { x0: region.x0, y0: region.y0, x1: region.x1, y1: region.y0 + thickness }, color);
   fillRect(data, width, { x0: region.x0, y0: region.y1 - thickness, x1: region.x1, y1: region.y1 }, color);
