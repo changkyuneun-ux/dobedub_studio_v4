@@ -2,7 +2,7 @@ import { createElement, Fragment, useEffect, useSyncExternalStore, type ReactNod
 import { ENGINE_VERSION, MANIFEST_SCHEMA_VERSION, PAGE_POLICY, PDF_RENDER_SCALE, STRIP_POLICY, TRANSITION_POLICY } from "./constants";
 import { discoverInputs, type FilePort } from "./filesystem";
 import { classifySourceName, sourceUnitId, type SourceInputItem } from "./inputSources";
-import { runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
+import { readExistingManifest, runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
 import { clearPersistedInputs, hasHandlePermission, loadPersistedWebtoonCutSession, persistInputDirectoryHandle, persistInputFileHandles, persistWorkspaceHandle } from "./persistence";
 import { serializeSummary } from "./artifacts";
 import type { GeneratedOutput, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WorkerEvent } from "./types";
@@ -292,7 +292,7 @@ export const webtoonCutJobStore = {
         return;
       }
       await this.selectDirectory(persisted.inputDirectoryHandle);
-      setSnapshot({ notice: "이전 폴더 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+      await finishRestoreOrClearIfNoProgress("이전 폴더 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다.");
       return;
     }
     if (persisted.inputMode === "files" && persisted.fileHandles?.length) {
@@ -302,7 +302,7 @@ export const webtoonCutJobStore = {
         return;
       }
       await this.selectFileHandles(persisted.fileHandles);
-      setSnapshot({ notice: "이전 파일 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다." });
+      await finishRestoreOrClearIfNoProgress("이전 파일 입력을 복원했습니다. 작업 요청을 누르면 manifest 기준으로 이어서 처리합니다.");
     }
   },
   async selectDroppedItems(items: DataTransferItemList) {
@@ -432,8 +432,73 @@ export const webtoonCutJobStore = {
     } finally {
       running = false;
     }
+  },
+  /**
+   * 2026-09-14: 사용자 요청 - 새로고침뿐 아니라 "다른 화면으로 이동했다가 다시 진입"하는
+   * 경우에도 "진행 중 작업이 없으면 초기화"가 동일하게 적용되어야 한다. 새로고침과 달리
+   * 화면 전환은 모듈 상태(snapshot)를 그대로 유지하므로 disk manifest를 다시 읽을 필요는
+   * 없고, 지금 이 세션에서 실제로 실행 중인지(running)와 마지막 작업이 종료 상태인지만
+   * 보면 된다:
+   *   - running(메인 작업 실행 또는 검수 재처리 진행 중)이면 그대로 둔다 - 화면을 벗어나도
+   *     작업은 계속 진행되므로 다시 들어왔을 때 진행 상황을 보여줘야 한다.
+   *   - status가 "idle"/"ready"(아직 실행한 적 없는 입력 선택)이면 그대로 둔다 - 이건
+   *     "이전 작업 정보"가 아니라 사용자가 방금 선택해 둔, 아직 실행하지 않은 입력이다.
+   *   - status가 "completed"/"completed_with_review"/"failed"(이미 끝난 이전 작업)이면
+   *     화면 재진입 시점에 조용히 초기 상태로 되돌린다.
+   */
+  resetIfNoActiveWork() {
+    if (running) return;
+    if (snapshot.status !== "completed" && snapshot.status !== "completed_with_review" && snapshot.status !== "failed") return;
+    void clearSessionToInitial();
   }
 };
+
+/**
+ * 2026-09-14: 사용자 요청 - "진행 중 작업"이 실제로 없으면 새로고침 후 복원하지 않고
+ * 입력 대기 상태로 되돌린다. 새로고침이 일어나는 순간 실행 중이던 워커/네트워크 상태는
+ * 전부 사라지므로, F5 직후에는 진짜 "실행 중" 작업이 존재할 수 없다 — 유일하게 재개할
+ * 가치가 있는 경우는 이전 실행이 중간에 중단되어 아직 끝나지 않은 경우뿐이다.
+ *
+ * 2026-09-14 수정: 최초 구현은 "ledger에 completed 단위가 하나라도 있으면 재개 대상"으로
+ * 판정했는데, 이는 정상적으로 끝까지 완료된 작업의 manifest도 그대로 만족시켜 버그를
+ * 재현시켰다(수영복.zip 6/6 완료 후 새로고침해도 "0/1 · 0%" 카드가 다시 나타남).
+ * runner.ts의 finalizeManifest()를 보면 manifest.status는 다음 세 값 중 하나로만 기록된다:
+ *   - "paused": 취소 시그널 등으로 루프가 끝까지 돌지 못하고 중간에 끊긴 경우(=진짜 미완료)
+ *   - "completed" / "completed_with_review": 루프가 끝까지 정상적으로 돌아 작업이 끝난 경우
+ * 따라서 "재개할 가치가 있는 진행 중 작업"인지는 ledger의 completed 개수가 아니라
+ * manifest.status가 "paused"인지로만 판단해야 한다. completed/completed_with_review는
+ * 이미 끝난 작업이므로 복원 대상이 아니며, 새로고침 시 조용히 초기화되어야 한다.
+ */
+export async function hasResumableProgress(root: FileSystemDirectoryHandle): Promise<boolean> {
+  const manifest = await readExistingManifest(root);
+  return manifest?.status === "paused";
+}
+
+async function finishRestoreOrClearIfNoProgress(resumeNotice: string) {
+  const resumable = outputRootHandle ? await hasResumableProgress(outputRootHandle) : false;
+  if (resumable) {
+    setSnapshot({ notice: resumeNotice });
+    return;
+  }
+  await clearSessionToInitial();
+}
+
+/**
+ * finishRestoreOrClearIfNoProgress()(새로고침 직후 복원 여부 판단)와
+ * resetIfNoActiveWork()(화면 재진입 시 종료된 이전 작업 정리)가 공유하는 초기화 로직.
+ * 영속 저장된 입력 핸들(IndexedDB)까지 함께 지운다 - 이미 끝난 작업으로 판정된 뒤에는
+ * 그 입력을 다시 이어서 처리할 이유가 없기 때문이다.
+ */
+async function clearSessionToInitial() {
+  await clearPersistedInputs();
+  releasePreviewUrls(snapshot.units);
+  selectedInputs = [];
+  outputRootHandle = null;
+  // createInitialSnapshot()는 defaultWorkspaceHandle 모듈 변수를 그대로 반영하므로
+  // 위에서 복원해둔 작업 폴더 연결(defaultWorkspaceReady/Name)은 그대로 유지된다.
+  snapshot = { ...createInitialSnapshot(snapshot.sessionOwnerId), notice: "" };
+  emit();
+}
 
 async function resetInputsAfterCancel() {
   await clearPersistedInputs();

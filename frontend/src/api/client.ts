@@ -335,6 +335,18 @@ export type DashboardRecentTask = {
 export type DashboardAlert = { id: string; level: "warning" | "danger" | "info"; message: string; route?: StudioRouteLike | null };
 type StudioRouteLike = string;
 
+export type DashboardDailyVolume = {
+  date: string;
+  submitted: number;
+  completed: number;
+  failed: number;
+  active: number;
+  queued: number;
+  other: number;
+};
+
+export type DashboardFilterOption = { id?: string | null; name: string };
+
 export type DashboardSummary = {
   range: DashboardRange;
   since?: string | null;
@@ -357,12 +369,17 @@ export type DashboardSummary = {
     batchJobsInProgress: number;
   };
   recent: DashboardRecentTask[];
+  // 2026-09-13 "최근 작업" 목록을 대체하는 일자별(KST) 작업량 그래프 데이터(범위 전체 기준, limit 영향 없음)
+  dailyVolume: DashboardDailyVolume[];
+  dailyVolumeFilters: { user?: string | null; workflow?: string | null; status?: string | null };
+  filterOptions: { users: DashboardFilterOption[]; workflows: DashboardFilterOption[] };
   byUser: Array<{ userId?: string | null; name: string; submitted: number; failed: number }>;
   byWorkflow: Array<{ workflowId: string; workflowName: string; submitted: number; avgElapsedSeconds?: number | null }>;
   system: {
     comfy: { configured: boolean; executionMode: string; dryRun: boolean };
     promptLlm: { configured: boolean; provider?: string | null; model?: string | null; timeoutSeconds?: number | null };
-    workflows: { count?: number | null };
+    grok: { configured: boolean; enabled: boolean; model?: string | null; timeoutSeconds?: number | null };
+    workflows: { count?: number | null; activeCount?: number | null };
   };
   sandbox: {
     configured: boolean;
@@ -1765,8 +1782,17 @@ export const apiClient = {
     requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
       method: "POST"
     }),
-  dashboardSummary: (range: DashboardRange, limit = 20) =>
-    requestJson<DashboardSummary>(`/api/dashboard/summary?range=${encodeURIComponent(range)}&limit=${limit}`),
+  dashboardSummary: (
+    range: DashboardRange,
+    limit = 20,
+    filters?: { user?: string; workflow?: string; status?: string }
+  ) => {
+    const params = new URLSearchParams({ range, limit: String(limit) });
+    if (filters?.user) params.set("user", filters.user);
+    if (filters?.workflow) params.set("workflow", filters.workflow);
+    if (filters?.status) params.set("status", filters.status);
+    return requestJson<DashboardSummary>(`/api/dashboard/summary?${params.toString()}`);
+  },
   sandboxPodStatus: (options?: { live?: boolean }) =>
     requestJson<SandboxPodStatus>(options?.live === false ? "/api/admin/sandbox-pod?live=false" : "/api/admin/sandbox-pod"),
   sandboxPodLive: () => requestJson<SandboxPodLive>("/api/admin/sandbox-pod/live"),

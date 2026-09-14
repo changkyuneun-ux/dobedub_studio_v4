@@ -20,6 +20,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, timestamp_fields, utc_now
 from backend.app.db.models import BatchJob, TaskExecutionPolicy, User, WorkflowTask
 from backend.app.services.migration_status_service import migration_status
+from backend.app.services.admin_service import count_active_workflows
 from backend.app.services.prompt_llm_client import prompt_llm_status
 from backend.app.services.runpod_client import runpod_is_configured
 from backend.app.services.task_policy_service import (
@@ -255,6 +256,93 @@ def _recent(session: Session, since: datetime, until: datetime, limit: int) -> l
     return items
 
 
+DAILY_STATUS_KINDS = ("submitted", "completed", "failed", "active", "queued", "other")
+
+
+def _kst_day(value: datetime) -> str:
+    aware = value.replace(tzinfo=UTC_TIMEZONE) if value.tzinfo is None else value.astimezone(UTC_TIMEZONE)
+    return aware.astimezone(SEOUL_TIMEZONE).date().isoformat()
+
+
+def _kst_day_range(since: datetime, until: datetime) -> list[str]:
+    """[since, until) 구간이 걸치는 KST 달력일 목록을 오름차순으로 반환한다."""
+    start_day = _kst_day(since)
+    end_day = _kst_day(until - timedelta(seconds=1)) if until > since else start_day
+    start = datetime.fromisoformat(start_day)
+    end = datetime.fromisoformat(end_day)
+    days: list[str] = []
+    cursor = start
+    while cursor <= end:
+        days.append(cursor.date().isoformat())
+        cursor += timedelta(days=1)
+    return days
+
+
+def _daily_volume(
+    session: Session,
+    since: datetime,
+    until: datetime,
+    *,
+    user_id: str | None = None,
+    workflow_id: str | None = None,
+    status_kind: str | None = None,
+) -> list[dict]:
+    """일자별(KST) 작업 제출량을 집계한다.
+
+    2026-09-14: 대시보드 "최근 작업" 목록(개별 작업 테이블)을, 작업 현황에서
+    선택한 기간(오늘/7일/30일)에 맞춘 일자별 작업량 그래프로 대체하기 위해
+    추가됨. "최근 작업" 테이블은 limit(기본 20건)으로 잘려 있어 그래프 집계에
+    쓰기엔 부정확하므로, 여기서는 범위 내 전체 작업을 대상으로 별도 집계한다.
+    필터(작업자/워크플로/상태)는 SQL WHERE 절에서 적용한다.
+    """
+    conditions = [_live_tasks(), WorkflowTask.created_at >= since, WorkflowTask.created_at < until]
+    if user_id:
+        conditions.append(WorkflowTask.user_id == user_id)
+    if workflow_id:
+        conditions.append(WorkflowTask.workflow_id == workflow_id)
+    rows = session.execute(select(WorkflowTask.created_at, WorkflowTask.status).where(*conditions)).all()
+
+    buckets: dict[str, dict[str, int]] = {
+        day: {"date": day, **{kind: 0 for kind in DAILY_STATUS_KINDS}}
+        for day in _kst_day_range(since, until)
+    }
+    for created_at, status in rows:
+        if created_at is None:
+            continue
+        kind = _classify_status(status)
+        if status_kind and kind != status_kind:
+            continue
+        day = _kst_day(created_at)
+        bucket = buckets.setdefault(day, {"date": day, **{k: 0 for k in DAILY_STATUS_KINDS}})
+        bucket["submitted"] += 1
+        bucket[kind] = bucket.get(kind, 0) + 1
+
+    return [buckets[day] for day in sorted(buckets)]
+
+
+def _filter_options(session: Session, since: datetime, until: datetime) -> dict:
+    """일자별 그래프 필터(작업자/워크플로) 드롭다운 옵션 — 범위 내 전체 작업 기준(필터 자체와 무관하게 고정).
+    """
+    rows = session.execute(
+        select(distinct(WorkflowTask.user_id), User.name)
+        .outerjoin(User, User.id == WorkflowTask.user_id)
+        .where(_live_tasks(), WorkflowTask.created_at >= since, WorkflowTask.created_at < until)
+    ).all()
+    users = sorted(
+        ({"id": user_id, "name": name or user_id or "-"} for user_id, name in rows if user_id),
+        key=lambda item: item["name"],
+    )
+    workflow_rows = session.execute(
+        select(distinct(WorkflowTask.workflow_id))
+        .where(_live_tasks(), WorkflowTask.created_at >= since, WorkflowTask.created_at < until)
+    ).all()
+    workflows = sorted(
+        ({"id": workflow_id, "name": _workflow_name(workflow_id)} for (workflow_id,) in workflow_rows if workflow_id),
+        key=lambda item: item["name"],
+    )
+    return {"users": users, "workflows": workflows}
+
+
 def _by_user(session: Session, since: datetime, until: datetime, top: int = TOP_N) -> list[dict]:
     status = _status_upper()
     rows = session.execute(
@@ -350,6 +438,15 @@ def _system_block(settings: Settings) -> dict:
         workflow_count = len(workflow_files(settings.workflows_dir))
     except Exception:  # noqa: BLE001
         workflow_count = None
+    try:
+        _, active_workflow_count = count_active_workflows()
+    except Exception:  # noqa: BLE001
+        active_workflow_count = None
+    grok_configured = bool(
+        settings.grok_enabled
+        and settings.grok_api_key
+        and not settings.grok_api_key.startswith("your_")
+    )
     return {
         "comfy": {
             "configured": runpod_is_configured(settings.runpod_api_key, settings.runpod_endpoint_id),
@@ -362,7 +459,16 @@ def _system_block(settings: Settings) -> dict:
             "model": llm.get("model"),
             "timeoutSeconds": llm.get("timeout"),
         },
-        "workflows": {"count": workflow_count},
+        # 2026-09-14: 대시보드 상단 타일 요청 — "QWEN PROMPT LLM" 대신 Grok 이미지 프롬프트
+        # 생성 상태를 보여준다(promptLlm 블록 자체는 admin 시스템 상태 화면 등 다른 화면이
+        # 참조하므로 그대로 둔다).
+        "grok": {
+            "configured": grok_configured,
+            "enabled": bool(settings.grok_enabled),
+            "model": settings.grok_model,
+            "timeoutSeconds": settings.grok_request_timeout_seconds,
+        },
+        "workflows": {"count": workflow_count, "activeCount": active_workflow_count},
     }
 
 
@@ -475,6 +581,9 @@ def dashboard_summary(
     settings: Settings | None = None,
     include_sandbox: bool = True,
     sandbox_sync: bool = False,
+    filter_user_id: str | None = None,
+    filter_workflow_id: str | None = None,
+    filter_status_kind: str | None = None,
 ) -> dict:
     settings = settings or get_settings()
     current = now or utc_now().replace(tzinfo=None)
@@ -490,6 +599,14 @@ def dashboard_summary(
         **timestamp_fields("until", until, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="dashboard"),
         "kpi": _kpi(session, since, until, previous_since),
         "recent": _recent(session, since, until, limit),
+        # 2026-09-14: "최근 작업" 목록을 대체하는 일자별(KST) 작업량 그래프 데이터.
+        # 필터(작업자/워크플로/상태)가 지정되면 그 조건으로 집계한다.
+        "dailyVolume": _daily_volume(
+            session, since, until,
+            user_id=filter_user_id, workflow_id=filter_workflow_id, status_kind=filter_status_kind,
+        ),
+        "dailyVolumeFilters": {"user": filter_user_id, "workflow": filter_workflow_id, "status": filter_status_kind},
+        "filterOptions": _filter_options(session, since, until),
         "byUser": _by_user(session, since, until),
         "byWorkflow": _by_workflow(session, since, until),
         "system": _system_block(settings),

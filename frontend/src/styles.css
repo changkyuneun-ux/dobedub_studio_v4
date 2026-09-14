@@ -7195,6 +7195,26 @@ button {
 .v3-dash-columns { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.6fr) minmax(300px, .7fr); }
 .v3-dash-side { display: flex; flex-direction: column; gap: 14px; }
 .v3-dash-table-wrap { overflow-x: auto; }
+.v3-dash-volume-wrap { padding: 14px 16px 16px; }
+.v3-dash-volume-legend { display: flex; gap: 14px; font-size: 11px; color: var(--v3-text-description); margin-bottom: 10px; }
+.v3-dash-volume-legend span { position: relative; padding-left: 14px; }
+.v3-dash-volume-legend span::before { content: ""; position: absolute; left: 0; top: 3px; width: 8px; height: 8px; border-radius: 2px; }
+.v3-dash-volume-legend .is-completed::before { background: var(--v3-accent); }
+.v3-dash-volume-legend .is-active::before { background: #2368bd; }
+.v3-dash-volume-legend .is-queued::before { background: var(--v3-warning); }
+.v3-dash-volume-legend .is-failed::before { background: var(--v3-danger); }
+.v3-dash-volume-chart { display: flex; align-items: flex-end; gap: 4px; height: 170px; overflow-x: auto; padding-bottom: 2px; }
+.v3-dash-volume-col { display: flex; flex-direction: column; align-items: center; flex: 1 0 14px; min-width: 14px; height: 100%; justify-content: flex-end; gap: 4px; }
+.v3-dash-volume-bar { display: flex; flex-direction: column-reverse; width: 100%; max-width: 22px; min-height: 2px; border-radius: 3px 3px 0 0; overflow: hidden; background: var(--v3-bg-muted); }
+.v3-dash-volume-bar i { display: block; width: 100%; }
+.v3-dash-volume-bar i.is-completed { background: var(--v3-accent); }
+.v3-dash-volume-bar i.is-active { background: #2368bd; }
+.v3-dash-volume-bar i.is-queued { background: var(--v3-warning); }
+.v3-dash-volume-bar i.is-failed { background: var(--v3-danger); }
+.v3-dash-volume-bar i.is-other { background: var(--v3-text-disabled); }
+.v3-dash-volume-value { font-family: var(--v3-font-mono); font-size: 9px; color: var(--v3-text-label); min-height: 11px; }
+.v3-dash-volume-label { font-family: var(--v3-font-mono); font-size: 9px; color: var(--v3-text-description); white-space: nowrap; min-height: 11px; }
+
 .v3-dash-table { border-collapse: collapse; width: 100%; }
 .v3-dash-table th { background: var(--v3-bg-canvas); color: var(--v3-text-label); font-family: var(--v3-font-mono); font-size: 10px; font-weight: 500; letter-spacing: .04em; padding: 9px 14px; text-align: left; }
 .v3-dash-table td { border-bottom: 1px solid var(--v3-border-inner); font-size: 12px; padding: 10px 14px; vertical-align: middle; }

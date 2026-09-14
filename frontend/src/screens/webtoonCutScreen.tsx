@@ -1,4 +1,4 @@
-import React, { DragEvent, useMemo, useRef, useState } from "react";
+import React, { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { HealthResponse } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
@@ -11,6 +11,14 @@ type Props = { user: User; health: HealthResponse | null; onGoTo: (route: Studio
 export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
   const snapshot = useWebtoonCutJob();
   const fileInput = useRef<HTMLInputElement | null>(null);
+
+  // 2026-09-14: 사용자 요청 - 새로고침뿐 아니라 다른 화면으로 이동했다가 다시 이 화면으로
+  // 돌아오는 경우에도 "진행 중 작업이 없으면 초기화"가 적용되어야 한다. 이 스토어의
+  // Provider(main.tsx)는 세션 내내 마운트 상태를 유지하므로, 화면 전환만으로는 스토어가
+  // 다시 초기화되지 않는다 - 이 화면이 (재)마운트될 때마다 직접 정리를 요청한다.
+  useEffect(() => {
+    webtoonCutJobStore.resetIfNoActiveWork();
+  }, []);
   const [dragging, setDragging] = useState(false);
   const [reprocessMode, setReprocessMode] = useState<WebtoonCutReprocessMode>("strong-horizontal-transition");
   const selectedReviewUnit = snapshot.units.find((unit) => unit.id === snapshot.selectedReviewUnitId)
