@@ -432,6 +432,24 @@ export const webtoonCutJobStore = {
     } finally {
       running = false;
     }
+  },
+  /**
+   * 2026-09-14: 사용자 요청 - 새로고침뿐 아니라 "다른 화면으로 이동했다가 다시 진입"하는
+   * 경우에도 "진행 중 작업이 없으면 초기화"가 동일하게 적용되어야 한다. 새로고침과 달리
+   * 화면 전환은 모듈 상태(snapshot)를 그대로 유지하므로 disk manifest를 다시 읽을 필요는
+   * 없고, 지금 이 세션에서 실제로 실행 중인지(running)와 마지막 작업이 종료 상태인지만
+   * 보면 된다:
+   *   - running(메인 작업 실행 또는 검수 재처리 진행 중)이면 그대로 둔다 - 화면을 벗어나도
+   *     작업은 계속 진행되므로 다시 들어왔을 때 진행 상황을 보여줘야 한다.
+   *   - status가 "idle"/"ready"(아직 실행한 적 없는 입력 선택)이면 그대로 둔다 - 이건
+   *     "이전 작업 정보"가 아니라 사용자가 방금 선택해 둔, 아직 실행하지 않은 입력이다.
+   *   - status가 "completed"/"completed_with_review"/"failed"(이미 끝난 이전 작업)이면
+   *     화면 재진입 시점에 조용히 초기 상태로 되돌린다.
+   */
+  resetIfNoActiveWork() {
+    if (running) return;
+    if (snapshot.status !== "completed" && snapshot.status !== "completed_with_review" && snapshot.status !== "failed") return;
+    void clearSessionToInitial();
   }
 };
 
@@ -462,6 +480,16 @@ async function finishRestoreOrClearIfNoProgress(resumeNotice: string) {
     setSnapshot({ notice: resumeNotice });
     return;
   }
+  await clearSessionToInitial();
+}
+
+/**
+ * finishRestoreOrClearIfNoProgress()(새로고침 직후 복원 여부 판단)와
+ * resetIfNoActiveWork()(화면 재진입 시 종료된 이전 작업 정리)가 공유하는 초기화 로직.
+ * 영속 저장된 입력 핸들(IndexedDB)까지 함께 지운다 - 이미 끝난 작업으로 판정된 뒤에는
+ * 그 입력을 다시 이어서 처리할 이유가 없기 때문이다.
+ */
+async function clearSessionToInitial() {
   await clearPersistedInputs();
   releasePreviewUrls(snapshot.units);
   selectedInputs = [];
