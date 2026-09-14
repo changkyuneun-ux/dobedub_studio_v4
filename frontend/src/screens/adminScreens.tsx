@@ -893,7 +893,19 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
                       <strong>{sandboxPodName(pod)}</strong>
                       {pod.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}
                       {pod.gpuTier === "primary" ? <span className="v3-status-badge is-ready">primary</span> : null}
-                      {(() => {
+                    </span>
+                    <span className="v3-sandbox-pod-id">{pod.podId} · {pod.gpuTypeId || sandboxGpuLabel(pod)}</span>
+                  </span>
+                  <span><strong>{formatSandboxCapacity(pod.vramGb)}</strong><span className="v3-sandbox-pod-dim"> / {formatSandboxCapacity(pod.ramGb)}</span></span>
+                  <span className="v3-sandbox-pod-mono">{sandboxPrice(pod.pricePerHr)}</span>
+                  <span><span className={`v3-status-badge ${sandboxStatusBadgeClass(pod.desiredStatus)}`}>{pod.desiredStatus || "UNKNOWN"}</span></span>
+                  <span className="v3-sandbox-pod-dim">
+                    {pod.lastStartedAtKst || pod.lastStartedAt ? (
+                      formatTimestamp(pod.lastStartedAtKst || pod.lastStartedAt, pod.lastStartedAtUtc).replace(/\n/g, " ")
+                    ) : (
+                      (() => {
+                        // 2026-09-14: last started를 확인할 수 없는(정지 이력 없음/미조회) 파드는
+                        // "-" 대신 RunPod 재고 배지를 폴백으로 보여준다(GPU·POD 셀 중복 표시 제거).
                         const stock = sandboxStockBadge(pod.gpuStockLevel);
                         return stock ? (
                           <span
@@ -902,18 +914,9 @@ export function Create5bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
                           >
                             {stock.label}
                           </span>
-                        ) : null;
-                      })()}
-                    </span>
-                    <span className="v3-sandbox-pod-id">{pod.podId} · {pod.gpuTypeId || sandboxGpuLabel(pod)}</span>
-                  </span>
-                  <span><strong>{formatSandboxCapacity(pod.vramGb)}</strong><span className="v3-sandbox-pod-dim"> / {formatSandboxCapacity(pod.ramGb)}</span></span>
-                  <span className="v3-sandbox-pod-mono">{sandboxPrice(pod.pricePerHr)}</span>
-                  <span><span className={`v3-status-badge ${sandboxStatusBadgeClass(pod.desiredStatus)}`}>{pod.desiredStatus || "UNKNOWN"}</span></span>
-                  <span className="v3-sandbox-pod-dim">
-                    {pod.lastStartedAtKst || pod.lastStartedAt
-                      ? formatTimestamp(pod.lastStartedAtKst || pod.lastStartedAt, pod.lastStartedAtUtc).replace(/\n/g, " ")
-                      : "-"}
+                        ) : "-";
+                      })()
+                    )}
                   </span>
                   <span className="is-right">
                     {canControl && isActive ? (

@@ -756,10 +756,10 @@ def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
     """Best-effort GPU catalog → {gpuTypeId: {memoryInGb, securePrice, displayName, stockLevel}}.
 
     REST v1 has no catalog endpoint, so this reads REST v2 ``GET /catalog/gpus``
-    (same host and API key as the v1 Pod control calls), requesting
-    ``include=AVAILABILITY&product=POD`` so each item also carries RunPod's own
-    ``availability`` grade (NONE/LOW/MEDIUM/HIGH) alongside price/VRAM — no
-    separate credential or endpoint needed. Cached for a few minutes (same TTL
+    (different HOST than v1 — api.runpod.io, not rest.runpod.io — but the same API
+    key/Bearer auth), requesting ``include=AVAILABILITY&product=POD`` so each item
+    also carries RunPod's own ``availability`` grade (NONE/LOW/MEDIUM/HIGH) alongside
+    price/VRAM — no separate credential needed. Cached for a few minutes (same TTL
     as before this field existed; ``stockLevel`` can be up to that long stale,
     which is acceptable for an informational badge — callers must not use it
     to decide whether a start/create will actually succeed);
@@ -777,7 +777,10 @@ def _fetch_gpu_catalog(settings: Settings) -> dict[str, dict] | None:
             "/catalog/gpus?include=AVAILABILITY&product=POD",
             base_url=settings.sandbox_pod_rest_v2_url,
         )
-    except Exception:  # noqa: BLE001 - the catalog is optional; never break status/start on it
+    except Exception as exc:  # noqa: BLE001 - the catalog is optional; never break status/start on it
+        # 2026-09-14: 예외를 삼키되 반드시 관측 이벤트는 남긴다 — 이전에는 조용히 None을
+        # 반환해 재고·VRAM이 화면에서 빈 채로 나와도 원인을 알 수 없었다.
+        _log_catalog_failure(settings, reason=type(exc).__name__, detail=str(exc))
         return None
     items = response.get("gpus") if isinstance(response, dict) else response
     if not isinstance(items, list):
@@ -887,6 +890,15 @@ def _log_event(settings: Settings, kind: str, *, pod_id: str | None, gpu_type_id
         from backend.app.core import observability
 
         observability.observe_sandbox_pod_event(kind=kind, pod_id=pod_id, gpu_type_id=gpu_type_id)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _log_catalog_failure(settings: Settings, *, reason: str, detail: str | None) -> None:
+    try:
+        from backend.app.core import observability
+
+        observability.observe_sandbox_pod_catalog_failure(reason=reason, detail=detail)
     except Exception:  # noqa: BLE001
         return
 
@@ -1025,6 +1037,11 @@ def _pod_summary(
     if catalog and gpu and gpu in catalog:
         vram = catalog[gpu].get("memoryInGb")
         stock_level = catalog[gpu].get("stockLevel")
+    elif catalog and gpu:
+        # 2026-09-14: 카탈로그 조회 자체는 성공했는데 이 파드의 gpu id가 카탈로그 키와
+        # 안 맞는 경우(예: gpuTypeIds 콤마 결합 등) — VRAM/재고가 조용히 빈 채로 남는
+        # 원인이 될 수 있어 관측 이벤트로 남긴다.
+        _log_catalog_failure(settings, reason="gpu_not_in_catalog", detail=gpu)
     if vram is None:
         vram = _number_or_none(pod.get("gpuMemoryInGb"))
     if runtime_status is None:

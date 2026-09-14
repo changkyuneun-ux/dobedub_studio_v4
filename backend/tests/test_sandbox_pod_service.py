@@ -79,7 +79,7 @@ class SandboxPodLifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(result["cpuPercent"], 12.8)
         self.assertEqual(result["gpus"][0]["memoryUtilPercent"], 67.1)
         self.assertEqual(result["storage"]["networkVolumeId"], "volume-1")
-        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
         self.assertEqual(request.call_args.args[2], "/pods/pod-123")
 
     @patch("backend.app.services.sandbox_pod_service._runtime_metrics", return_value={"available": True, "gpus": []})
@@ -441,6 +441,23 @@ class SandboxPodMultiPodTests(unittest.TestCase):
         result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=None)
 
         self.assertIsNone(result["pods"][0]["gpuStockLevel"])
+
+    def test_status_pod_list_logs_when_gpu_missing_from_catalog(self) -> None:
+        # 2026-09-14: 카탈로그 조회는 성공했지만 이 파드의 gpu id가 카탈로그 키와 안 맞는
+        # 경우도 VRAM/재고가 조용히 비어 있게 되므로 관측 이벤트가 남아야 한다.
+        from backend.app.core import observability
+
+        fake = _RunPodScript([_pod_5090()])
+        catalog = {GPU_PRO6000: {"memoryInGb": 96, "securePrice": 2.19, "displayName": "RTX PRO 6000", "stockLevel": "HIGH"}}
+
+        with patch.object(observability.OBSERVABILITY_LOGGER, "info") as info:
+            result = self._run(sandbox_pod_status, fake, _settings(), prefs=SandboxPodPrefs(), catalog=catalog)
+
+        self.assertIsNone(result["pods"][0]["gpuStockLevel"])
+        payloads = [json.loads(call.args[0]) for call in info.call_args_list]
+        failure = next(p for p in payloads if p["event"] == "sandbox_pod.catalog_failure")
+        self.assertEqual(failure["Reason"], "gpu_not_in_catalog")
+        self.assertEqual(failure["detail"], GPU_5090)
 
     def test_status_probes_each_running_pod_once_and_skips_detail_when_list_is_complete(self) -> None:
         # 2026-09-13 성능: 표시 파드에 8188 프로브가 두 번 나가던 중복 제거 + 목록 응답이
@@ -866,7 +883,7 @@ class SandboxPodCatalogTests(unittest.TestCase):
 
         # 2026-09-13: 재고(availability)를 함께 받기 위해 include=AVAILABILITY&product=POD를 붙인다.
         self.assertEqual(request.call_args.args[2], "/catalog/gpus?include=AVAILABILITY&product=POD")
-        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://rest.runpod.io/v2")
+        self.assertEqual(request.call_args.kwargs.get("base_url"), "https://api.runpod.io/v2")
         self.assertEqual(
             catalog[GPU_PRO4500],
             {"memoryInGb": 32, "securePrice": 0.72, "displayName": "RTX PRO 4500", "stockLevel": "HIGH"},
@@ -879,6 +896,20 @@ class SandboxPodCatalogTests(unittest.TestCase):
     @patch("backend.app.services.sandbox_pod_service._request", side_effect=SandboxPodApiError(403, "forbidden"))
     def test_catalog_failure_returns_none(self, _: object) -> None:
         self.assertIsNone(service._fetch_gpu_catalog(_settings()))
+
+    @patch("backend.app.services.sandbox_pod_service._request", side_effect=SandboxPodApiError(403, "forbidden"))
+    def test_catalog_failure_emits_observability_event(self, _: object) -> None:
+        # 2026-09-14: 카탈로그 조회 실패는 조용히 삼켜지더라도(VRAM/재고는 그대로 비어
+        # 있어야 함) 관측 이벤트로는 반드시 남아야 진단이 가능하다.
+        from backend.app.core import observability
+
+        with patch.object(observability.OBSERVABILITY_LOGGER, "info") as info:
+            self.assertIsNone(service._fetch_gpu_catalog(_settings()))
+
+        payload = json.loads(info.call_args.args[0])
+        self.assertEqual(payload["event"], "sandbox_pod.catalog_failure")
+        self.assertEqual(payload["Reason"], "SandboxPodApiError")
+        self.assertEqual(payload["SandboxPodCatalogFailureCount"], 1)
 
     @patch("backend.app.services.sandbox_pod_service.urllib.request.urlopen")
     def test_request_wraps_non_json_body(self, urlopen: object) -> None:
