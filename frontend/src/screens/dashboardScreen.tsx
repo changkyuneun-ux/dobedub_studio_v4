@@ -40,6 +40,7 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
   const [filters, setFilters] = useState({ user: "", workflow: "", status: "" });
   const rangeRef = useRef(range);
   rangeRef.current = range;
+  const pendingRetryRef = useRef<number | null>(null);
 
   const load = useCallback(async (nextRange?: DashboardRange) => {
     const target = nextRange || rangeRef.current;
@@ -49,6 +50,13 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
       setSummary(response);
       setError("");
       setLastCheckedAt(new Date());
+      // 2026-09-13 성능: 서버가 Sandbox 블록을 백그라운드로 갱신 중(pending)이면 4초 뒤 1회만 재조회한다.
+      if (response.sandbox?.pending && pendingRetryRef.current === null) {
+        pendingRetryRef.current = window.setTimeout(() => {
+          pendingRetryRef.current = null;
+          void load();
+        }, 4000);
+      }
     } catch (cause) {
       // 마지막 성공 값은 유지하고 헤더에만 실패를 표시한다.
       setError(cause instanceof Error ? cause.message : "대시보드를 불러오지 못했습니다.");
@@ -63,7 +71,10 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
       if (document.hidden) return;
       void load();
     }, REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (pendingRetryRef.current !== null) window.clearTimeout(pendingRetryRef.current);
+    };
   }, [load]);
 
   function setRange(next: DashboardRange) {
@@ -205,8 +216,8 @@ function SystemTiles({ summary, go }: { summary: DashboardSummary; go: (route: S
   const llmState = !system.promptLlm.configured ? "off" : llmMock ? "muted" : "on";
   const llmLabel = !system.promptLlm.configured ? "NOT CONFIGURED" : llmMock ? "MOCK" : "ONLINE";
   const sandboxStatus = (sandbox.desiredStatus || "").toUpperCase();
-  const sandboxState = sandbox.error || sandbox.conflict ? "off" : sandboxStatus === "RUNNING" ? "on" : !sandbox.configured ? "muted" : "muted";
-  const sandboxLabel = sandbox.error ? "FAIL" : sandbox.conflict ? "CONFLICT" : !sandbox.configured ? "NOT CONFIGURED" : sandbox.podCount === 0 ? "NO POD" : sandboxStatus || "-";
+  const sandboxState = sandbox.pending ? "muted" : sandbox.error || sandbox.conflict ? "off" : sandboxStatus === "RUNNING" ? "on" : "muted";
+  const sandboxLabel = sandbox.pending ? "조회 중…" : sandbox.error ? "FAIL" : sandbox.conflict ? "CONFLICT" : !sandbox.configured ? "NOT CONFIGURED" : sandbox.podCount === 0 ? "NO POD" : sandboxStatus || "-";
   const ratio = worker.maxActiveTasksTotal ? worker.active / worker.maxActiveTasksTotal : 0;
   const workerState = ratio >= 1 ? "off" : ratio >= 0.8 ? "warn" : "on";
   const dbState = db.error ? "warn" : db.migrationRequired ? "warn" : "on";
@@ -228,7 +239,9 @@ function SystemTiles({ summary, go }: { summary: DashboardSummary; go: (route: S
           {sandbox.gpuTier === "fallback" ? <span className="v3-status-badge is-pending">fallback</span> : null}
         </span>
         <small title={sandbox.error || undefined}>
-          {sandbox.error
+          {sandbox.pending
+            ? "RunPod 파드 목록을 가져오는 중입니다"
+            : sandbox.error
             ? sandbox.error
             : sandbox.configured
               ? `${sandbox.activePodName || sandbox.activePodId || "활성 파드 없음"} · ${sandbox.podCount} pods · ${sandbox.runningCount} running`
@@ -255,9 +268,10 @@ function Tile({ label, state, onClick, children }: { label: string; state: "on" 
       {children}
     </>
   );
+  // 2026-09-13 지침 §6: 타일 좌측 4px 바 = 상태 색(점과 동일). 색만 추가, 판정 로직 불변.
   return onClick
-    ? <button type="button" className="v3-card v3-dash-tile is-link" onClick={onClick}>{body}</button>
-    : <div className="v3-card v3-dash-tile">{body}</div>;
+    ? <button type="button" className={`v3-card v3-dash-tile is-link is-state-${state}`} onClick={onClick}>{body}</button>
+    : <div className={`v3-card v3-dash-tile is-state-${state}`}>{body}</div>;
 }
 
 function KpiStrip({ summary }: { summary: DashboardSummary }) {

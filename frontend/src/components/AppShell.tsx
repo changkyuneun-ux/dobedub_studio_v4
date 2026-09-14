@@ -94,6 +94,44 @@ const ADMIN_NAV_ITEMS: NavItem[] = [
   { key: "adminAuditLog", label: "감사 로그", permission: "roles:read" }
 ];
 
+// 2026-09-13 작업자 식별성 UI 지침 §2·§3: 영역 컬러 + 메뉴 아이콘. 색은 영역 식별에만 쓰고
+// 상태 표현에는 쓰지 않는다. 아이콘은 메뉴 key 1개당 1개로 영구 고정(선 아이콘, stroke 1.6).
+// 가드레일: NavItem.key · permission · route는 변경하지 않는다(표현 계층만).
+export type AppShellAreaKey = "home" | "local" | "generate" | "admin";
+
+export const AREA_META: Record<AppShellAreaKey, { label: string; description: string }> = {
+  home: { label: "HOME", description: "시스템 상태 · 작업 현황" },
+  local: { label: "LOCAL", description: "브라우저 로컬 처리 · 서버 업로드 없음" },
+  generate: { label: "GENERATE", description: "영상 생성 · 검수 작업 영역" },
+  admin: { label: "ADMIN", description: "권한 · 워크플로 · 인프라 운영" }
+};
+
+const GROUP_AREA: Record<string, AppShellAreaKey | null> = { HOME: "home", LOCAL: "local", GENERATE: "generate", ADMIN: "admin", HELP: null };
+
+function NavIcon({ name }: { name: string }) {
+  const common = { width: 15, height: 15, viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  switch (name) {
+    case "dashboard": return <svg {...common}><path d="M2 6.6 7 2.4l5 4.2" /><path d="M3.4 7.6v4h7.2v-4" /></svg>;
+    case "webtoonCuts": return <svg {...common}><rect x="1.8" y="1.8" width="10.4" height="10.4" rx="2" /><line x1="7" y1="2" x2="7" y2="12" strokeDasharray="2 2" /></svg>;
+    case "taskHistory": return <svg {...common}><line x1="2" y1="3.2" x2="12" y2="3.2" /><line x1="2" y1="7" x2="12" y2="7" /><line x1="2" y1="10.8" x2="8.4" y2="10.8" /></svg>;
+    case "batchJobs": return <svg {...common}><rect x="1.6" y="1.6" width="5" height="5" rx="1" /><rect x="7.6" y="1.6" width="5" height="5" rx="1" /><rect x="1.6" y="7.6" width="5" height="5" rx="1" /><rect x="7.6" y="7.6" width="5" height="5" rx="1" /></svg>;
+    case "promptManagement": return <svg {...common}><rect x="1.8" y="2.4" width="10.4" height="8" rx="2" /><line x1="4.2" y1="5.4" x2="9.8" y2="5.4" /><line x1="4.2" y1="7.8" x2="7.6" y2="7.8" /></svg>;
+    case "runpodRequests": return <svg {...common}><circle cx="7" cy="7" r="5.2" /><path d="M5.8 4.8 9.6 7l-3.8 2.2z" fill="currentColor" stroke="none" /></svg>;
+    case "assets": return <svg {...common}><rect x="1.8" y="4.4" width="10.4" height="7.4" rx="1.6" /><line x1="3.8" y1="2.2" x2="10.2" y2="2.2" /></svg>;
+    case "adminSandbox": return <svg {...common}><rect x="1.8" y="3" width="10.4" height="8" rx="1.6" /><line x1="4.4" y1="6" x2="6.4" y2="6" /><line x1="4.4" y1="8.2" x2="8.4" y2="8.2" /></svg>;
+    case "adminWorkflows": return <svg {...common}><circle cx="3.2" cy="7" r="1.6" /><circle cx="10.8" cy="3.4" r="1.6" /><circle cx="10.8" cy="10.6" r="1.6" /><path d="M4.7 6.3 9.3 4M4.7 7.7l4.6 2.3" /></svg>;
+    case "adminGrokInstructions": return <svg {...common}><path d="M2.4 2.4h9.2v6.4H6.2L3.6 11V8.8H2.4z" /></svg>;
+    case "adminCatalog": return <svg {...common}><path d="M2.2 2.6h4.4v9H2.2zM7.4 2.6h4.4v9H7.4z" /></svg>;
+    case "adminUsers": return <svg {...common}><circle cx="7" cy="4.6" r="2.4" /><path d="M2.6 12c.6-2.6 2.2-3.8 4.4-3.8s3.8 1.2 4.4 3.8" /></svg>;
+    case "adminRoles": return <svg {...common}><path d="M7 1.8 11.6 3.6v3.2c0 2.8-1.9 4.6-4.6 5.6C4.3 11.4 2.4 9.6 2.4 6.8V3.6z" /></svg>;
+    case "adminTaskPolicy": return <svg {...common}><circle cx="7" cy="7" r="2" /><path d="M7 1.8v1.6M7 10.6v1.6M1.8 7h1.6M10.6 7h1.6M3.3 3.3l1.2 1.2M9.5 9.5l1.2 1.2M3.3 10.7l1.2-1.2M9.5 4.5l1.2-1.2" /></svg>;
+    case "adminAuditLog": return <svg {...common}><path d="M3 1.8h5.4L11 4.4v7.8H3z" /><line x1="4.8" y1="6.6" x2="9.2" y2="6.6" /><line x1="4.8" y1="9" x2="8" y2="9" /></svg>;
+    case "help.manual": return <svg {...common}><path d="M2.2 2.6h4.8v8.8H2.2z" /><path d="M7 2.6h4.8v8.8H7z" /></svg>;
+    case "help.meta": return <svg {...common}><circle cx="7" cy="7" r="5.2" /><line x1="2" y1="7" x2="12" y2="7" /></svg>;
+    default: return <svg {...common}><circle cx="7" cy="7" r="2" /></svg>;
+  }
+}
+
 export type AppShellProps = {
   user: User | null;
   area: AppShellArea;
@@ -153,9 +191,14 @@ export function AppShell({
   ];
   const visibleHelpItems = helpItems.filter((item) => canUse(user, item.permission));
 
+  // 현재 영역: HOME(대시보드)은 generate/admin 쉘 안의 그룹이므로 activeItem으로 판정한다.
+  const currentArea: AppShellAreaKey = activeItem === "dashboard" ? "home" : area;
+  const areaMeta = AREA_META[currentArea];
+
   return (
-    <div className="v3-shell">
+    <div className={`v3-shell is-area-${currentArea}`}>
       <nav className="v3-sidebar" aria-label="주 메뉴">
+        <span className="v3-sidebar-rail" aria-hidden="true" />
         <div className="v3-sidebar-brand">
           <img className="v3-sidebar-brand-mark" src="/studio/favicon.png" alt="" aria-hidden="true" />
           <div className="v3-sidebar-brand-name">DOBEDUB</div>
@@ -167,48 +210,48 @@ export function AppShell({
             동작을 더 눈에 띄게 한다. */}
         {/* 2026-09-13: area="local"(이미지 컷 분할)에서도 전환 버튼이 사라지지 않도록
             generate 한정 → admin이 아닌 모든 영역으로 완화(사용자 리포트). */}
-        {chrome && area !== "admin" && canUseAdminConsole(user) ? (
-          <div className="v3-sidebar-switch-top">
-            {/* 2026-09-13: 전환 시 기본 도착지는 항상 대시보드(사용자 요청). 이전: admin.roles */}
-            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("admin.dashboard")}>관리자 콘솔 →</button>
-          </div>
-        ) : null}
-        {chrome && area === "admin" ? (
-          <div className="v3-sidebar-switch-top">
-            {/* 2026-09-13: 전환 시 기본 도착지는 항상 대시보드(사용자 요청). 이전: create.load */}
-            <button className="v3-sidebar-switch" type="button" onClick={() => chrome.onNavigateRoute("home.dashboard")}>← 스튜디오</button>
-          </div>
-        ) : null}
+        {/* 영역 헤더 블록(지침 §3): 현재 영역 배지 + 1줄 설명. 영역이 무엇인지 문장으로 1회 선언. */}
+        <div className="v3-sidebar-area">
+          <div className="v3-sidebar-area-label"><NavIcon name={currentArea === "home" ? "dashboard" : currentArea === "local" ? "webtoonCuts" : currentArea === "admin" ? "adminRoles" : "runpodRequests"} /><span>{areaMeta.label}</span></div>
+          <span className="v3-sidebar-area-desc">{areaMeta.description}</span>
+        </div>
 
-        {visibleNavGroups.map((group) => (
-          <React.Fragment key={group.label}>
-            <div className="v3-sidebar-group-label">{group.label}</div>
-            <div className="v3-sidebar-nav">
-              {group.items.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
-                  disabled={item.unimplemented}
-                  aria-current={item.key === activeItem ? "page" : undefined}
-                  onClick={() => {
-                    if (!item.unimplemented) {
-                      onNavigate(item.key);
-                    }
-                  }}
-                >
-                  <span>{item.label}</span>
-                  {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
-                </button>
-              ))}
-            </div>
-          </React.Fragment>
-        ))}
+        {visibleNavGroups.map((group) => {
+          const groupArea = GROUP_AREA[group.label] ?? null;
+          const isCurrentGroup = groupArea === currentArea;
+          return (
+            <React.Fragment key={group.label}>
+              <div className={`v3-sidebar-group-label${isCurrentGroup ? ` is-current is-area-${groupArea}` : ""}`}>
+                <i className="v3-sidebar-group-dot" aria-hidden="true" />{group.label}
+              </div>
+              <div className="v3-sidebar-nav">
+                {group.items.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`v3-sidebar-nav-item${item.key === activeItem ? " is-active" : ""}`}
+                    disabled={item.unimplemented}
+                    aria-current={item.key === activeItem ? "page" : undefined}
+                    onClick={() => {
+                      if (!item.unimplemented) {
+                        onNavigate(item.key);
+                      }
+                    }}
+                  >
+                    <span className="v3-sidebar-nav-icon"><NavIcon name={item.key} /></span>
+                    <span className="v3-sidebar-nav-label">{item.label}</span>
+                    {item.unimplemented ? <span className="v3-sidebar-nav-item-badge">미구현</span> : null}
+                  </button>
+                ))}
+              </div>
+            </React.Fragment>
+          );
+        })}
 
         {/* HELP 그룹(GENERATE 영역에서만). ADMIN 영역은 자체 nav에 Status/Metadata를 이미 둔다. */}
         {area !== "admin" && chrome && visibleHelpItems.length ? (
           <>
-            <div className="v3-sidebar-group-label">HELP</div>
+            <div className="v3-sidebar-group-label"><i className="v3-sidebar-group-dot" aria-hidden="true" />HELP</div>
             <div className="v3-sidebar-nav">
               {visibleHelpItems.map((item) => (
                 <button
@@ -217,7 +260,8 @@ export function AppShell({
                   className="v3-sidebar-nav-item"
                   onClick={() => chrome.onNavigateRoute(item.route)}
                 >
-                  <span>{item.label}</span>
+                  <span className="v3-sidebar-nav-icon"><NavIcon name={item.route === "access.manual" ? "help.manual" : "help.meta"} /></span>
+                  <span className="v3-sidebar-nav-label">{item.label}</span>
                 </button>
               ))}
             </div>
@@ -225,6 +269,24 @@ export function AppShell({
         ) : null}
 
         {sidebarExtra ? <div className="v3-sidebar-extra">{sidebarExtra}</div> : null}
+
+        {/* 영역 전환(지침 §3): 목적지 영역 색으로 칠하고 도착지를 1줄로 안내. 도착지는 항상 대시보드. */}
+        {chrome && area !== "admin" && canUseAdminConsole(user) ? (
+          <div className="v3-sidebar-switch-block">
+            <button className="v3-sidebar-switch is-to-admin" type="button" onClick={() => chrome.onNavigateRoute("admin.dashboard")}>
+              <NavIcon name="batchJobs" /><span>관리자 콘솔</span><b>→</b>
+            </button>
+            <p className="v3-sidebar-switch-hint">도착: 관리자 대시보드</p>
+          </div>
+        ) : null}
+        {chrome && area === "admin" ? (
+          <div className="v3-sidebar-switch-block">
+            <button className="v3-sidebar-switch is-to-home" type="button" onClick={() => chrome.onNavigateRoute("home.dashboard")}>
+              <b>←</b><span>스튜디오</span><NavIcon name="dashboard" />
+            </button>
+            <p className="v3-sidebar-switch-hint">도착: 스튜디오 대시보드</p>
+          </div>
+        ) : null}
         {sidebarFooter ? <div className="v3-sidebar-footer">{sidebarFooter}</div> : null}
 
         {/* 계정 블록: 구버전 TopBar의 유저/로그아웃을 이관. 사이드바 최하단에 고정한다.
@@ -240,9 +302,13 @@ export function AppShell({
       </nav>
 
       <div className="v3-main">
+        <span className="v3-main-rail" aria-hidden="true" />
         <header className="v3-header">
           <div>
-            {headerEyebrow ? <div className="v3-header-eyebrow">{headerEyebrow}</div> : null}
+            <div className="v3-header-crumb">
+              <span className={`v3-area-badge is-area-${currentArea}`}>{areaMeta.label}</span>
+              {headerEyebrow ? <><span className="v3-header-crumb-sep">/</span><span className="v3-header-eyebrow">{headerEyebrow}</span></> : null}
+            </div>
             <div className="v3-header-title">{headerTitle}</div>
           </div>
           {headerActions ? <div className="v3-header-actions">{headerActions}</div> : null}
