@@ -171,6 +171,22 @@ def cancel_webtoon_cut_job(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+@router.delete("/jobs/{job_id}")
+def delete_webtoon_cut_job(
+    job_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    try:
+        with SessionLocal() as session:
+            return webtoon_cut_service.delete_job(session, job_id, created_by=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/jobs/{job_id}/outputs")
 def list_webtoon_cut_outputs(
     job_id: str,

@@ -31,6 +31,7 @@ def test_webtoon_cut_is_top_level_image_cut_route_with_server_pipeline() -> None
     assert '@router.post("/uploads/presign"' in backend_api
     assert '@router.post("/jobs"' in backend_api
     assert '@router.get("/jobs"' in backend_api
+    assert '@router.delete("/jobs/{job_id}"' in backend_api
 
 
 def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> None:
@@ -75,6 +76,9 @@ def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filt
     assert "workerFilter" in source
     assert 'params.createdBy' in client
     assert 'query.set("createdBy", params.createdBy)' in client
+    assert "deleteWebtoonCutJob" in source
+    assert "deleteWebtoonCutJob" in client
+    assert "이력 삭제" in source
     assert "이전" in source
     assert "다음" in source
     assert "previewOutput" in source

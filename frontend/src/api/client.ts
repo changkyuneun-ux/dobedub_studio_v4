@@ -1745,6 +1745,10 @@ export const apiClient = {
     requestJson<WebtoonCutJobResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST"
     }),
+  deleteWebtoonCutJob: (jobId: string) =>
+    requestJson<{ deleted: boolean; jobId: string }>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE"
+    }),
   webtoonCutOutputs: (jobId: string, params: { usedState?: string; flags?: string; query?: string; page?: number; pageSize?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.usedState) query.set("usedState", params.usedState);

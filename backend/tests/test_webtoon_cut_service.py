@@ -240,3 +240,37 @@ def test_handoff_marks_selected_outputs_as_used(db_session):
     assert batch["inputAssetIds"] == ["asset_cut_2"]
     assert [item["assetId"] for item in prompt_used["items"]] == ["asset_cut_1"]
     assert [item["assetId"] for item in batch_used["items"]] == ["asset_cut_2"]
+
+
+def test_delete_job_soft_hides_terminal_jobs_from_history(db_session):
+    from backend.app.services.webtoon_cut_service import create_job, delete_job, list_jobs
+
+    db_session.add(_asset("asset_source"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="zip", created_by="user_1")
+    saved_job = db_session.get(WebtoonCutJob, job["jobId"])
+    saved_job.status = "cancelled"
+    db_session.commit()
+
+    result = delete_job(db_session, job_id=job["jobId"], created_by="user_1")
+    history = list_jobs(db_session, created_by="user_1")
+    hidden_job = db_session.get(WebtoonCutJob, job["jobId"])
+
+    assert result == {"deleted": True, "jobId": job["jobId"]}
+    assert hidden_job.deleted_at is not None
+    assert history["items"] == []
+
+
+def test_delete_job_rejects_active_jobs(db_session):
+    from backend.app.services.webtoon_cut_service import create_job, delete_job
+
+    db_session.add(_asset("asset_source"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="zip", created_by="user_1")
+
+    try:
+        delete_job(db_session, job_id=job["jobId"], created_by="user_1")
+    except ValueError as exc:
+        assert "진행 중인 컷 분할 작업은 삭제할 수 없습니다" in str(exc)
+    else:
+        raise AssertionError("active jobs must not be deleted")

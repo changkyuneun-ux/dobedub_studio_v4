@@ -173,6 +173,7 @@ class WebtoonCutJob(Base):
     created_by: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     source_asset: Mapped[Asset] = relationship(foreign_keys=[source_asset_id])
     sources: Mapped[list["WebtoonCutSource"]] = relationship(back_populates="job", cascade="all, delete-orphan")

@@ -228,6 +228,28 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     }
   }
 
+  async function deleteHistoryJob(job: WebtoonCutJobResponse) {
+    if (!canDeleteJob(job)) {
+      setNotice("진행 중인 작업은 삭제할 수 없습니다. 먼저 취소 또는 완료 후 삭제하세요.");
+      return;
+    }
+    if (!window.confirm(`"${job.displayName}" 컷 분할 이력을 삭제할까요? S3 원본과 컷 파일은 보존되고 이력 목록에서만 숨겨집니다.`)) return;
+    setLoading(true);
+    try {
+      await apiClient.deleteWebtoonCutJob(job.jobId);
+      setNotice("컷 분할 이력을 삭제했습니다. 원본과 컷 파일은 S3에 보존됩니다.");
+      setOutputs([]);
+      setSelectedOutputIds(new Set());
+      setPreviewOutputId("");
+      if (selectedJobId === job.jobId) setSelectedJobId("");
+      await refreshJobs();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "컷 분할 이력을 삭제하지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function toggleOutput(outputId: string) {
     setSelectedOutputIds((current) => {
       const next = new Set(current);
@@ -367,10 +389,22 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
           <div className="v3-webtoon-cut-history">
             <div className="v3-webtoon-cut-job-list">
               {jobs.map((job) => (
-                <button key={job.jobId} className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`} type="button" onClick={() => { setSelectedJobId(job.jobId); void refreshOutputs(job.jobId); }}>
-                  <strong>{job.displayName}</strong>
-                  <span>{job.status} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
-                </button>
+                <div key={job.jobId} className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`}>
+                  <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => { setSelectedJobId(job.jobId); void refreshOutputs(job.jobId); }}>
+                    <strong>{job.displayName}</strong>
+                    <span>{job.status} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
+                  </button>
+                  <span className="v3-webtoon-cut-job-actions">
+                    <button
+                      className="v3-danger-button"
+                      type="button"
+                      disabled={loading || !canDeleteJob(job)}
+                      onClick={() => void deleteHistoryJob(job)}
+                    >
+                      이력 삭제
+                    </button>
+                  </span>
+                </div>
               ))}
               {!jobs.length ? <div className="v3-empty-panel">컷 분할 이력이 없습니다.</div> : null}
               <div className="v3-webtoon-cut-pagination">
@@ -479,6 +513,10 @@ function usageLabel(output: WebtoonCutOutputItem): string {
   if (output.usedInBatchCount > 0) return "Batch 사용";
   if (output.usedInPromptCount > 0) return "Grok 사용";
   return "미사용";
+}
+
+function canDeleteJob(job: WebtoonCutJobResponse): boolean {
+  return ["completed", "failed", "cancelled"].includes(job.status);
 }
 
 function formatBytes(bytes: number): string {

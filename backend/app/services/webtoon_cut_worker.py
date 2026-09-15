@@ -37,6 +37,7 @@ def _pending_job_claim_statement():
     return (
         select(WebtoonCutJob)
         .where(WebtoonCutJob.status == "pending")
+        .where(WebtoonCutJob.deleted_at.is_(None))
         .order_by(asc(WebtoonCutJob.created_at))
         .limit(1)
         .with_for_update(skip_locked=True)

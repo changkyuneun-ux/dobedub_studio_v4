@@ -31,6 +31,7 @@ def create_job(
         select(WebtoonCutJob)
         .where(WebtoonCutJob.created_by == created_by)
         .where(WebtoonCutJob.status.in_(ACTIVE_JOB_STATUSES))
+        .where(WebtoonCutJob.deleted_at.is_(None))
         .order_by(desc(WebtoonCutJob.created_at))
     ).first()
     if active is not None:
@@ -78,6 +79,18 @@ def get_job(db: Session, job_id: str, *, created_by: str) -> dict:
     return _job_payload(job)
 
 
+def delete_job(db: Session, job_id: str, *, created_by: str) -> dict:
+    job = _require_job(db, job_id, created_by=created_by, include_deleted=True)
+    if job.status not in TERMINAL_JOB_STATUSES:
+        raise ValueError("진행 중인 컷 분할 작업은 삭제할 수 없습니다. 먼저 취소 또는 완료 후 삭제하세요.")
+    if job.deleted_at is None:
+        now = _now()
+        job.deleted_at = now
+        job.updated_at = now
+        db.commit()
+    return {"deleted": True, "jobId": job.id}
+
+
 def list_jobs(
     db: Session,
     *,
@@ -88,7 +101,7 @@ def list_jobs(
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
-    stmt = select(WebtoonCutJob)
+    stmt = select(WebtoonCutJob).where(WebtoonCutJob.deleted_at.is_(None))
     if created_by:
         stmt = stmt.where(WebtoonCutJob.created_by == created_by)
     if status:
@@ -289,9 +302,11 @@ def _dedupe_outputs_by_display_path(outputs: Iterable[WebtoonCutOutput]) -> list
     return deduped
 
 
-def _require_job(db: Session, job_id: str, *, created_by: str | None) -> WebtoonCutJob:
+def _require_job(db: Session, job_id: str, *, created_by: str | None, include_deleted: bool = False) -> WebtoonCutJob:
     job = db.get(WebtoonCutJob, job_id)
     if job is None:
+        raise KeyError(job_id)
+    if job.deleted_at is not None and not include_deleted:
         raise KeyError(job_id)
     if created_by and job.created_by != created_by:
         raise PermissionError("컷 분할 작업 접근 권한이 없습니다.")
