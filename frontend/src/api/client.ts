@@ -351,12 +351,15 @@ export type DashboardFilterOption = { id?: string | null; name: string };
 // 카드의 KST 일자와 최대 ~9시간 어긋날 수 있음 - RunPod 청구가 UTC일 단위라 총액
 // 정합성을 위해 UTC를 우선함). split이 없으면(null) 아직 5초/10초 구분 전
 // (2026-09-10 UTC 이전) 날짜로, 전체 제출/완료/실패/비용만 표시한다.
-export type DurationCostBucket = { count: number; costUsd: number };
+// costUsd/totalCostUsd/costPerJobUsd가 null이면 "실제로 0원"이 아니라 RunPod
+// 빌링 조회 자체가 실패했다는 뜻 - billingError가 채워져 있으면 항상 이 상태다
+// (2026-09-15: 건수는 정상인데 비용만 전부 $0.00으로 보이던 버그의 수정).
+export type DurationCostBucket = { count: number; costUsd: number | null };
 export type DurationCostDay = {
   submitted: number;
   completed: number;
   failed: number;
-  totalCostUsd: number;
+  totalCostUsd: number | null;
   split: { fiveSec: DurationCostBucket; tenSec: DurationCostBucket; unclassified: DurationCostBucket } | null;
 };
 export type DurationCostSummary = {
@@ -370,6 +373,8 @@ export type DashboardDurationCostBreakdown = {
   byDay: Record<string, DurationCostDay>;
   /** 구분 대상(09-10 UTC 이후) 날짜가 하나도 없으면 null */
   summary: DurationCostSummary | null;
+  /** RunPod 빌링 API 조회 실패 사유(원인 문자열). 성공이면 null. */
+  billingError?: string | null;
 };
 
 export type DashboardSummary = {

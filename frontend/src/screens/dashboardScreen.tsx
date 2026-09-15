@@ -329,6 +329,9 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
         <div className="v3-card-header-title">
           <span>컷 길이별 비용</span>
           <span className="v3-status-badge is-pending">2026-09-10 UTC부터 적용</span>
+          {breakdown.billingError ? (
+            <span className="v3-status-badge is-failed" title={breakdown.billingError}>RunPod 청구 조회 실패 · 건수만 표시</span>
+          ) : null}
         </div>
         <span className="v3-card-header-meta">RunPod 서버리스 청구 · 실행시간 가중 배분</span>
       </div>

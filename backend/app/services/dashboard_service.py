@@ -65,7 +65,12 @@ _sandbox_refreshing = False
 # 기준 배분이 왜곡될 수 있다. 09-10 이전은 dailyVolume과 동일하게 합계만 노출.
 DURATION_SPLIT_CUTOFF_UTC = date(2026, 9, 10)
 _BILLING_CACHE_TTL_SECONDS = 300.0
-_billing_cache: dict[str, object] = {"at": 0.0, "range": None, "value": None}
+# 2026-09-15 버그 수정: 빌링 조회 실패(네트워크/인증/RunPod 측 오류)를 "그 구간
+# 청구가 실제로 0원"인 것처럼 5분간 캐시해 대시보드에 $0.00으로 보여주던 문제.
+# 실패는 훨씬 짧게(20초)만 캐시해 빠르게 재시도하고, 성공/실패를 구분해 카드가
+# "미조회"와 "실제 0원"을 다르게 표시할 수 있게 한다.
+_BILLING_ERROR_RETRY_SECONDS = 20.0
+_billing_cache: dict[str, object] = {"at": 0.0, "range": None, "value": None, "error": None}
 
 
 # --- pure helpers ------------------------------------------------------------
@@ -610,25 +615,29 @@ def _execution_seconds(status_json: dict | None) -> float:
         return 0.0
 
 
-def _cached_serverless_billing(settings: Settings, since_day: date, until_day: date) -> dict[str, dict]:
+def _cached_serverless_billing(settings: Settings, since_day: date, until_day: date) -> tuple[dict[str, dict], str | None]:
     """RunPod 서버리스 일별 청구를 짧게 캐시한다(대시보드 응답마다 외부 호출 방지).
 
-    Sandbox 블록(_sandbox_cache)과 달리 백그라운드 스레드 갱신은 하지 않는다 -
-    청구 데이터는 분 단위로만 바뀌므로 TTL(5분) 동안은 캐시를 그대로 쓰고,
-    만료되면 이 요청이 동기 호출한다. RunPod 빌링 API 실패는 격리해 빈 dict로
-    대체하고(그 구간은 costUsd 없이 건수만 노출) 나머지 대시보드 렌더링을 막지
-    않는다.
+    반환값은 ``(일별 청구 dict, 에러 메시지 또는 None)``. Sandbox 블록
+    (_sandbox_cache)과 달리 백그라운드 스레드 갱신은 하지 않는다 - 청구
+    데이터는 분 단위로만 바뀌므로 성공 시 TTL(5분) 동안은 캐시를 그대로 쓰고,
+    만료되면 이 요청이 동기 호출한다. 실패(네트워크/인증/RunPod 측 오류)는
+    "그 구간 청구가 0원"이 아니라 "조회 실패"로 구분해 반환하고, 짧게(20초)만
+    캐시해 빠르게 재시도한다 - 실패를 0원으로 착각해 5분간 그대로 보여주는
+    사고를 막기 위함(2026-09-15 실사용 중 발견: 건수는 정상 표시되는데 비용만
+    전부 $0.00으로 보이는 문제의 원인이었다).
     """
     cache_key = f"{since_day.isoformat()}..{until_day.isoformat()}"
     now = time.monotonic()
-    cached_value = _billing_cache.get("value")
-    fresh = (
-        cached_value is not None
-        and _billing_cache.get("range") == cache_key
-        and now - float(_billing_cache.get("at") or 0.0) < _BILLING_CACHE_TTL_SECONDS
-    )
-    if fresh:
-        return dict(cached_value)  # type: ignore[arg-type]
+    same_range = _billing_cache.get("range") == cache_key
+    age = now - float(_billing_cache.get("at") or 0.0)
+    cached_error = _billing_cache.get("error")
+
+    if same_range and cached_error is None and _billing_cache.get("value") is not None and age < _BILLING_CACHE_TTL_SECONDS:
+        return dict(_billing_cache["value"]), None  # type: ignore[arg-type]
+    if same_range and cached_error is not None and age < _BILLING_ERROR_RETRY_SECONDS:
+        return {}, str(cached_error)
+
     try:
         by_day = fetch_serverless_billing_daily(
             api_key=settings.runpod_api_key,
@@ -636,13 +645,17 @@ def _cached_serverless_billing(settings: Settings, since_day: date, until_day: d
             start_time=f"{since_day.isoformat()}T00:00:00Z",
             end_time=f"{(until_day + timedelta(days=1)).isoformat()}T00:00:00Z",
         )
-    except Exception as exc:  # noqa: BLE001 - 빌링 API 실패를 격리
+        error: str | None = None
+    except Exception as exc:  # noqa: BLE001 - 빌링 API 실패를 격리하되 원인은 카드에 노출
         LOGGER.warning("dashboard duration-cost billing fetch failed: %s", exc)
         by_day = {}
+        error = f"{type(exc).__name__}: {exc}"
+
     _billing_cache["at"] = time.monotonic()
     _billing_cache["range"] = cache_key
     _billing_cache["value"] = by_day
-    return dict(by_day)
+    _billing_cache["error"] = error
+    return dict(by_day), error
 
 
 def _utc_day_range(since: datetime, until: datetime) -> list[str]:
@@ -693,7 +706,7 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
 
     day_keys = _utc_day_range(since, until)
     if not day_keys:
-        return {"byDay": {}, "summary": None}
+        return {"byDay": {}, "summary": None, "billingError": None}
 
     per_day: dict[str, dict] = {
         day: {
@@ -733,9 +746,12 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
 
     since_day = date.fromisoformat(day_keys[0])
     until_day = date.fromisoformat(day_keys[-1])
-    billing_by_day = _cached_serverless_billing(settings, since_day, until_day)
+    billing_by_day, billing_error = _cached_serverless_billing(settings, since_day, until_day)
 
     by_day: dict[str, dict] = {}
+    # 빌링 조회 실패 시 costUsd를 0으로 채우면 "실제로 무료"와 구분이 안 되므로
+    # None으로 남긴다(건수는 DB 조회만으로 구해지므로 정상 표시). 프론트는
+    # billingError 유무로 "-"/"조회 실패" 표시와 "$0.00" 표시를 구분한다.
     summary_cost = {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0}
     summary_count = {"fiveSec": 0, "tenSec": 0, "unclassified": 0}
     summary_since: str | None = None
@@ -743,36 +759,44 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
 
     for day_key in sorted(per_day):
         entry = per_day[day_key]
-        # RunPod 빌링 API는 비용이 0인 날의 레코드를 아예 생략하므로, 없는
-        # 날은 0으로 채운다(0을 "데이터 없음"으로 오인하지 않도록 유의).
-        day_total_cost = float((billing_by_day.get(day_key) or {}).get("totalAmount") or 0.0)
+        if billing_error is not None:
+            day_total_cost = None
+        else:
+            # RunPod 빌링 API는 비용이 0인 날의 레코드를 아예 생략하므로, 없는
+            # 날은 0으로 채운다(0을 "데이터 없음"으로 오인하지 않도록 유의 -
+            # billing_error가 None일 때만 유효한 구분이다).
+            day_total_cost = float((billing_by_day.get(day_key) or {}).get("totalAmount") or 0.0)
         row = {
             "submitted": entry["submitted"],
             "completed": entry["completed"],
             "failed": entry["failed"],
-            "totalCostUsd": round(day_total_cost, 4),
+            "totalCostUsd": None if day_total_cost is None else round(day_total_cost, 4),
             "split": None,
         }
         if date.fromisoformat(day_key) >= DURATION_SPLIT_CUTOFF_UTC:
             exec_seconds = entry["execSeconds"]
             weight_total = sum(exec_seconds.values())
-            cost = {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0}
-            if weight_total > 0 and day_total_cost > 0:
-                cost["fiveSec"] = day_total_cost * exec_seconds["fiveSec"] / weight_total
-                cost["tenSec"] = day_total_cost * exec_seconds["tenSec"] / weight_total
-                cost["unclassified"] = day_total_cost - cost["fiveSec"] - cost["tenSec"]
-            elif day_total_cost > 0:
-                cost["unclassified"] = day_total_cost
+            if day_total_cost is None:
+                cost: dict[str, float | None] = {"fiveSec": None, "tenSec": None, "unclassified": None}
+            else:
+                cost = {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0}
+                if weight_total > 0 and day_total_cost > 0:
+                    cost["fiveSec"] = day_total_cost * exec_seconds["fiveSec"] / weight_total
+                    cost["tenSec"] = day_total_cost * exec_seconds["tenSec"] / weight_total
+                    cost["unclassified"] = day_total_cost - cost["fiveSec"] - cost["tenSec"]
+                elif day_total_cost > 0:
+                    cost["unclassified"] = day_total_cost
 
             row["split"] = {
-                "fiveSec": {"count": entry["count"]["fiveSec"], "costUsd": round(cost["fiveSec"], 4)},
-                "tenSec": {"count": entry["count"]["tenSec"], "costUsd": round(cost["tenSec"], 4)},
-                "unclassified": {"count": entry["count"]["unclassified"], "costUsd": round(cost["unclassified"], 4)},
+                "fiveSec": {"count": entry["count"]["fiveSec"], "costUsd": None if cost["fiveSec"] is None else round(cost["fiveSec"], 4)},
+                "tenSec": {"count": entry["count"]["tenSec"], "costUsd": None if cost["tenSec"] is None else round(cost["tenSec"], 4)},
+                "unclassified": {"count": entry["count"]["unclassified"], "costUsd": None if cost["unclassified"] is None else round(cost["unclassified"], 4)},
             }
             summary_since = summary_since or day_key
             summary_until = day_key
             for bucket in ("fiveSec", "tenSec", "unclassified"):
-                summary_cost[bucket] += cost[bucket]
+                if cost[bucket] is not None:
+                    summary_cost[bucket] += cost[bucket]
                 summary_count[bucket] += entry["count"][bucket]
 
         by_day[day_key] = row
@@ -780,29 +804,31 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
     summary = None
     if summary_since is not None:
         def _per_job(bucket: str):
-            return round(summary_cost[bucket] / summary_count[bucket], 4) if summary_count[bucket] else None
+            if billing_error is not None or not summary_count[bucket]:
+                return None
+            return round(summary_cost[bucket] / summary_count[bucket], 4)
 
         summary = {
             "sinceUtc": summary_since,
             "untilUtc": summary_until,
             "fiveSec": {
                 "count": summary_count["fiveSec"],
-                "costUsd": round(summary_cost["fiveSec"], 4),
+                "costUsd": None if billing_error is not None else round(summary_cost["fiveSec"], 4),
                 "costPerJobUsd": _per_job("fiveSec"),
             },
             "tenSec": {
                 "count": summary_count["tenSec"],
-                "costUsd": round(summary_cost["tenSec"], 4),
+                "costUsd": None if billing_error is not None else round(summary_cost["tenSec"], 4),
                 "costPerJobUsd": _per_job("tenSec"),
             },
             "unclassified": {
                 "count": summary_count["unclassified"],
-                "costUsd": round(summary_cost["unclassified"], 4),
+                "costUsd": None if billing_error is not None else round(summary_cost["unclassified"], 4),
                 "costPerJobUsd": _per_job("unclassified"),
             },
         }
 
-    return {"byDay": by_day, "summary": summary}
+    return {"byDay": by_day, "summary": summary, "billingError": billing_error}
 
 
 # --- entry point -------------------------------------------------------------
