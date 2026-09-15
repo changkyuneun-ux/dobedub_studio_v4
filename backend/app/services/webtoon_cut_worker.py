@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 from sqlalchemy import asc, select
+from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import utc_now
 from backend.app.core.config import get_settings
@@ -54,20 +55,25 @@ def process_job(job_id: str) -> dict:
             job.updated_at = _now()
             session.commit()
 
-        if _is_zip(local_source):
-            _process_zip_job(job_id, local_source, workdir)
-        elif _is_pdf(local_source):
-            _process_pdf_job(job_id, local_source, workdir)
-        else:
-            _process_image_job(job_id, local_source, workdir)
+        try:
+            if _is_zip(local_source):
+                _process_zip_job(job_id, local_source, workdir)
+            elif _is_pdf(local_source):
+                _process_pdf_job(job_id, local_source, workdir)
+            else:
+                _process_image_job(job_id, local_source, workdir)
+        except Exception as exc:
+            with SessionLocal() as session:
+                job = session.get(WebtoonCutJob, job_id)
+                if job is not None:
+                    _fail_job(session, job, str(exc))
+            return {"processed": False, "jobId": job_id, "reason": "failed"}
 
         with SessionLocal() as session:
             job = session.get(WebtoonCutJob, job_id)
             if job is None:
                 return {"processed": True}
-            if job.status == "cancel_requested":
-                job.status = "cancelled"
-            elif job.status not in {"failed", "cancelled"}:
+            if job.status not in {"failed", "cancelled"}:
                 job.status = "completed"
             job.completed_at = _now()
             job.updated_at = _now()
@@ -91,7 +97,7 @@ def _process_pdf_job(
     for page_number in range(1, total + 1):
         with SessionLocal() as session:
             job = session.get(WebtoonCutJob, job_id)
-            if job is None or job.status == "cancel_requested":
+            if job is None or _job_should_stop(job):
                 return
             job.current_unit_label = f"page {page_number:03d}"
             job.updated_at = _now()
@@ -99,6 +105,10 @@ def _process_pdf_job(
         page_out = workdir / "pages" / f"{page_number:03d}"
         try:
             result = process_pdf_page(pdf_path, page_number=page_number, output_dir=page_out)
+            with SessionLocal() as session:
+                job = session.get(WebtoonCutJob, job_id)
+                if job is None or _job_should_stop(job):
+                    return
             _store_result(
                 job_id,
                 result,
@@ -123,12 +133,16 @@ def _process_image_job(
 ) -> None:
     with SessionLocal() as session:
         job = session.get(WebtoonCutJob, job_id)
-        if job is None or job.status == "cancel_requested":
+        if job is None or _job_should_stop(job):
             return
         job.current_unit_label = image_path.name
         job.updated_at = _now()
         session.commit()
     result = process_image_file(image_path, output_dir=workdir / "image", page_number=None)
+    with SessionLocal() as session:
+        job = session.get(WebtoonCutJob, job_id)
+        if job is None or _job_should_stop(job):
+            return
     _store_result(
         job_id,
         result,
@@ -211,7 +225,7 @@ def _store_result(
                 zip_stem=zip_stem,
                 zip_internal_relative_dir=zip_internal_relative_dir,
             )
-            asset = _store_cut_asset(cut.path, rel_path=rel_path, created_by=job.created_by, width=cut.width, height=cut.height)
+            asset = _store_cut_asset(session, cut.path, rel_path=rel_path, created_by=job.created_by, width=cut.width, height=cut.height)
             register_output(
                 session,
                 job_id=job.id,
@@ -229,30 +243,28 @@ def _store_result(
         session.commit()
 
 
-def _store_cut_asset(path: Path, *, rel_path: str, created_by: str, width: int, height: int) -> Asset:
+def _store_cut_asset(session: Session, path: Path, *, rel_path: str, created_by: str, width: int, height: int) -> Asset:
     settings = get_settings()
     key = f"webtoon-cut/users/{created_by}/outputs/{uuid.uuid4().hex[:12]}/{rel_path}"
     storage = s3_asset_storage()
     stored = storage.save_file(key, path, file_name=Path(rel_path).name, mime_type="image/png")
-    with SessionLocal() as session:
-        asset = Asset(
-            id=f"asset_{uuid.uuid4().hex[:12]}",
-            asset_type="webtoon_cut_image",
-            file_name=Path(rel_path).name,
-            mime_type="image/png",
-            size_bytes=stored.size_bytes,
-            image_width=width or None,
-            image_height=height or None,
-            storage_backend="s3",
-            storage_key=stored.storage_key,
-            public_url=f"s3://{settings.s3_bucket}/{stored.storage_key}",
-            metadata_json={"createdBy": created_by, "displayPath": rel_path},
-            created_at=_now(),
-        )
-        session.add(asset)
-        session.commit()
-        session.refresh(asset)
-        return asset
+    asset = Asset(
+        id=f"asset_{uuid.uuid4().hex[:12]}",
+        asset_type="webtoon_cut_image",
+        file_name=Path(rel_path).name,
+        mime_type="image/png",
+        size_bytes=stored.size_bytes,
+        image_width=width or None,
+        image_height=height or None,
+        storage_backend="s3",
+        storage_key=stored.storage_key,
+        public_url=f"s3://{settings.s3_bucket}/{stored.storage_key}",
+        metadata_json={"createdBy": created_by, "displayPath": rel_path},
+        created_at=_now(),
+    )
+    session.add(asset)
+    session.flush()
+    return asset
 
 
 def _materialize_asset(asset: Asset, workdir: Path) -> Path:
@@ -278,6 +290,10 @@ def _is_pdf(path: Path) -> bool:
 
 def _is_zip(path: Path) -> bool:
     return path.suffix.lower() == ".zip"
+
+
+def _job_should_stop(job: WebtoonCutJob) -> bool:
+    return job.status in {"cancel_requested", "cancelled", "failed"}
 
 
 def _fail_job(session, job: WebtoonCutJob, message: str) -> None:

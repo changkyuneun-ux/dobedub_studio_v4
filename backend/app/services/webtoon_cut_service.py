@@ -12,7 +12,7 @@ from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
 from backend.app.services.webtoon_cut_naming import make_source_identity
 
 
-ACTIVE_JOB_STATUSES = {"pending", "running", "cancel_requested"}
+ACTIVE_JOB_STATUSES = {"pending", "running"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 REVIEW_REQUIRED_FLAGS = {"review_required", "thin", "many", "review_continuous", "missing_output", "error"}
 
@@ -64,8 +64,9 @@ def cancel_job(db: Session, job_id: str, *, created_by: str) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     if job.status in TERMINAL_JOB_STATUSES:
         return _job_payload(job)
-    job.status = "cancel_requested"
+    job.status = "cancelled"
     job.cancel_requested_at = _now()
+    job.completed_at = _now()
     job.updated_at = _now()
     db.commit()
     db.refresh(job)

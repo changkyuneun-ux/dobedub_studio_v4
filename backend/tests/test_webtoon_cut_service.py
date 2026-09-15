@@ -44,7 +44,7 @@ def test_create_job_blocks_second_active_job_for_same_user(db_session):
         raise AssertionError("expected active job guard")
 
 
-def test_cancel_job_sets_cancel_requested_status(db_session):
+def test_cancel_job_sets_cancelled_terminal_status(db_session):
     from backend.app.services.webtoon_cut_service import cancel_job, create_job
 
     db_session.add(_asset("asset_source"))
@@ -53,7 +53,7 @@ def test_cancel_job_sets_cancel_requested_status(db_session):
 
     cancelled = cancel_job(db_session, job["jobId"], created_by="user_1")
 
-    assert cancelled["status"] == "cancel_requested"
+    assert cancelled["status"] == "cancelled"
     assert cancelled["cancelRequestedAt"]
 
 
