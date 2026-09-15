@@ -9,6 +9,7 @@
 - 신규 Alembic revision `20260915_0039`가 운영 DB에 적용 가능한지 staging에서 검증한다.
 - Docker 이미지에 다음이 포함되는지 확인한다.
   - `poppler-utils`
+  - `poppler-data`
   - `opencv-python-headless`
   - `numpy`
   - `boto3`
@@ -59,7 +60,8 @@ docker build -t dobedub-studio:webtoon-cut .
 
 검증 포인트:
 
-- `apt-get install poppler-utils` 단계 성공
+- `apt-get install poppler-utils poppler-data` 단계 성공
+- `poppler-data`에 포함된 Adobe-Korea1 CMap이 설치되어 한글 CID 폰트 PDF가 빈 텍스트로 렌더링되지 않는지 확인
 - `pip install -r backend/requirements.txt` 성공
 - `npm run build` 성공
 - 이미지가 `scripts/run_server.py`로 기동 가능한지 확인

@@ -553,6 +553,7 @@ System packages:
 
 ```text
 poppler-utils
+poppler-data
 libgl1
 libglib2.0-0
 ```
@@ -560,6 +561,7 @@ libglib2.0-0
 Guardrails:
 
 - Check `pdfinfo` and `pdftoppm` availability at startup/status.
+- Install `poppler-data`; Korean CID font PDFs require Adobe-Korea1 CMap data or Poppler can render speech-bubble text as blank.
 - If Poppler missing, job fails fast with `engine_dependency_missing`.
 - Do not write temp files inside the repository. Use `tempfile.TemporaryDirectory()`.
 - Cleanup temp directory on success, failure, and cancellation.
@@ -801,6 +803,7 @@ Add OS packages to Docker/ECS build:
 
 ```text
 poppler-utils
+poppler-data
 libgl1
 libglib2.0-0
 ```

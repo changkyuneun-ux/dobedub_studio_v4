@@ -47,7 +47,7 @@ def process_image_file(image_path: Path, *, output_dir: Path, page_number: int |
     output_dir.mkdir(parents=True, exist_ok=True)
     panel_tmp = Path(tempfile.mkdtemp(prefix="webtoon_panels_"))
     try:
-        from backend.app.services.webtoon_panel_engine.grid_split import split_panels
+        from backend.app.services.webtoon_panel_engine.batch_split import split_panels
 
         saved = [Path(path) for path in split_panels(str(image_path), str(panel_tmp), debug=True)]
         flags: list[str] = []

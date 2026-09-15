@@ -16,6 +16,7 @@ CLI script.
 
 from __future__ import annotations
 
+from backend.app.services.webtoon_panel_engine.grid_split import split_panels
 from backend.app.services.webtoon_panel_engine.runtime import (
     CutResult,
     RenderedUnitResult,
@@ -30,4 +31,5 @@ __all__ = [
     "page_count",
     "process_image_file",
     "process_pdf_page",
+    "split_panels",
 ]
