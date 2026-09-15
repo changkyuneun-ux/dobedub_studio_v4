@@ -37,8 +37,12 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
 
     assert "S3 업로드 · 서버 컷 분리 · I2V 입력 연결" in source
-    assert "동일 파일명도 기존 결과를 덮어쓰지 않고 새 작업으로 생성됩니다." in source
-    assert "기존 취소/실패 작업과 S3 산출물은 이력에 보존됩니다." in source
+    assert "처리 구조" not in source
+    assert "입력 구조 정보" in source
+    assert "상대경로" in source
+    assert "원본 이미지 수" in source
+    assert "파일 크기" in source
+    assert "selectedFileStructure" in source
     assert "presignWebtoonCutUpload" in source
     assert "completeWebtoonCutUpload" in source
     assert "createWebtoonCutJob" in source

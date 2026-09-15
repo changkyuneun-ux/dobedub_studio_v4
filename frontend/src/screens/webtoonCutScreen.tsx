@@ -13,6 +13,14 @@ import { saveWebtoonCutHandoff } from "../state/durableWorkspace";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; mode: "split" | "history" };
 type ViewMode = "list" | "grid";
+type SelectedFileStructure = {
+  inputRelativePath: string;
+  sourceCountLabel: string;
+  fileSizeLabel: string;
+  imageSizeLabel: string;
+  outputPolicyLabel: string;
+  s3RelativePath: string;
+};
 
 const POLL_INTERVAL_MS = 2500;
 const JOBS_PAGE_SIZE = 20;
@@ -21,6 +29,8 @@ const OUTPUTS_PAGE_SIZE = 50;
 export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadedStorageKey, setUploadedStorageKey] = useState("");
+  const [imageSizeLabel, setImageSizeLabel] = useState("서버 분석 후 확정");
   const [dragging, setDragging] = useState(false);
   const [activeJob, setActiveJob] = useState<WebtoonCutJobResponse | null>(null);
   const [jobs, setJobs] = useState<WebtoonCutJobResponse[]>([]);
@@ -47,6 +57,10 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const previewOutput = outputs.find((item) => item.outputId === previewOutputId) || outputs[0] || null;
   const isRunning = activeJob ? !["completed", "failed", "cancelled"].includes(activeJob.status) : false;
   const sameFileHistoryCount = selectedFile ? jobs.filter((job) => job.displayName === selectedFile.name).length : 0;
+  const selectedFileStructure = useMemo(
+    () => describeSelectedFileStructure(selectedFile, { imageSizeLabel, uploadedStorageKey }),
+    [imageSizeLabel, selectedFile, uploadedStorageKey]
+  );
 
   useEffect(() => {
     void refreshJobs();
@@ -75,6 +89,24 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     const timer = window.setInterval(() => void refreshJobs(), POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [isRunning, activeJob?.jobId]);
+
+  useEffect(() => {
+    if (!selectedFile || inputKindFromFile(selectedFile) !== "image") {
+      setImageSizeLabel("서버 분석 후 확정");
+      return;
+    }
+    const url = window.URL.createObjectURL(selectedFile);
+    const image = new Image();
+    image.onload = () => {
+      setImageSizeLabel(`${image.naturalWidth}×${image.naturalHeight}`);
+      window.URL.revokeObjectURL(url);
+    };
+    image.onerror = () => {
+      setImageSizeLabel("이미지 크기 확인 실패");
+      window.URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  }, [selectedFile]);
 
   async function refreshJobs() {
     try {
@@ -117,6 +149,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     const file = files?.[0] || null;
     if (!file) return;
     setSelectedFile(file);
+    setUploadedStorageKey("");
     setNotice("");
   }
 
@@ -126,6 +159,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     const file = event.dataTransfer.files?.[0] || null;
     if (file) {
       setSelectedFile(file);
+      setUploadedStorageKey("");
       setNotice("");
     }
   }
@@ -162,6 +196,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
         storageKey: presigned.storageKey,
         sizeBytes: selectedFile.size
       });
+      setUploadedStorageKey(uploaded.storageKey);
       const job = await apiClient.createWebtoonCutJob({
         assetId: uploaded.assetId,
         inputKind: inputKindFromFile(selectedFile),
@@ -251,15 +286,6 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
           <section className="v3-screen-section v3-webtoon-cut-section">
             <div className="v3-batch-section-title"><span>1</span><strong>컷 분할 작업 생성</strong></div>
             <div className="v3-webtoon-cut-create">
-              <div className="v3-webtoon-cut-card">
-                <label>처리 구조</label>
-                <strong>서버 업로드 처리</strong>
-                <small>원본과 분리 컷은 S3에 보관됩니다.</small>
-                <small>동일 파일명도 기존 결과를 덮어쓰지 않고 새 작업으로 생성됩니다.</small>
-                <span className="v3-webtoon-cut-good">✓ 기존 Batch/Grok/RunPod 작업과 분리된 webtoon-cut 전용 API</span>
-                <span className="v3-webtoon-cut-good">✓ 기존 취소/실패 작업과 S3 산출물은 이력에 보존됩니다.</span>
-              </div>
-
               <div
                 className={`v3-webtoon-cut-dropzone${dragging ? " is-dragging" : ""}`}
                 onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
@@ -279,6 +305,19 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                   accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip,image/jpeg,image/png,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed"
                   onChange={(event) => void chooseFiles(event.target.files)}
                 />
+              </div>
+
+              <div className="v3-webtoon-cut-source-panel">
+                <label>입력 구조 정보</label>
+                <strong>{selectedFile ? selectedFile.name : "파일 선택 후 자동 표시"}</strong>
+                <div className="v3-webtoon-cut-source-grid">
+                  <span>상대경로</span><b>{selectedFileStructure.inputRelativePath}</b>
+                  <span>원본 이미지 수</span><b>{selectedFileStructure.sourceCountLabel}</b>
+                  <span>파일 크기</span><b>{selectedFileStructure.fileSizeLabel}</b>
+                  <span>원본 크기</span><b>{selectedFileStructure.imageSizeLabel}</b>
+                  <span>출력 구조</span><b>{selectedFileStructure.outputPolicyLabel}</b>
+                  <span>S3 상대경로</span><b>{selectedFileStructure.s3RelativePath}</b>
+                </div>
               </div>
 
               <div className={`v3-webtoon-cut-action${isRunning ? " is-running" : ""}`}>
@@ -397,6 +436,37 @@ function inputKindFromFile(file: File): string {
   if (name.endsWith(".zip")) return "zip";
   if (name.endsWith(".pdf")) return "pdf";
   return "image";
+}
+
+function describeSelectedFileStructure(
+  file: File | null,
+  options: { imageSizeLabel: string; uploadedStorageKey: string }
+): SelectedFileStructure {
+  if (!file) {
+    return {
+      inputRelativePath: "-",
+      sourceCountLabel: "-",
+      fileSizeLabel: "-",
+      imageSizeLabel: "-",
+      outputPolicyLabel: "파일 선택 후 표시",
+      s3RelativePath: "업로드 후 표시"
+    };
+  }
+  const kind = inputKindFromFile(file);
+  const inputRelativePath = String((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  const sourceCountLabel = kind === "image" ? "1개" : kind === "pdf" ? "PDF 페이지 기준" : "ZIP 내부 파일 기준";
+  return {
+    inputRelativePath,
+    sourceCountLabel,
+    fileSizeLabel: formatBytes(file.size),
+    imageSizeLabel: kind === "image" ? options.imageSizeLabel : "서버 분석 후 확정",
+    outputPolicyLabel: `${stripExtension(file.name)}_cuts / source_cuts / 원본별 하위 경로`,
+    s3RelativePath: options.uploadedStorageKey || "작업 요청 시 S3 업로드 후 표시"
+  };
+}
+
+function stripExtension(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, "");
 }
 
 function progressPercent(job: WebtoonCutJobResponse | null): number {
