@@ -37,6 +37,8 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
 
     assert "S3 업로드 · 서버 컷 분리 · I2V 입력 연결" in source
+    assert "동일 파일명도 기존 결과를 덮어쓰지 않고 새 작업으로 생성됩니다." in source
+    assert "기존 취소/실패 작업과 S3 산출물은 이력에 보존됩니다." in source
     assert "presignWebtoonCutUpload" in source
     assert "completeWebtoonCutUpload" in source
     assert "createWebtoonCutJob" in source
@@ -53,6 +55,10 @@ def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filt
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
 
     assert 'type ViewMode = "list" | "grid"' in source
+    assert "jobStatusFilter" in source
+    assert "작업 상태" in source
+    assert '<option value="cancelled">취소</option>' in source
+    assert '<option value="failed">실패</option>' in source
     assert "리스트" in source
     assert "그리드" in source
     assert "필터 결과 전체 선택" in source

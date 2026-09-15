@@ -27,24 +27,31 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [selectedOutputIds, setSelectedOutputIds] = useState<Set<string>>(new Set());
   const [previewOutputId, setPreviewOutputId] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [usedState, setUsedState] = useState("");
   const [flagFilter, setFlagFilter] = useState("");
   const [workerFilter, setWorkerFilter] = useState("");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const isHistoryMode = mode === "history";
 
   const selectedJob = useMemo(
-    () => jobs.find((job) => job.jobId === selectedJobId) || activeJob || jobs[0] || null,
-    [activeJob, jobs, selectedJobId]
+    () => jobs.find((job) => job.jobId === selectedJobId) || (!isHistoryMode ? activeJob : null) || jobs[0] || null,
+    [activeJob, isHistoryMode, jobs, selectedJobId]
   );
   const previewOutput = outputs.find((item) => item.outputId === previewOutputId) || outputs[0] || null;
   const isRunning = activeJob ? !["completed", "failed", "cancelled"].includes(activeJob.status) : false;
-  const isHistoryMode = mode === "history";
+  const sameFileHistoryCount = selectedFile ? jobs.filter((job) => job.displayName === selectedFile.name).length : 0;
 
   useEffect(() => {
     void refreshJobs();
   }, []);
+
+  useEffect(() => {
+    if (!isHistoryMode) return;
+    void refreshJobs();
+  }, [isHistoryMode, jobStatusFilter]);
 
   useEffect(() => {
     if (!selectedJob?.jobId) return;
@@ -59,11 +66,12 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
 
   async function refreshJobs() {
     try {
-      const response = await apiClient.webtoonCutJobs({ pageSize: 20 });
+      const response = await apiClient.webtoonCutJobs({ status: jobStatusFilter, pageSize: 20 });
       setJobs(response.items);
       const running = response.items.find((job) => !["completed", "failed", "cancelled"].includes(job.status)) || null;
       setActiveJob(running);
-      if (!selectedJobId && response.items[0]) setSelectedJobId(response.items[0].jobId);
+      if (response.items[0] && !response.items.some((job) => job.jobId === selectedJobId)) setSelectedJobId(response.items[0].jobId);
+      if (!response.items.length) setSelectedJobId("");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "컷 분할 이력을 불러오지 못했습니다.");
     }
@@ -228,7 +236,9 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                 <label>처리 구조</label>
                 <strong>서버 업로드 처리</strong>
                 <small>원본과 분리 컷은 S3에 보관됩니다.</small>
+                <small>동일 파일명도 기존 결과를 덮어쓰지 않고 새 작업으로 생성됩니다.</small>
                 <span className="v3-webtoon-cut-good">✓ 기존 Batch/Grok/RunPod 작업과 분리된 webtoon-cut 전용 API</span>
+                <span className="v3-webtoon-cut-good">✓ 기존 취소/실패 작업과 S3 산출물은 이력에 보존됩니다.</span>
               </div>
 
               <div
@@ -261,7 +271,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                 >
                   {isRunning ? "작업 취소" : "작업 요청"}
                 </button>
-                <small>{isRunning ? "취소 요청 시점까지 생성된 컷과 summary는 보존됩니다." : selectedFile ? `${formatBytes(selectedFile.size)} · ${inputKindFromFile(selectedFile).toUpperCase()}` : "입력 선택 후 처리정보 표시"}</small>
+                <small>{isRunning ? "취소 요청 시점까지 생성된 컷과 summary는 보존됩니다." : selectedFile ? `${formatBytes(selectedFile.size)} · ${inputKindFromFile(selectedFile).toUpperCase()}${sameFileHistoryCount ? ` · 동일 파일명 이력 ${sameFileHistoryCount}건 · 새 작업 생성` : ""}` : "입력 선택 후 처리정보 표시"}</small>
               </div>
             </div>
           </section>
@@ -288,6 +298,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
         <section className="v3-screen-section v3-webtoon-cut-section">
           <div className="v3-batch-section-title"><span>1</span><strong>컷 분할 이력</strong></div>
           <div className="v3-webtoon-cut-filters">
+            <label>작업 상태<select value={jobStatusFilter} onChange={(event) => setJobStatusFilter(event.target.value)}><option value="">전체</option><option value="pending">대기</option><option value="running">진행</option><option value="completed">완료</option><option value="cancelled">취소</option><option value="failed">실패</option></select></label>
             <label>사용 여부<select value={usedState} onChange={(event) => setUsedState(event.target.value)}><option value="">전체</option><option value="unused">미사용 컷</option><option value="grok">Grok 사용</option><option value="batch">Batch 사용</option><option value="i2v">I2V 결과 있음</option></select></label>
             <label>플래그<select value={flagFilter} onChange={(event) => setFlagFilter(event.target.value)}><option value="">전체</option><option value="thin">thin</option><option value="many">many</option><option value="review_continuous">review_continuous</option><option value="fullpage">fullpage</option></select></label>
             <label>작업자<input value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)} placeholder="createdBy" /></label>
