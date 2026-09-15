@@ -1,4 +1,4 @@
-import { PDF_RENDER_SCALE } from "./constants";
+import { PDF_CMAP_URL, PDF_RENDER_SCALE, PDF_STANDARD_FONT_DATA_URL } from "./constants";
 import type { SourceUnit } from "./types";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 
@@ -15,7 +15,10 @@ export async function countPdfPages(file: File): Promise<number> {
     data,
     disableAutoFetch: true,
     disableRange: true,
-    disableStream: true
+    disableStream: true,
+    cMapUrl: PDF_CMAP_URL,
+    cMapPacked: true,
+    standardFontDataUrl: PDF_STANDARD_FONT_DATA_URL
   });
   const document = await task.promise;
   try {
@@ -32,7 +35,10 @@ export async function* iteratePdf(file: File, sourcePath: string, signal: AbortS
     data,
     disableAutoFetch: true,
     disableRange: true,
-    disableStream: true
+    disableStream: true,
+    cMapUrl: PDF_CMAP_URL,
+    cMapPacked: true,
+    standardFontDataUrl: PDF_STANDARD_FONT_DATA_URL
   });
   const document = await task.promise;
   try {

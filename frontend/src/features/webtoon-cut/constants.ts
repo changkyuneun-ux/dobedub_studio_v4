@@ -4,6 +4,12 @@ export const MANIFEST_SCHEMA_VERSION = 1;
 
 export const PDF_RENDER_SCALE = 300 / 72;
 
+// pdf.js가 CID/Type0 폰트(예: 임베드된 한글 폰트)를 렌더링하려면 CMap과 표준 폰트 데이터가 필요하다.
+// 이 값들이 없으면 해당 폰트 로딩이 조용히 실패하며(예외를 던지지 않음), 말풍선 텍스트만 빈 화면으로 렌더링된다.
+// (public/pdfjs/{cmaps,standard_fonts}는 node_modules/pdfjs-dist에서 복사한 정적 리소스)
+export const PDF_CMAP_URL = `${import.meta.env.BASE_URL}pdfjs/cmaps/`;
+export const PDF_STANDARD_FONT_DATA_URL = `${import.meta.env.BASE_URL}pdfjs/standard_fonts/`;
+
 export const SUPPORTED_IMAGE_EXTENSIONS = Object.freeze(["jpg", "jpeg", "png", "webp", "gif"] as const);
 
 export const SUPPORTED_DOCUMENT_EXTENSIONS = Object.freeze(["pdf"] as const);
