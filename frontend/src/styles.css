@@ -6923,13 +6923,17 @@ button {
 
 .v3-webtoon-cut-section { color: var(--v3-text-body); }
 .v3-webtoon-cut-create { display: grid; gap: 14px; grid-template-columns: minmax(190px, .75fr) minmax(360px, 1.7fr) minmax(190px, .75fr); padding: 16px; }
-.v3-webtoon-cut-card, .v3-webtoon-cut-dropzone, .v3-webtoon-cut-action { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; display: grid; gap: 10px; min-width: 0; padding: 14px; }
-.v3-webtoon-cut-card label, .v3-webtoon-cut-dropzone label { color: var(--v3-text-secondary); font-size: 12px; font-weight: 800; }
+.v3-webtoon-cut-card, .v3-webtoon-cut-dropzone, .v3-webtoon-cut-source-panel, .v3-webtoon-cut-action { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; display: grid; gap: 10px; min-width: 0; padding: 14px; }
+.v3-webtoon-cut-card label, .v3-webtoon-cut-dropzone label, .v3-webtoon-cut-source-panel label { color: var(--v3-text-secondary); font-size: 12px; font-weight: 800; }
 .v3-webtoon-cut-card strong { color: var(--v3-accent-text); font-size: 15px; }
-.v3-webtoon-cut-card small, .v3-webtoon-cut-dropzone small, .v3-webtoon-cut-action small { color: var(--v3-text-secondary); font-size: 11px; line-height: 1.5; }
+.v3-webtoon-cut-card small, .v3-webtoon-cut-dropzone small, .v3-webtoon-cut-source-panel small, .v3-webtoon-cut-action small { color: var(--v3-text-secondary); font-size: 11px; line-height: 1.5; }
 .v3-webtoon-cut-good { color: var(--v3-accent-text); font-size: 11px; font-weight: 800; }
 .v3-webtoon-cut-dropzone { border-style: dashed; min-height: 116px; place-content: center; text-align: center; }
 .v3-webtoon-cut-dropzone.is-dragging { background: var(--v3-accent-bg); border-color: var(--v3-accent); }
+.v3-webtoon-cut-source-panel strong { color: var(--v3-text-heading); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-webtoon-cut-source-grid { display: grid; gap: 7px 10px; grid-template-columns: 110px minmax(0, 1fr); }
+.v3-webtoon-cut-source-grid span { color: var(--v3-text-muted); font-size: 10px; font-weight: 800; }
+.v3-webtoon-cut-source-grid b { color: var(--v3-text-body); font-family: var(--v3-font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-webtoon-cut-input-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .v3-webtoon-cut-action { background: var(--v3-accent-bg); border-color: #c8e5d6; place-content: center; text-align: center; }
 .v3-webtoon-cut-action .v3-primary-button { min-height: 48px; min-width: 160px; }
@@ -6976,10 +6980,55 @@ button {
 .v3-webtoon-cut-preview-grid span, .v3-webtoon-cut-preview-empty { align-items: center; background: var(--v3-bg-canvas); border: 1px dashed var(--v3-border); border-radius: 8px; color: var(--v3-text-muted); display: flex; font-size: 11px; justify-content: center; min-height: 86px; padding: 10px; text-align: center; }
 .v3-webtoon-cut-preview-card strong { color: var(--v3-accent-text); font-family: var(--v3-font-mono); font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
 .v3-webtoon-cut-preview-card small { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
+.v3-tab-row { display: flex; gap: 8px; padding: 12px 16px; }
+.v3-tab-button { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; color: var(--v3-text-secondary); font-weight: 800; min-height: 38px; padding: 0 14px; }
+.v3-tab-button.is-active { background: var(--v3-accent-bg); border-color: var(--v3-accent); color: var(--v3-accent-text); }
+.v3-webtoon-cut-filters { align-items: end; background: var(--v3-bg-panel); border-bottom: 1px solid var(--v3-border); display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; }
+.v3-webtoon-cut-filters label { color: var(--v3-text-secondary); display: grid; font-size: 11px; font-weight: 800; gap: 5px; min-width: 140px; }
+.v3-webtoon-cut-filters input, .v3-webtoon-cut-filters select { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 6px; color: var(--v3-text-body); min-height: 36px; padding: 7px 9px; }
+.v3-webtoon-cut-history { display: grid; gap: 14px; grid-template-columns: minmax(320px, .72fr) minmax(620px, 1.55fr); padding: 16px; }
+.v3-webtoon-cut-job-list, .v3-webtoon-cut-output-panel, .v3-webtoon-cut-preview { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 8px; min-width: 0; }
+.v3-webtoon-cut-job-list { align-content: start; display: grid; overflow: hidden; }
+.v3-webtoon-cut-job-row { align-items: center; background: var(--v3-bg-panel); border-bottom: 1px solid var(--v3-border-inner); color: var(--v3-text-body); display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; width: 100%; }
+.v3-webtoon-cut-job-row.is-selected { background: var(--v3-accent-bg); box-shadow: inset 3px 0 0 var(--v3-accent); }
+.v3-webtoon-cut-job-row strong { color: var(--v3-text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-webtoon-cut-job-row span { color: var(--v3-text-secondary); font-size: 11px; }
+.v3-webtoon-cut-job-row-main { background: transparent; border: 0; color: inherit; display: grid; gap: 5px; min-width: 0; padding: 0; text-align: left; }
+.v3-webtoon-cut-job-actions { align-items: center; display: flex; gap: 6px; }
+.v3-webtoon-cut-job-actions .v3-danger-button { min-height: 30px; padding: 0 9px; }
+.v3-webtoon-cut-output-panel { display: grid; gap: 12px; padding: 14px; }
+.v3-webtoon-cut-toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
+.v3-webtoon-cut-toolbar strong { color: var(--v3-text-heading); }
+.v3-secondary-button.is-active { background: var(--v3-accent-bg); border-color: var(--v3-accent); color: var(--v3-accent-text); }
+.v3-webtoon-cut-output-layout { display: grid; gap: 12px; grid-template-columns: minmax(460px, 1fr) 280px; }
+.v3-webtoon-cut-output-list { border: 1px solid var(--v3-border); border-radius: 8px; display: grid; max-height: 560px; overflow: auto; }
+.v3-webtoon-cut-output-row { align-items: center; background: var(--v3-bg-panel); border: 0; border-bottom: 1px solid var(--v3-border-inner); color: var(--v3-text-body); display: grid; gap: 10px; grid-template-columns: 24px 60px minmax(180px, 1fr) 110px; min-height: 70px; padding: 8px 10px; text-align: left; width: 100%; }
+.v3-webtoon-cut-output-row.is-preview { background: var(--v3-accent-bg); }
+.v3-webtoon-cut-output-row.is-selected { box-shadow: inset 3px 0 0 var(--v3-accent); }
+.v3-webtoon-cut-output-row img { background: #fff; border: 1px solid var(--v3-border-inner); border-radius: 6px; height: 48px; object-fit: contain; width: 58px; }
+.v3-webtoon-cut-thumb-fallback { align-items: center; background: #fff; border: 1px dashed var(--v3-border-inner); border-radius: 6px; color: var(--v3-text-muted); display: flex; font-size: 9px; height: 48px; justify-content: center; line-height: 1.25; text-align: center; width: 58px; }
+.v3-webtoon-cut-output-row b { color: var(--v3-text-heading); display: block; font-family: var(--v3-font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-webtoon-cut-output-row small { color: var(--v3-text-muted); font-size: 10px; }
+.v3-webtoon-cut-output-row em { color: var(--v3-accent-text); font-size: 10px; font-style: normal; font-weight: 800; }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-list { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row { align-content: start; grid-template-columns: 20px 1fr; min-height: 168px; }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row img { grid-column: 1 / -1; height: 94px; width: 100%; }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-thumb-fallback { grid-column: 1 / -1; height: 94px; width: 100%; }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row span, .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row em { grid-column: 1 / -1; }
+.v3-webtoon-cut-preview { align-content: start; display: grid; gap: 10px; padding: 12px; }
+.v3-webtoon-cut-preview img { background: #fff; border: 1px solid var(--v3-border-inner); border-radius: 7px; max-height: 300px; object-fit: contain; width: 100%; }
+.v3-webtoon-cut-preview strong { color: var(--v3-text-heading); font-family: var(--v3-font-mono); font-size: 11px; overflow-wrap: anywhere; }
+.v3-webtoon-cut-preview small { color: var(--v3-text-secondary); font-size: 11px; }
+.v3-webtoon-cut-pagination { align-items: center; display: flex; gap: 8px; justify-content: center; padding: 10px; }
+.v3-webtoon-cut-pagination span { color: var(--v3-text-secondary); font-size: 11px; font-weight: 800; }
+.v3-webtoon-cut-pipelines { align-items: center; border-top: 1px solid var(--v3-border-inner); display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+.v3-webtoon-cut-pipelines strong { margin-right: auto; }
+.v3-webtoon-cut-batch-button { background: var(--v3-warning); border-color: var(--v3-warning); color: #fff; }
+.v3-webtoon-cut-batch-button:hover { background: #b87400; border-color: #b87400; color: #fff; }
 .v3-batch-section-title em { color: var(--v3-accent-text); font-size: 11px; font-style: normal; margin-left: auto; }
 
 @media (max-width: 1100px) {
-  .v3-webtoon-cut-create, .v3-webtoon-cut-running, .v3-webtoon-cut-review { grid-template-columns: 1fr; }
+  .v3-webtoon-cut-create, .v3-webtoon-cut-running, .v3-webtoon-cut-review, .v3-webtoon-cut-history, .v3-webtoon-cut-output-layout { grid-template-columns: 1fr; }
   .v3-webtoon-cut-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .v3-webtoon-cut-info-grid > div, .v3-webtoon-cut-info-grid > div:first-child, .v3-webtoon-cut-info-grid > div:last-child { border: 1px solid var(--v3-border); border-radius: 8px; }
 }

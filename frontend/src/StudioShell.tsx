@@ -113,6 +113,8 @@ import { PromptCatalogAdminPanelV3 } from "./screens/PromptCatalogAdminPanelV3";
 // 아래 deniedRoute 계산으로 그 화면을 본문에 그린다.
 export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "webtoonCuts": "jobs:run",
+  "webtoonCuts.split": "jobs:run",
+  "webtoonCuts.history": "jobs:run",
   "create.promptManagement": "prompts:build",
   "create.runpodRequests": "jobs:run",
   "review.history": "history:read",
@@ -170,7 +172,9 @@ export function routeAccessGranted(user: User | null, route: StudioRoute): boole
 export const ROUTE_LABEL: Partial<Record<StudioRoute, string>> = {
   "home.dashboard": "대시보드",
   "admin.dashboard": "대시보드",
-  "webtoonCuts": "이미지 컷 분할",
+  "webtoonCuts": "이미지 컷 관리",
+  "webtoonCuts.split": "컷 분할 처리",
+  "webtoonCuts.history": "컷 분할 이력",
   "create.promptManagement": "Grok 프롬프트 생성",
   "create.batchJobs": "Batch 처리",
   "create.runpodRequests": "Runpod ComfyUI 요청",
@@ -2034,8 +2038,10 @@ export function StudioShell({
       <DashboardScreen user={user} onGoTo={onNavigate} />
     ) : route === "admin.dashboard" ? (
       <DashboardScreen user={user} onGoTo={onNavigate} area="admin" />
-    ) : route === "webtoonCuts" ? (
-      <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} />
+    ) : route === "webtoonCuts" || route === "webtoonCuts.split" ? (
+      <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} mode="split" />
+    ) : route === "webtoonCuts.history" ? (
+      <WebtoonCutScreen user={user} health={health} onGoTo={onNavigate} mode="history" />
     ) : route === "create.load" || route === "create.promptManagement" ? (
       <PromptManagementScreen user={user} health={health} onGoTo={onNavigate} workflows={workflows} />
     ) : route === "create.batchJobs" ? (

@@ -6,7 +6,7 @@ import { ProtectedImage } from "../components/ProtectedAssets";
 import { shellNavigate } from "../helpers/navigation";
 import { fileToDataUrl, formatImageDimensions, formatUploadSize } from "../helpers/workflow";
 import { StudioRoute } from "../router";
-import { loadPromptWorkspace, PromptUploadItem, savePromptWorkspace } from "../state/durableWorkspace";
+import { clearWebtoonCutHandoff, loadPromptWorkspace, loadWebtoonCutHandoff, PromptUploadItem, savePromptWorkspace } from "../state/durableWorkspace";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; workflows: WorkflowItem[] };
 type UploadItem = PromptUploadItem;
@@ -108,6 +108,30 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
   }, []);
 
   useEffect(() => {
+    const handoff = loadWebtoonCutHandoff(user.id, "grok_prompt");
+    if (!handoff?.items.length) return;
+    setUploads((current) => {
+      const existing = new Set(current.map((item) => item.assetId));
+      const additions = handoff.items
+        .filter((item) => !existing.has(item.assetId))
+        .map((item) => ({
+          assetId: item.assetId,
+          fileName: item.fileName,
+          mimeType: item.mimeType || "image/png",
+          sizeBytes: item.sizeBytes || 0,
+          imageWidth: item.imageWidth,
+          imageHeight: item.imageHeight,
+          downloadUrl: item.downloadUrl,
+          requestedFrames: 81,
+          sourceRelativePath: item.sourceRelativePath
+        }));
+      return additions.length ? [...current, ...additions] : current;
+    });
+    clearWebtoonCutHandoff(user.id);
+    setNotice(`컷 분할 이력에서 ${handoff.items.length}개 컷을 입력으로 연결했습니다. 워크플로우 선택 후 프롬프트 생성을 요청하세요.`);
+  }, [user.id]);
+
+  useEffect(() => {
     savePromptWorkspace(user.id, {
       workflowId,
       uploads,
@@ -131,7 +155,6 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
 
   function selectWorkflow(id: string) {
     setWorkflowId(id);
-    setUploads([]);
     setDrafts({});
     setNegativePrompt("");
     setInstructionStatus(null);
@@ -184,7 +207,8 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
           assetId: upload.assetId,
           slotIndex: index + 1,
           requestedFrames: upload.requestedFrames,
-          negativePrompt
+          negativePrompt,
+          sourceRelativePath: "sourceRelativePath" in upload ? String(upload.sourceRelativePath || "") : ""
         }))
       });
       setActivePromptGenerationBatches((current) => [next, ...current.filter((batch) => batch.id !== next.id)]);

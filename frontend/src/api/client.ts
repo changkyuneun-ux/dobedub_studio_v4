@@ -527,6 +527,82 @@ export type S3UploadCompleteResponse = UploadResponse & {
   publicUrl?: string | null;
 };
 
+export type WebtoonCutUploadPresignResponse = {
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  storageBackend: "s3";
+  storageKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+};
+
+export type WebtoonCutJobResponse = {
+  jobId: string;
+  status: string;
+  inputKind: string;
+  sourceAssetId: string;
+  displayName: string;
+  totalUnits: number;
+  completedUnits: number;
+  generatedCutCount: number;
+  reviewRequiredCount: number;
+  failedUnits: number;
+  currentUnitLabel?: string | null;
+  cancelRequestedAt?: string | null;
+  createdBy?: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type WebtoonCutOutputItem = {
+  outputId: string;
+  jobId: string;
+  assetId: string;
+  viewUrl: string;
+  downloadUrl: string;
+  displayPath: string;
+  pageNumber?: number | null;
+  cutIndex: number;
+  width?: number | null;
+  height?: number | null;
+  flags: string[];
+  usedInPromptCount: number;
+  usedInBatchCount: number;
+  i2vResultCount: number;
+  createdBy?: string;
+};
+
+export type WebtoonCutHandoffResponse = {
+  target: "grok_prompt" | "batch";
+  jobId: string;
+  sourceDisplayName?: string;
+  inputAssetIds: string[];
+  sourceRelativePaths: string[];
+  items: Array<{
+    outputId: string;
+    assetId: string;
+    fileName: string;
+    mimeType: string;
+    sourceRelativePath: string;
+    imageWidth?: number | null;
+    imageHeight?: number | null;
+    downloadUrl: string;
+  }>;
+};
+
+export type WebtoonCutJobListResponse = {
+  items: WebtoonCutJobResponse[];
+  page: number;
+  pageSize: number;
+};
+
+export type WebtoonCutOutputListResponse = {
+  items: WebtoonCutOutputItem[];
+  page: number;
+  pageSize: number;
+};
+
 export type GrokImagePromptDraftResponse = {
   draftId: string;
   assetId: string;
@@ -1559,7 +1635,7 @@ export const apiClient = {
     }),
   createImagePromptBatch: (payload: {
     workflowId: string;
-    items: Array<{ assetId: string; slotIndex: number; requestedFrames?: number; negativePrompt?: string }>;
+    items: Array<{ assetId: string; slotIndex: number; requestedFrames?: number; negativePrompt?: string; sourceRelativePath?: string }>;
   }) =>
     requestJson<PromptGenerationBatchResponse>("/api/prompts/image-drafts/batches", {
       method: "POST",
@@ -1667,7 +1743,64 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
+  presignWebtoonCutUpload: (payload: { fileName: string; mimeType: string; sizeBytes: number }) =>
+    requestJson<WebtoonCutUploadPresignResponse>("/api/webtoon-cuts/uploads/presign", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  completeWebtoonCutUpload: (payload: { assetId: string; fileName: string; mimeType: string; storageKey: string; sizeBytes: number }) =>
+    requestJson<S3UploadCompleteResponse>("/api/webtoon-cuts/uploads/complete", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  createWebtoonCutJob: (payload: { assetId: string; inputKind: string; metadata?: Record<string, unknown> }) =>
+    requestJson<WebtoonCutJobResponse>("/api/webtoon-cuts/jobs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  webtoonCutJobs: (params: { status?: string; inputKind?: string; query?: string; createdBy?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.inputKind) query.set("inputKind", params.inputKind);
+    if (params.query) query.set("query", params.query);
+    if (params.createdBy) query.set("createdBy", params.createdBy);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 20));
+    return requestJson<WebtoonCutJobListResponse>(`/api/webtoon-cuts/jobs?${query.toString()}`);
+  },
+  cancelWebtoonCutJob: (jobId: string) =>
+    requestJson<WebtoonCutJobResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST"
+    }),
+  deleteWebtoonCutJob: (jobId: string) =>
+    requestJson<{ deleted: boolean; jobId: string }>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE"
+    }),
+  webtoonCutOutputs: (jobId: string, params: { usedState?: string; flags?: string; query?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.usedState) query.set("usedState", params.usedState);
+    if (params.flags) query.set("flags", params.flags);
+    if (params.query) query.set("query", params.query);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 50));
+    return requestJson<WebtoonCutOutputListResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/outputs?${query.toString()}`);
+  },
+  handoffWebtoonCutsToGrok: (jobId: string, outputIds: string[]) =>
+    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/grok`, {
+      method: "POST",
+      body: JSON.stringify({ outputIds })
+    }),
+  handoffWebtoonCutsToBatch: (jobId: string, outputIds: string[]) =>
+    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/batch`, {
+      method: "POST",
+      body: JSON.stringify({ outputIds })
+    }),
+  downloadWebtoonCutOutputsZip: (jobId: string, outputIds: string[]) => {
+    const query = new URLSearchParams();
+    outputIds.forEach((outputId) => query.append("outputIds", outputId));
+    return requestBlob(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/download?${query.toString()}`);
+  },
+  createBatchJob: (payload: { workflowId: string; sourceKind?: "webtoon_cut" | "asset_list"; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string; requestItemId?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)

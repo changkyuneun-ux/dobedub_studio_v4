@@ -31,8 +31,19 @@ ENV_UPSERT=(
   "RUNPOD_SANDBOX_MIN_VRAM_GB=${RUNPOD_SANDBOX_MIN_VRAM_GB:-24}"
   "RUNPOD_SANDBOX_STOP_WAIT_SECONDS=${RUNPOD_SANDBOX_STOP_WAIT_SECONDS:-60}"
 )
-# Vars that must exist (as env or secret) for the sandbox feature to work at all.
-ENV_REQUIRED=(RUNPOD_SANDBOX_NETWORK_VOLUME_ID RUNPOD_SANDBOX_TEMPLATE_ID RUNPOD_SANDBOX_GPU_TYPE_ID RUNPOD_SANDBOX_POD_API_KEY RUN_SERVER_AUTO_MIGRATE)
+# Vars that must exist (as env or secret) for the deployed service to work.
+ENV_REQUIRED=(
+  PERSISTENCE_BACKEND
+  DATABASE_URL
+  STORAGE_BACKEND
+  S3_BUCKET
+  S3_PREFIX
+  RUN_SERVER_AUTO_MIGRATE
+  RUNPOD_SANDBOX_NETWORK_VOLUME_ID
+  RUNPOD_SANDBOX_TEMPLATE_ID
+  RUNPOD_SANDBOX_GPU_TYPE_ID
+  RUNPOD_SANDBOX_POD_API_KEY
+)
 
 log() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
@@ -46,7 +57,7 @@ aws_ids() {
 
 current_td() {
   aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
-    --query 'services[0].taskDefinition' --output text
+    --query "services[0].deployments[?status=='PRIMARY'].taskDefinition | [0]" --output text
 }
 
 fetch_current_td_json() {
@@ -144,12 +155,13 @@ network_config() {
   local task eni
   task="$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status RUNNING --region "$AWS_REGION" --query 'taskArns[0]' --output text)"
   eni="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" --region "$AWS_REGION" \
-    --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[?name==`networkInterfaceId`].value | [0]' --output text)"
+    --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[] | [?name==`networkInterfaceId`].value | [0]' --output text)"
   local subnet sgs
   subnet="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].SubnetId' --output text)"
   sgs="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].Groups[*].GroupId' --output text | tr '\t' ',')"
   local public
-  public="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" --query 'services[0].networkConfiguration.awsvpcConfiguration.assignPublicIp' --output text)"
+  public="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
+    --query "services[0].deployments[?status=='PRIMARY'].networkConfiguration.awsvpcConfiguration.assignPublicIp | [0]" --output text)"
   echo "awsvpcConfiguration={subnets=[${subnet}],securityGroups=[${sgs}],assignPublicIp=${public:-DISABLED}}"
 }
 

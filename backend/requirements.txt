@@ -5,6 +5,8 @@ SQLAlchemy>=2.0
 alembic>=1.13
 pymysql>=1.1
 boto3>=1.34
+numpy>=1.26
+opencv-python-headless>=4.10
 jsonschema>=4.21
 pytest>=8.0
-httpx2
+httpx
