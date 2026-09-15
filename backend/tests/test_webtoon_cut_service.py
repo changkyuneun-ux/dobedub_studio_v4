@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import event
+
 from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
 
 
@@ -169,6 +171,65 @@ def test_list_outputs_deduplicates_existing_duplicate_display_paths(db_session):
     outputs = list_outputs(db_session, job_id=job["jobId"], created_by="user_1")
 
     assert [item["displayPath"] for item in outputs["items"]] == ["source/001-01.png"]
+
+
+def test_list_outputs_only_loads_requested_page_from_db(db_session):
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.webtoon_cut_service import list_outputs
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(
+        WebtoonCutJob(
+            id="wcut_many_outputs",
+            status="completed",
+            input_kind="pdf",
+            source_asset_id="asset_source",
+            display_name="source",
+            safe_stem="source",
+            created_by="user_1",
+        )
+    )
+    for index in range(120):
+        asset_id = f"asset_cut_{index:03d}"
+        db_session.add(_asset(asset_id, file_name=f"{index:03d}-01.png", asset_type="webtoon_cut_image"))
+        db_session.add(
+            WebtoonCutOutput(
+                id=f"wcut_out_{index:03d}",
+                job_id="wcut_many_outputs",
+                asset_id=asset_id,
+                status="ready",
+                display_path=f"source/{index:03d}-01.png",
+                page_number=index + 1,
+                cut_index=1,
+                flags_json=[],
+                metadata_json={"createdBy": "user_1"},
+                created_by="user_1",
+            )
+        )
+    db_session.commit()
+    db_session.close()
+
+    loaded_output_ids: list[str] = []
+
+    def record_load(_session, instance):
+        if isinstance(instance, WebtoonCutOutput):
+            loaded_output_ids.append(instance.id)
+
+    event.listen(SessionLocal, "loaded_as_persistent", record_load)
+    try:
+        with SessionLocal() as session:
+            page = list_outputs(
+                session,
+                job_id="wcut_many_outputs",
+                created_by="user_1",
+                page=1,
+                page_size=10,
+            )
+    finally:
+        event.remove(SessionLocal, "loaded_as_persistent", record_load)
+
+    assert len(page["items"]) == 10
+    assert len(loaded_output_ids) <= 10
 
 
 def test_get_job_finds_jobs_beyond_first_list_page(db_session):

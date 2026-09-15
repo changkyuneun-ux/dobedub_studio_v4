@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Iterable
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import utc_now
@@ -210,10 +210,7 @@ def list_outputs(
             return _paged_outputs(outputs, page=page, page_size=page_size)
     if query:
         stmt = stmt.where(WebtoonCutOutput.display_path.contains(query))
-    outputs = _dedupe_outputs_by_display_path(
-        db.scalars(stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))).all()
-    )
-    return _paged_outputs(outputs, page=page, page_size=page_size)
+    return _paged_deduped_outputs(db, stmt, page=page, page_size=page_size)
 
 
 def validate_output_selection(
@@ -288,6 +285,38 @@ def _paged_outputs(outputs: list[WebtoonCutOutput], *, page: int, page_size: int
     page_size = min(100, max(1, int(page_size or 50)))
     start = (page - 1) * page_size
     return {"items": [_output_payload(output) for output in outputs[start:start + page_size]], "page": page, "pageSize": page_size}
+
+
+def _paged_deduped_outputs(db: Session, stmt, *, page: int, page_size: int) -> dict:
+    page = max(1, int(page or 1))
+    page_size = min(100, max(1, int(page_size or 50)))
+    ranked = (
+        stmt.add_columns(
+            func.row_number()
+            .over(
+                partition_by=WebtoonCutOutput.display_path,
+                order_by=(
+                    asc(WebtoonCutOutput.page_number),
+                    asc(WebtoonCutOutput.cut_index),
+                    asc(WebtoonCutOutput.created_at),
+                    asc(WebtoonCutOutput.id),
+                ),
+            )
+            .label("display_path_rank")
+        )
+        .subquery()
+    )
+    output_ids = db.scalars(
+        select(ranked.c.id)
+        .where(ranked.c.display_path_rank == 1)
+        .order_by(asc(ranked.c.page_number), asc(ranked.c.cut_index), asc(ranked.c.created_at), asc(ranked.c.id))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    if not output_ids:
+        return {"items": [], "page": page, "pageSize": page_size}
+    outputs_by_id = {output.id: output for output in db.scalars(select(WebtoonCutOutput).where(WebtoonCutOutput.id.in_(output_ids))).all()}
+    return {"items": [_output_payload(outputs_by_id[output_id]) for output_id in output_ids if output_id in outputs_by_id], "page": page, "pageSize": page_size}
 
 
 def _dedupe_outputs_by_display_path(outputs: Iterable[WebtoonCutOutput]) -> list[WebtoonCutOutput]:
