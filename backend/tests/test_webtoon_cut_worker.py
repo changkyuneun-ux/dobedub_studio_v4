@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 
 import pytest
+from sqlalchemy.dialects import mysql
 
 from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
 from backend.app.services.storage_backends import StoredObject
@@ -112,3 +114,25 @@ def test_process_job_marks_job_failed_when_worker_step_raises(db_session, tmp_pa
     assert result == {"processed": False, "jobId": "wcut_failed_test", "reason": "failed"}
     assert job.status == "failed"
     assert "synthetic split failure" in job.error_message
+
+
+def test_zip_unit_count_includes_pdf_pages_and_supported_images(tmp_path, monkeypatch):
+    from backend.app.services import webtoon_cut_worker
+
+    zip_path = tmp_path / "sources.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("book/volume.pdf", b"%PDF")
+        archive.writestr("book/cover.jpg", b"jpg")
+        archive.writestr("book/notes.txt", b"text")
+
+    monkeypatch.setattr(webtoon_cut_worker, "page_count", lambda path: 12 if path.suffix == ".pdf" else 0)
+
+    assert webtoon_cut_worker._count_units(zip_path, "zip") == 13
+
+
+def test_pending_job_claim_statement_uses_skip_locked_for_multi_worker_ecs():
+    from backend.app.services.webtoon_cut_worker import _pending_job_claim_statement
+
+    compiled = str(_pending_job_claim_statement().compile(dialect=mysql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled

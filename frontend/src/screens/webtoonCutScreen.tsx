@@ -15,6 +15,8 @@ type Props = { user: User; health: HealthResponse | null; onGoTo: (route: Studio
 type ViewMode = "list" | "grid";
 
 const POLL_INTERVAL_MS = 2500;
+const JOBS_PAGE_SIZE = 20;
+const OUTPUTS_PAGE_SIZE = 50;
 
 export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props) {
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -28,6 +30,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [previewOutputId, setPreviewOutputId] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [jobStatusFilter, setJobStatusFilter] = useState("");
+  const [jobsPage, setJobsPage] = useState(1);
+  const [outputsPage, setOutputsPage] = useState(1);
   const [usedState, setUsedState] = useState("");
   const [flagFilter, setFlagFilter] = useState("");
   const [workerFilter, setWorkerFilter] = useState("");
@@ -51,12 +55,20 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   useEffect(() => {
     if (!isHistoryMode) return;
     void refreshJobs();
-  }, [isHistoryMode, jobStatusFilter]);
+  }, [isHistoryMode, jobStatusFilter, workerFilter, query, jobsPage]);
 
   useEffect(() => {
     if (!selectedJob?.jobId) return;
     void refreshOutputs(selectedJob.jobId);
-  }, [selectedJob?.jobId, usedState, flagFilter, query]);
+  }, [selectedJob?.jobId, usedState, flagFilter, query, outputsPage]);
+
+  useEffect(() => {
+    setJobsPage(1);
+  }, [jobStatusFilter, workerFilter, query]);
+
+  useEffect(() => {
+    setOutputsPage(1);
+  }, [selectedJobId, usedState, flagFilter, query]);
 
   useEffect(() => {
     if (!isRunning || !activeJob?.jobId) return;
@@ -66,7 +78,13 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
 
   async function refreshJobs() {
     try {
-      const response = await apiClient.webtoonCutJobs({ status: jobStatusFilter, pageSize: 20 });
+      const response = await apiClient.webtoonCutJobs({
+        status: jobStatusFilter,
+        query,
+        createdBy: isHistoryMode ? workerFilter.trim() : user.id,
+        page: jobsPage,
+        pageSize: JOBS_PAGE_SIZE
+      });
       setJobs(response.items);
       const running = response.items.find((job) => !["completed", "failed", "cancelled"].includes(job.status)) || null;
       setActiveJob(running);
@@ -83,9 +101,10 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
         usedState,
         flags: flagFilter,
         query,
-        pageSize: 50
+        page: outputsPage,
+        pageSize: OUTPUTS_PAGE_SIZE
       });
-      const items = workerFilter ? response.items.filter((item) => item.createdBy === workerFilter) : response.items;
+      const items = response.items;
       setOutputs(items);
       setPreviewOutputId((current) => items.some((item) => item.outputId === current) ? current : items[0]?.outputId || "");
       setSelectedOutputIds((current) => new Set([...current].filter((id) => items.some((item) => item.outputId === id))));
@@ -315,6 +334,11 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                 </button>
               ))}
               {!jobs.length ? <div className="v3-empty-panel">컷 분할 이력이 없습니다.</div> : null}
+              <div className="v3-webtoon-cut-pagination">
+                <button className="v3-secondary-button" type="button" disabled={jobsPage <= 1} onClick={() => setJobsPage((page) => Math.max(1, page - 1))}>이전</button>
+                <span>{jobsPage} 페이지</span>
+                <button className="v3-secondary-button" type="button" disabled={jobs.length < JOBS_PAGE_SIZE} onClick={() => setJobsPage((page) => page + 1)}>다음</button>
+              </div>
             </div>
 
             <div className="v3-webtoon-cut-output-panel">
@@ -348,6 +372,11 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                     </>
                   ) : <div className="v3-empty-panel">프리뷰할 컷이 없습니다.</div>}
                 </aside>
+              </div>
+              <div className="v3-webtoon-cut-pagination">
+                <button className="v3-secondary-button" type="button" disabled={outputsPage <= 1} onClick={() => setOutputsPage((page) => Math.max(1, page - 1))}>이전</button>
+                <span>{outputsPage} 페이지</span>
+                <button className="v3-secondary-button" type="button" disabled={outputs.length < OUTPUTS_PAGE_SIZE} onClick={() => setOutputsPage((page) => page + 1)}>다음</button>
               </div>
 
               <div className="v3-webtoon-cut-pipelines">

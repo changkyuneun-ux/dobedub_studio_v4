@@ -81,14 +81,16 @@ def get_job(db: Session, job_id: str, *, created_by: str) -> dict:
 def list_jobs(
     db: Session,
     *,
-    created_by: str,
+    created_by: str | None,
     status: str = "",
     input_kind: str = "",
     query: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
-    stmt = select(WebtoonCutJob).where(WebtoonCutJob.created_by == created_by)
+    stmt = select(WebtoonCutJob)
+    if created_by:
+        stmt = stmt.where(WebtoonCutJob.created_by == created_by)
     if status:
         stmt = stmt.where(WebtoonCutJob.status == status)
     if input_kind:
@@ -120,6 +122,15 @@ def register_output(
     i2v_result_count: int = 0,
 ) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
+    existing = db.scalars(
+        select(WebtoonCutOutput)
+        .where(WebtoonCutOutput.job_id == job.id)
+        .where(WebtoonCutOutput.display_path == display_path)
+        .order_by(asc(WebtoonCutOutput.created_at), asc(WebtoonCutOutput.id))
+        .limit(1)
+    ).first()
+    if existing is not None:
+        return _output_payload(existing)
     asset = _require_asset(db, asset_id)
     _assert_asset_owner(asset, created_by)
     output = WebtoonCutOutput(
@@ -155,7 +166,7 @@ def list_outputs(
     db: Session,
     *,
     job_id: str,
-    created_by: str,
+    created_by: str | None,
     used_state: str = "",
     flags: str = "",
     query: str = "",
@@ -163,7 +174,9 @@ def list_outputs(
     page_size: int = 50,
 ) -> dict:
     _require_job(db, job_id, created_by=created_by)
-    stmt = select(WebtoonCutOutput).where(WebtoonCutOutput.job_id == job_id).where(WebtoonCutOutput.created_by == created_by)
+    stmt = select(WebtoonCutOutput).where(WebtoonCutOutput.job_id == job_id)
+    if created_by:
+        stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
     used_state = str(used_state or "").strip().lower()
     if used_state in {"unused", "미사용"}:
         stmt = stmt.where(WebtoonCutOutput.used_in_prompt_count == 0).where(WebtoonCutOutput.used_in_batch_count == 0).where(WebtoonCutOutput.i2v_result_count == 0)
@@ -178,18 +191,16 @@ def list_outputs(
         if wanted:
             outputs = [
                 output
-                for output in db.scalars(stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index))).all()
+                for output in _dedupe_outputs_by_display_path(db.scalars(stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))).all())
                 if wanted.intersection(set(output.flags_json or []))
             ]
             return _paged_outputs(outputs, page=page, page_size=page_size)
     if query:
         stmt = stmt.where(WebtoonCutOutput.display_path.contains(query))
-    page = max(1, int(page or 1))
-    page_size = min(100, max(1, int(page_size or 50)))
-    outputs = db.scalars(
-        stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index)).offset((page - 1) * page_size).limit(page_size)
-    ).all()
-    return {"items": [_output_payload(output) for output in outputs], "page": page, "pageSize": page_size}
+    outputs = _dedupe_outputs_by_display_path(
+        db.scalars(stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))).all()
+    )
+    return _paged_outputs(outputs, page=page, page_size=page_size)
 
 
 def validate_output_selection(
@@ -266,11 +277,23 @@ def _paged_outputs(outputs: list[WebtoonCutOutput], *, page: int, page_size: int
     return {"items": [_output_payload(output) for output in outputs[start:start + page_size]], "page": page, "pageSize": page_size}
 
 
-def _require_job(db: Session, job_id: str, *, created_by: str) -> WebtoonCutJob:
+def _dedupe_outputs_by_display_path(outputs: Iterable[WebtoonCutOutput]) -> list[WebtoonCutOutput]:
+    deduped: list[WebtoonCutOutput] = []
+    seen: set[str] = set()
+    for output in outputs:
+        key = output.display_path
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(output)
+    return deduped
+
+
+def _require_job(db: Session, job_id: str, *, created_by: str | None) -> WebtoonCutJob:
     job = db.get(WebtoonCutJob, job_id)
     if job is None:
         raise KeyError(job_id)
-    if job.created_by != created_by:
+    if created_by and job.created_by != created_by:
         raise PermissionError("컷 분할 작업 접근 권한이 없습니다.")
     return job
 

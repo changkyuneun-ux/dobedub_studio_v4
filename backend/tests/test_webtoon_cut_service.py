@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.db.models import Asset
+from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
 
 
 def _asset(asset_id: str, *, file_name: str = "source.pdf", asset_type: str = "webtoon_source_original") -> Asset:
@@ -90,6 +90,85 @@ def test_filter_outputs_by_used_state(db_session):
 
     assert [item["assetId"] for item in unused["items"]] == ["asset_cut_1"]
     assert [item["assetId"] for item in batch_used["items"]] == ["asset_cut_2"]
+
+
+def test_register_output_deduplicates_same_job_display_path(db_session):
+    from backend.app.services.webtoon_cut_service import create_job, register_output
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(_asset("asset_cut_1", file_name="001-01.png", asset_type="webtoon_cut_image"))
+    db_session.add(_asset("asset_cut_2", file_name="001-01.png", asset_type="webtoon_cut_image"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="pdf", created_by="user_1")
+
+    first = register_output(
+        db_session,
+        job_id=job["jobId"],
+        asset_id="asset_cut_1",
+        display_path="source/001-01.png",
+        page_number=1,
+        cut_index=1,
+        created_by="user_1",
+    )
+    duplicate = register_output(
+        db_session,
+        job_id=job["jobId"],
+        asset_id="asset_cut_2",
+        display_path="source/001-01.png",
+        page_number=1,
+        cut_index=1,
+        created_by="user_1",
+    )
+
+    saved_job = db_session.get(WebtoonCutJob, job["jobId"])
+    db_session.refresh(saved_job)
+    assert duplicate["outputId"] == first["outputId"]
+    assert duplicate["assetId"] == "asset_cut_1"
+    assert saved_job.generated_cut_count == 1
+
+
+def test_list_outputs_deduplicates_existing_duplicate_display_paths(db_session):
+    from backend.app.services.webtoon_cut_service import create_job, list_outputs, register_output
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(_asset("asset_cut_1", file_name="001-01.png", asset_type="webtoon_cut_image"))
+    db_session.add(_asset("asset_cut_2", file_name="001-02.png", asset_type="webtoon_cut_image"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="pdf", created_by="user_1")
+
+    register_output(
+        db_session,
+        job_id=job["jobId"],
+        asset_id="asset_cut_1",
+        display_path="source/001-01.png",
+        page_number=1,
+        cut_index=1,
+        created_by="user_1",
+    )
+    db_session.execute(
+        WebtoonCutJob.__table__.update()
+        .where(WebtoonCutJob.id == job["jobId"])
+        .values(generated_cut_count=2)
+    )
+    db_session.add(
+        WebtoonCutOutput(
+            id="legacy_duplicate",
+            job_id=job["jobId"],
+            asset_id="asset_cut_2",
+            status="ready",
+            display_path="source/001-01.png",
+            page_number=1,
+            cut_index=1,
+            flags_json=[],
+            metadata_json={"createdBy": "user_1"},
+            created_by="user_1",
+        )
+    )
+    db_session.commit()
+
+    outputs = list_outputs(db_session, job_id=job["jobId"], created_by="user_1")
+
+    assert [item["displayPath"] for item in outputs["items"]] == ["source/001-01.png"]
 
 
 def test_get_job_finds_jobs_beyond_first_list_page(db_session):

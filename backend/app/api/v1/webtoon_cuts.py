@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.app.core.security import CurrentUser, require_permission
+from backend.app.core.security import ADMIN_ROLES, CurrentUser, require_permission
 from backend.app.core.config import get_settings
 from backend.app.db.models import Asset
 from backend.app.db.session import SessionLocal
@@ -121,14 +121,20 @@ def list_webtoon_cut_jobs(
     status: str = "",
     inputKind: str = Query("", alias="inputKind"),
     query: str = "",
+    createdBy: str = Query("", alias="createdBy"),
     page: int = 1,
     pageSize: int = 20,
     current_user: CurrentUser = Depends(require_permission("history:read")),
 ):
+    created_by_filter = str(createdBy or "").strip()
+    if current_user.role not in ADMIN_ROLES:
+        created_by_filter = current_user.id
+    elif not created_by_filter:
+        created_by_filter = None
     with SessionLocal() as session:
         return webtoon_cut_service.list_jobs(
             session,
-            created_by=current_user.id,
+            created_by=created_by_filter,
             status=status,
             input_kind=inputKind,
             query=query,
@@ -176,11 +182,12 @@ def list_webtoon_cut_outputs(
     current_user: CurrentUser = Depends(require_permission("history:read")),
 ):
     try:
+        created_by_filter = None if current_user.role in ADMIN_ROLES else current_user.id
         with SessionLocal() as session:
             return webtoon_cut_service.list_outputs(
                 session,
                 job_id=job_id,
-                created_by=current_user.id,
+                created_by=created_by_filter,
                 used_state=usedState,
                 flags=flags,
                 query=query,

@@ -53,9 +53,12 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
 
 def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filter() -> None:
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
 
     assert 'type ViewMode = "list" | "grid"' in source
     assert "jobStatusFilter" in source
+    assert "jobsPage" in source
+    assert "outputsPage" in source
     assert "작업 상태" in source
     assert '<option value="cancelled">취소</option>' in source
     assert '<option value="failed">실패</option>' in source
@@ -65,6 +68,11 @@ def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filt
     assert "검수제외 전체 선택" not in source
     assert "작업자" in source
     assert "createdBy" in source
+    assert "workerFilter" in source
+    assert 'params.createdBy' in client
+    assert 'query.set("createdBy", params.createdBy)' in client
+    assert "이전" in source
+    assert "다음" in source
     assert "previewOutput" in source
     assert "usedState" in source
 

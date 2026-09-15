@@ -7010,6 +7010,8 @@ button {
 .v3-webtoon-cut-preview img { background: #fff; border: 1px solid var(--v3-border-inner); border-radius: 7px; max-height: 300px; object-fit: contain; width: 100%; }
 .v3-webtoon-cut-preview strong { color: var(--v3-text-heading); font-family: var(--v3-font-mono); font-size: 11px; overflow-wrap: anywhere; }
 .v3-webtoon-cut-preview small { color: var(--v3-text-secondary); font-size: 11px; }
+.v3-webtoon-cut-pagination { align-items: center; display: flex; gap: 8px; justify-content: center; padding: 10px; }
+.v3-webtoon-cut-pagination span { color: var(--v3-text-secondary); font-size: 11px; font-weight: 800; }
 .v3-webtoon-cut-pipelines { align-items: center; border-top: 1px solid var(--v3-border-inner); display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
 .v3-webtoon-cut-pipelines strong { margin-right: auto; }
 .v3-batch-section-title em { color: var(--v3-accent-text); font-size: 11px; font-style: normal; margin-left: auto; }

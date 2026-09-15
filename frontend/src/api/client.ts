@@ -1731,11 +1731,12 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  webtoonCutJobs: (params: { status?: string; inputKind?: string; query?: string; page?: number; pageSize?: number } = {}) => {
+  webtoonCutJobs: (params: { status?: string; inputKind?: string; query?: string; createdBy?: string; page?: number; pageSize?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.status) query.set("status", params.status);
     if (params.inputKind) query.set("inputKind", params.inputKind);
     if (params.query) query.set("query", params.query);
+    if (params.createdBy) query.set("createdBy", params.createdBy);
     query.set("page", String(params.page || 1));
     query.set("pageSize", String(params.pageSize || 20));
     return requestJson<WebtoonCutJobListResponse>(`/api/webtoon-cuts/jobs?${query.toString()}`);

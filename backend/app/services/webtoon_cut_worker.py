@@ -22,12 +22,7 @@ from backend.app.services.webtoon_panel_engine import page_count, process_image_
 
 def process_next_pending_job() -> dict:
     with SessionLocal() as session:
-        job = session.scalars(
-            select(WebtoonCutJob)
-            .where(WebtoonCutJob.status == "pending")
-            .order_by(asc(WebtoonCutJob.created_at))
-            .limit(1)
-        ).first()
+        job = session.scalars(_pending_job_claim_statement()).first()
         if job is None:
             return {"processed": False}
         job.status = "running"
@@ -36,6 +31,16 @@ def process_next_pending_job() -> dict:
         session.commit()
         job_id = job.id
     return process_job(job_id)
+
+
+def _pending_job_claim_statement():
+    return (
+        select(WebtoonCutJob)
+        .where(WebtoonCutJob.status == "pending")
+        .order_by(asc(WebtoonCutJob.created_at))
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
 
 
 def process_job(job_id: str) -> dict:
@@ -279,9 +284,34 @@ def _materialize_asset(asset: Asset, workdir: Path) -> Path:
 
 
 def _count_units(path: Path, input_kind: str) -> int:
+    if _is_zip(path) or input_kind == "zip":
+        return _count_zip_units(path)
     if _is_pdf(path) or input_kind == "pdf":
         return page_count(path)
     return 1
+
+
+def _count_zip_units(path: Path) -> int:
+    total = 0
+    with tempfile.TemporaryDirectory(prefix="webtoon_zip_count_") as tmp:
+        tmpdir = Path(tmp)
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                try:
+                    entry_path = validate_zip_entry_path(info.filename)
+                except ValueError:
+                    continue
+                suffix = Path(entry_path).suffix.lower()
+                if suffix == ".pdf":
+                    target = tmpdir / f"{uuid.uuid4().hex}.pdf"
+                    with archive.open(info) as src, target.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    total += page_count(target)
+                elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                    total += 1
+    return total or 1
 
 
 def _is_pdf(path: Path) -> bool:
