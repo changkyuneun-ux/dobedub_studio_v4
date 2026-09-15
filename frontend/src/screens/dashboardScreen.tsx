@@ -159,6 +159,8 @@ export function DashboardScreen({ user, onGoTo, area = "generate" }: Props) {
             <KpiStrip summary={summary} />
           </div>
 
+          <DurationCostCard summary={summary} />
+
           <div className="v3-dash-columns">
             <div className="v3-card v3-dash-recent">
               <div className="v3-card-header">
@@ -301,6 +303,127 @@ function Kpi({ label, value, sub, tone }: { label: string; value: React.ReactNod
       <small>{sub}</small>
     </div>
   );
+}
+
+// 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분 카드
+// (spec: 대시보드 수정 설계 - 두비덥 스튜디오 v3 카드/테이블 스타일 재사용,
+// 2026-09-15 목업 UI 기준). durationCostBreakdown은 UTC 캘린더일 기준이라
+// 아래 "작업량 추이"(KST)와 자정 전후로 최대 하루 어긋날 수 있음 - 각주에 명시.
+//
+// 통화 표기: RunPod 청구 원본 통화(USD)를 그대로 표시한다. 목업 초안은 KRW를
+// 우선 노출했으나, 이 카드의 핵심 요구사항이 "총액이 RunPod 청구와 정확히
+// 일치"이므로 날짜별로 달라지는 환율을 끼워 넣으면 그 정합성 보장이 깨진다 -
+// 실제 회계 환산 시점의 환율과 어긋날 수 있어 KRW 환산은 의도적으로 넣지 않음.
+function DurationCostCard({ summary }: { summary: DashboardSummary }) {
+  const breakdown = summary.durationCostBreakdown;
+  const days = Object.keys(breakdown.byDay).sort();
+  const s = breakdown.summary;
+  const ratio =
+    s && s.fiveSec.costPerJobUsd && s.tenSec.costPerJobUsd
+      ? s.tenSec.costPerJobUsd / s.fiveSec.costPerJobUsd
+      : null;
+
+  return (
+    <div className="v3-card v3-dash-duration">
+      <div className="v3-card-header">
+        <div className="v3-card-header-title">
+          <span>컷 길이별 비용</span>
+          <span className="v3-status-badge is-pending">2026-09-10 UTC부터 적용</span>
+        </div>
+        <span className="v3-card-header-meta">RunPod 서버리스 청구 · 실행시간 가중 배분</span>
+      </div>
+
+      {s ? (
+        <div className="v3-dash-duration-strip">
+          <div className="v3-dash-duration-cell">
+            <span className="v3-dash-duration-label"><i className="v3-dash-duration-swatch is-5s" />5초컷 건당비용</span>
+            <span className="v3-dash-duration-cost">{formatUsdPerJob(s.fiveSec.costPerJobUsd)}</span>
+            <span className="v3-dash-duration-sub">{formatNumber(s.fiveSec.count)}건 · 누적 {formatUsd(s.fiveSec.costUsd)}</span>
+          </div>
+          <div className="v3-dash-duration-cell">
+            <span className="v3-dash-duration-label"><i className="v3-dash-duration-swatch is-10s" />10초컷 건당비용</span>
+            <span className="v3-dash-duration-cost">{formatUsdPerJob(s.tenSec.costPerJobUsd)}</span>
+            <span className="v3-dash-duration-sub">{formatNumber(s.tenSec.count)}건 · 누적 {formatUsd(s.tenSec.costUsd)}</span>
+          </div>
+          <div className="v3-dash-duration-ratio">
+            <span className="v3-dash-duration-ratio-value">{ratio ? `× ${ratio.toFixed(2)}` : "-"}</span>
+            <span className="v3-dash-duration-ratio-label">
+              {ratio ? `10초컷이 5초컷보다 건당 약 ${ratio.toFixed(2)}배 비용이 높음` : "표본이 부족해 비교할 수 없습니다"}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="v3-empty-panel">2026-09-10 UTC 이후 구간에 RunPod 서버리스 작업이 아직 없습니다.</div>
+      )}
+
+      {days.length ? (
+        <div className="v3-dash-table-wrap">
+          <table className="v3-dash-table v3-dash-duration-table">
+            <thead>
+              <tr>
+                <th>날짜(UTC)</th>
+                <th className="is-right">제출</th>
+                <th className="is-right">완료</th>
+                <th className="is-right">실패</th>
+                <th className="is-right">전체비용</th>
+                <th className="is-right is-group-5s">5초컷 건수</th>
+                <th className="is-right is-group-5s">5초컷 비용</th>
+                <th className="is-right is-group-10s">10초컷 건수</th>
+                <th className="is-right is-group-10s">10초컷 비용</th>
+              </tr>
+            </thead>
+            <tbody>
+              {days.map((day) => {
+                const row = breakdown.byDay[day];
+                return (
+                  <tr key={day} className={row.split ? undefined : "is-before"}>
+                    <td className="is-mono">{formatDayLabel(day)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.submitted)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.completed)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.failed)}</td>
+                    <td className="is-right is-mono">{formatUsd(row.totalCostUsd)}</td>
+                    {row.split ? (
+                      <>
+                        <td className="is-right is-mono">{formatNumber(row.split.fiveSec.count)}</td>
+                        <td className="is-right is-mono">{formatUsd(row.split.fiveSec.costUsd)}</td>
+                        <td className="is-right is-mono">{formatNumber(row.split.tenSec.count)}</td>
+                        <td className="is-right is-mono">{formatUsd(row.split.tenSec.costUsd)}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="is-right is-mono is-muted">—</td>
+                        <td className="is-right is-mono is-muted">—</td>
+                        <td className="is-right is-mono is-muted">—</td>
+                        <td className="is-right is-mono is-muted">—</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="v3-empty-panel">기간 내 RunPod 서버리스 작업이 없습니다.</div>
+      )}
+
+      <div className="v3-dash-duration-footnote">
+        <b>2026-09-09 이전(UTC)</b>은 10초컷 워크플로 데이터가 없어(0건, 실 프로덕션 확인) 5초컷/10초컷으로 나누지 않고 전체 제출·완료·실패 건수와 전체비용만 표기합니다.{" "}
+        <b>2026-09-10부터</b>는 워크플로 종류로 구분하고, 그 날 RunPod 청구 총액을 각 그룹의 실측 GPU 실행시간(executionTime) 비율로 배분합니다 — 두 값의 합은 항상 그 날 전체비용과 일치합니다.
+        날짜는 RunPod 청구 기준(UTC 캘린더일)이라 위 "작업량 추이" 그래프의 날짜(KST)와 자정 전후로 최대 하루 어긋날 수 있습니다.
+      </div>
+    </div>
+  );
+}
+
+function formatUsd(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "-";
+  return `$${value.toFixed(2)}`;
+}
+
+function formatUsdPerJob(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "-";
+  return `$${value.toFixed(4)}`;
 }
 
 function DailyVolumeChart({ days, rangeLabel }: { days: DashboardDailyVolume[]; rangeLabel: string }) {

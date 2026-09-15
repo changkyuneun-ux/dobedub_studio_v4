@@ -347,6 +347,31 @@ export type DashboardDailyVolume = {
 
 export type DashboardFilterOption = { id?: string | null; name: string };
 
+// 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분 카드. UTC 캘린더일 기준(다른
+// 카드의 KST 일자와 최대 ~9시간 어긋날 수 있음 - RunPod 청구가 UTC일 단위라 총액
+// 정합성을 위해 UTC를 우선함). split이 없으면(null) 아직 5초/10초 구분 전
+// (2026-09-10 UTC 이전) 날짜로, 전체 제출/완료/실패/비용만 표시한다.
+export type DurationCostBucket = { count: number; costUsd: number };
+export type DurationCostDay = {
+  submitted: number;
+  completed: number;
+  failed: number;
+  totalCostUsd: number;
+  split: { fiveSec: DurationCostBucket; tenSec: DurationCostBucket; unclassified: DurationCostBucket } | null;
+};
+export type DurationCostSummary = {
+  sinceUtc: string;
+  untilUtc: string;
+  fiveSec: DurationCostBucket & { costPerJobUsd?: number | null };
+  tenSec: DurationCostBucket & { costPerJobUsd?: number | null };
+  unclassified: DurationCostBucket & { costPerJobUsd?: number | null };
+};
+export type DashboardDurationCostBreakdown = {
+  byDay: Record<string, DurationCostDay>;
+  /** 구분 대상(09-10 UTC 이후) 날짜가 하나도 없으면 null */
+  summary: DurationCostSummary | null;
+};
+
 export type DashboardSummary = {
   range: DashboardRange;
   since?: string | null;
@@ -375,6 +400,7 @@ export type DashboardSummary = {
   filterOptions: { users: DashboardFilterOption[]; workflows: DashboardFilterOption[] };
   byUser: Array<{ userId?: string | null; name: string; submitted: number; failed: number }>;
   byWorkflow: Array<{ workflowId: string; workflowName: string; submitted: number; avgElapsedSeconds?: number | null }>;
+  durationCostBreakdown: DashboardDurationCostBreakdown;
   system: {
     comfy: { configured: boolean; executionMode: string; dryRun: boolean };
     promptLlm: { configured: boolean; provider?: string | null; model?: string | null; timeoutSeconds?: number | null };
