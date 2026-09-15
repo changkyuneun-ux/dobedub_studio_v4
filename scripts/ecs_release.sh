@@ -155,7 +155,7 @@ network_config() {
   local task eni
   task="$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status RUNNING --region "$AWS_REGION" --query 'taskArns[0]' --output text)"
   eni="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" --region "$AWS_REGION" \
-    --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[?name==`networkInterfaceId`].value | [0]' --output text)"
+    --query 'tasks[0].attachments[?type==`ElasticNetworkInterface`].details[] | [?name==`networkInterfaceId`].value | [0]' --output text)"
   local subnet sgs
   subnet="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].SubnetId' --output text)"
   sgs="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].Groups[*].GroupId' --output text | tr '\t' ',')"
