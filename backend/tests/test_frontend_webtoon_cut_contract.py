@@ -94,7 +94,10 @@ def test_webtoon_cut_handoff_persists_selection_for_prompt_and_batch_screens() -
     assert "saveWebtoonCutHandoff" in cut_screen
     assert "handoffWebtoonCutsToGrok" in cut_screen
     assert "handoffWebtoonCutsToBatch" in cut_screen
+    assert "v3-webtoon-cut-batch-button" in cut_screen
+    assert ".v3-webtoon-cut-batch-button" in Path("frontend/src/styles.css").read_text(encoding="utf-8")
     assert "loadWebtoonCutHandoff(user.id, \"grok_prompt\")" in prompt_screen
     assert "loadWebtoonCutHandoff(user.id, \"batch\")" in batch_screen
     assert "createBatchJob({" in batch_screen
+    assert "sourceKind: \"webtoon_cut\"" in batch_screen
     assert "WebtoonCutHandoffSnapshot" in workspace

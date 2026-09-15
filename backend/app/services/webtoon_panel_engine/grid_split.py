@@ -266,7 +266,80 @@ def _looks_like_panel(gray_v, sat, region, page_margin, min_edge_score=0.5, min_
     return passed >= need
 
 
-def _refine_to_border(img, leaf, pad_frac=0.03, min_keep_ratio=0.55):
+def _overlap_len(a0, a1, b0, b1):
+    return max(0, min(a1, b1) - max(a0, b0))
+
+
+def _axis_gap(a0, a1, b0, b1):
+    if a1 < b0:
+        return b0 - a1
+    if b1 < a0:
+        return a0 - b1
+    return 0
+
+
+def _is_near_border_protrusion(candidate, core, max_gap):
+    cx0, cy0, cx1, cy1 = candidate
+    bx0, by0, bx1, by1 = core
+    outside_core = cx0 < bx0 or cy0 < by0 or cx1 > bx1 or cy1 > by1
+    if not outside_core:
+        return False
+
+    x_overlap = _overlap_len(cx0, cx1, bx0, bx1)
+    y_overlap = _overlap_len(cy0, cy1, by0, by1)
+    x_gap = _axis_gap(cx0, cx1, bx0, bx1)
+    y_gap = _axis_gap(cy0, cy1, by0, by1)
+    cw, ch = cx1 - cx0, cy1 - cy0
+    bw, bh = bx1 - bx0, by1 - by0
+    min_x_overlap = max(8, min(cw, bw) * 0.25)
+    min_y_overlap = max(8, min(ch, bh) * 0.25)
+
+    return (y_gap <= max_gap and x_overlap >= min_x_overlap) or (
+        x_gap <= max_gap and y_overlap >= min_y_overlap
+    )
+
+
+def _expand_to_nearby_ink(img, region, search_region, pad_frac=0.06):
+    """컷 테두리 가까이 돌출된 말풍선/텍스트 잉크를 최종 crop에 포함한다.
+
+    컷 여부 판정은 사각 테두리 기준으로 유지하되, 저장 crop만 주변 잉크와 합집합으로 확장한다.
+    말풍선이 프레임 밖으로 살짝 튀어나온 페이지에서 텍스트가 잘리는 것을 막기 위한 보정이다.
+    """
+    h_img, w_img = img.shape[:2]
+    rx0, ry0, rx1, ry1 = region
+    sx0, sy0, sx1, sy1 = search_region
+    sw, sh = sx1 - sx0, sy1 - sy0
+    pad_x, pad_y = int(sw * pad_frac) + 10, int(sh * pad_frac) + 10
+
+    ex0, ey0 = max(0, sx0 - pad_x), max(0, sy0 - pad_y)
+    ex1, ey1 = min(w_img, sx1 + pad_x), min(h_img, sy1 + pad_y)
+    crop = img[ey0:ey1, ex0:ex1]
+    if crop.size == 0:
+        return region
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    _, dark = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(dark, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return region
+
+    core = (rx0 - ex0, ry0 - ey0, rx1 - ex0, ry1 - ey0)
+    ux0, uy0, ux1, uy1 = core
+    max_gap = min(24, max(10, int(min(rx1 - rx0, ry1 - ry0) * 0.03)))
+    min_box_area = 24
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        candidate = (x, y, x + w, y + h)
+        if w * h < min_box_area:
+            continue
+        if _is_near_border_protrusion(candidate, core, max_gap):
+            ux0, uy0 = min(ux0, candidate[0]), min(uy0, candidate[1])
+            ux1, uy1 = max(ux1, candidate[2]), max(uy1, candidate[3])
+
+    return (ex0 + ux0, ey0 + uy0, ex0 + ux1, ey0 + uy1)
+
+
+def _refine_to_border(img, leaf, pad_frac=0.06, min_keep_ratio=0.55, include_nearby_ink=True):
     """재귀 분할로 얻은 leaf 영역을 실제 인쇄된 테두리 사각형에 맞춰 미세 조정.
     (한쪽 변의 구분선을 못 찾아 여백/캡션까지 포함되는 문제를 보정)"""
     h_img, w_img = img.shape[:2]
@@ -297,7 +370,10 @@ def _refine_to_border(img, leaf, pad_frac=0.03, min_keep_ratio=0.55):
         return leaf, False
     if inter / leaf_area < min_keep_ratio or new_area / leaf_area < min_keep_ratio:
         return leaf, False
-    return (nx0, ny0, nx1, ny1), True
+    refined = (nx0, ny0, nx1, ny1)
+    if include_nearby_ink:
+        refined = _expand_to_nearby_ink(img, refined, leaf, pad_frac=pad_frac)
+    return refined, True
 
 
 def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, debug=False,
@@ -356,11 +432,11 @@ def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, de
     candidates = []  # (최종 크롭에 쓸 좌표, 판정에 쓸 좌표들)
     for r in regions:
         if refine_borders:
-            new_r, ok = _refine_to_border(img, r)
+            border_r, ok = _refine_to_border(img, r, include_nearby_ink=False)
         else:
-            new_r, ok = r, False
-        final_r = new_r if ok else r
-        candidates.append((final_r, [r, new_r] if ok else [r]))
+            border_r, ok = r, False
+        final_r = _expand_to_nearby_ink(img, border_r, r) if ok else r
+        candidates.append((final_r, [r, border_r] if ok else [r]))
 
     # 사각 테두리가 없는 영역(장면 제목 옆 장식 그림 등) 제외: 실제 컷은 인쇄된 테두리로 닫혀 있음.
     # refine 전/후 좌표 중 하나라도 테두리 검증을 통과하면 인정한다 - refine이 컨투어를 잘못 확장해

@@ -155,7 +155,6 @@ export function PromptManagementScreen({ user, health: _health, onGoTo, workflow
 
   function selectWorkflow(id: string) {
     setWorkflowId(id);
-    setUploads([]);
     setDrafts({});
     setNegativePrompt("");
     setInstructionStatus(null);

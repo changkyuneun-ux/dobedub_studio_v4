@@ -7021,6 +7021,8 @@ button {
 .v3-webtoon-cut-pagination span { color: var(--v3-text-secondary); font-size: 11px; font-weight: 800; }
 .v3-webtoon-cut-pipelines { align-items: center; border-top: 1px solid var(--v3-border-inner); display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
 .v3-webtoon-cut-pipelines strong { margin-right: auto; }
+.v3-webtoon-cut-batch-button { background: var(--v3-warning); border-color: var(--v3-warning); color: #fff; }
+.v3-webtoon-cut-batch-button:hover { background: #b87400; border-color: #b87400; color: #fff; }
 .v3-batch-section-title em { color: var(--v3-accent-text); font-size: 11px; font-style: normal; margin-left: auto; }
 
 @media (max-width: 1100px) {

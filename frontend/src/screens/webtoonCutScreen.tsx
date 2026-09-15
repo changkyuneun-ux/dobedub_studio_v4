@@ -455,7 +455,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
               <div className="v3-webtoon-cut-pipelines">
                 <strong>선택 컷 {selectedOutputIds.size}개</strong>
                 <button className="v3-primary-button" type="button" onClick={() => void handoff("grok")}>Grok 프롬프트 화면으로 보내기</button>
-                <button className="v3-secondary-button" type="button" onClick={() => void handoff("batch")}>Batch 처리 화면으로 보내기</button>
+                <button className="v3-secondary-button v3-webtoon-cut-batch-button" type="button" onClick={() => void handoff("batch")}>Batch 처리 화면으로 보내기</button>
               </div>
             </div>
           </div>

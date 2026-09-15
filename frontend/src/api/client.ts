@@ -550,6 +550,7 @@ export type WebtoonCutOutputItem = {
 export type WebtoonCutHandoffResponse = {
   target: "grok_prompt" | "batch";
   jobId: string;
+  sourceDisplayName?: string;
   inputAssetIds: string[];
   sourceRelativePaths: string[];
   items: Array<{
@@ -1768,7 +1769,7 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ outputIds })
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string; requestItemId?: string }> }) =>
+  createBatchJob: (payload: { workflowId: string; sourceKind?: "webtoon_cut" | "asset_list"; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string; requestItemId?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)

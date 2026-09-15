@@ -354,7 +354,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             requestedFrames,
             resolutionTier,
             negativePrompt: batchNegativePrompt,
-            sourceDirName: `webtoon-cut-${webtoonCutInput.jobId}`,
+            sourceKind: "webtoon_cut",
+            sourceDirName: webtoonCutInput.sourceDisplayName || `webtoon-cut-${webtoonCutInput.jobId}`,
             items: webtoonCutInput.items.map((item, index) => ({
               assetId: item.assetId,
               fileName: item.fileName,
@@ -450,7 +451,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
           <button className="v3-batch-folder-card" type="button" onClick={() => zipInput.current?.click()}>
             <span>작업 입력</span>
             <strong>{webtoonCutInput?.items.length ? `컷 분할 입력 ${webtoonCutInput.items.length}개` : selectedZipFile?.name || "ZIP 파일 선택"}</strong>
-            <small>{webtoonCutInput?.items.length ? `webtoon-cut-${webtoonCutInput.jobId}` : selectedZipSummary}</small>
+            <small>{webtoonCutInput?.items.length ? webtoonCutInput.sourceDisplayName || `webtoon-cut-${webtoonCutInput.jobId}` : selectedZipSummary}</small>
           </button>
           <input
             className="v3-batch-hidden-input"

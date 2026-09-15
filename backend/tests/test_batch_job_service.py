@@ -230,6 +230,45 @@ def test_create_zip_batch_job_id_uses_worker_zip_name_and_kst_date(db_session, m
     assert result["sourceZipFileName"] == "픽미툰_씬.zip"
 
 
+def test_create_webtoon_cut_batch_job_id_uses_worker_source_sequence_and_kst_date(db_session, monkeypatch):
+    user = User(id="operator_1", name="장균은", role="OPERATOR")
+    db_session.add(user)
+    _seed_assets(db_session, 2)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("workflow instruction", "wf@1"))
+    monkeypatch.setattr(
+        batch_job_service,
+        "utc_now",
+        lambda: datetime(2026, 9, 3, 15, 5, 0, tzinfo=timezone.utc),
+        raising=False,
+    )
+
+    first = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceKind": "webtoon_cut",
+            "sourceDirName": "과학사 100 원본",
+            "requestedFrames": 81,
+            "items": [_asset_items(2)[0]],
+        },
+        created_by=user.id,
+    )
+    second = batch_job_service.create_batch_job(
+        db_session,
+        {
+            "workflowId": "Blowbang1.json",
+            "sourceKind": "webtoon_cut",
+            "sourceDirName": "과학사 100 원본",
+            "requestedFrames": 81,
+            "items": [_asset_items(2)[1]],
+        },
+        created_by=user.id,
+    )
+
+    assert first["id"] == "장균은_과학사_100_원본_1_260904"
+    assert second["id"] == "장균은_과학사_100_원본_2_260904"
+
+
 def test_create_zip_batch_job_preserves_source_relative_paths_on_drafts(db_session, monkeypatch):
     user = User(id="operator_1", name="장균은", role="OPERATOR")
     db_session.add(user)

@@ -16,6 +16,7 @@ export type WebtoonCutHandoffItem = {
 export type WebtoonCutHandoffSnapshot = {
   target: WebtoonCutHandoffTarget;
   jobId: string;
+  sourceDisplayName?: string;
   inputAssetIds: string[];
   sourceRelativePaths: string[];
   items: WebtoonCutHandoffItem[];

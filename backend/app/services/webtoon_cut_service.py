@@ -236,6 +236,7 @@ def validate_output_selection(
 
 
 def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str) -> dict:
+    job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
     for output in outputs:
         output.used_in_prompt_count += 1
@@ -243,6 +244,7 @@ def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_id
     return {
         "target": "grok_prompt",
         "jobId": job_id,
+        "sourceDisplayName": job.display_name,
         "inputAssetIds": [output.asset_id for output in outputs],
         "sourceRelativePaths": [output.display_path for output in outputs],
         "items": [_handoff_item_payload(output) for output in outputs],
@@ -250,6 +252,7 @@ def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_id
 
 
 def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str) -> dict:
+    job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
     for output in outputs:
         output.used_in_batch_count += 1
@@ -257,6 +260,7 @@ def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: lis
     return {
         "target": "batch",
         "jobId": job_id,
+        "sourceDisplayName": job.display_name,
         "inputAssetIds": [output.asset_id for output in outputs],
         "sourceRelativePaths": [output.display_path for output in outputs],
         "items": [_handoff_item_payload(output) for output in outputs],
