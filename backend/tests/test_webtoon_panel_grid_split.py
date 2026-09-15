@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 
 def test_refine_to_border_keeps_crop_on_panel_border_instead_of_nearby_speech_bubble():
@@ -42,3 +43,23 @@ def test_runtime_routes_panel_detection_through_batch_split_entrypoint(tmp_path,
     assert called == [("source.png", True)]
     assert result.mode == "grid"
     assert [(cut.cut_index, cut.width, cut.height) for cut in result.cuts] == [(1, 60, 40)]
+
+
+def test_science_book_page_016_matches_reference_batch_split_count(tmp_path):
+    source_pdf = Path(
+        "/Users/changkyuneun/Downloads/과학사 100 원본/"
+        "과학사_2권_내지_인쇄용_수정.pdf"
+    )
+    if not source_pdf.exists():
+        pytest.skip("local science book regression PDF is not available")
+
+    from backend.app.services.webtoon_panel_engine.runtime import process_pdf_page
+
+    result = process_pdf_page(source_pdf, page_number=16, output_dir=tmp_path / "page-016", dpi=300)
+
+    assert result.mode == "grid"
+    assert len(result.cuts) == 2
+    assert [(cut.cut_index, cut.width, cut.height) for cut in result.cuts] == [
+        (1, 957, 968),
+        (2, 848, 967),
+    ]

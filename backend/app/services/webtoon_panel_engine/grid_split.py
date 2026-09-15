@@ -83,94 +83,18 @@ def _ink_score(gray_v, sat, axis, pos, lo, hi, search=1):
             s = sat[lo:hi, p]
         if len(v) == 0:
             continue
-        blackish = (v < 100) & (s < 20)
+        blackish = (v < 100) & (s < 60)
         score = float(blackish.mean())
         if score > best_score:
             best_score = score
     return best_score
 
 
-def _has_gutter(gray_v, axis, pos, lo, hi, min_off=3, max_off=70, white_thr=200, min_frac=0.75):
-    """후보 테두리선 바로 옆(한쪽이라도)에 흰 거터(여백)가 있는지 검사.
-    실제 컷 테두리는 인접 컷과의 사이에 흰 여백이 있지만, 그림 속 검은 직선(머리카락·창틀·효과선)은
-    양쪽 모두 색이 있는 그림이므로 이 검사로 구분된다."""
-    lo, hi = int(lo), int(hi)
-    p0 = int(round(pos))
-    H, W = gray_v.shape
-    for sign in (-1, 1):
-        for off in range(min_off, max_off + 1):
-            p = p0 + sign * off
-            if axis == 'h':
-                if p < 0 or p >= H:
-                    break
-                v = gray_v[p, lo:hi]
-            else:
-                if p < 0 or p >= W:
-                    break
-                v = gray_v[lo:hi, p]
-            if len(v) and (v > white_thr).mean() >= min_frac:
-                return True
-    return False
-
-
-def _line_thickness(gray_v, sat, axis, pos, lo, hi, step=5, reach=15):
-    """후보선의 잉크 두께(px) 중앙값. 인쇄 컷 테두리는 일정한 굵기(300dpi 기준 약 6px)인 반면
-    그림 속 직선(지붕선·창틀·벽 모서리)은 대개 더 가늘다."""
-    ink = (gray_v < 100) & (sat < 20)
-    H, W = gray_v.shape
-    p0 = int(round(pos))
-    ts = []
-    for i in range(int(lo), int(hi), step):
-        if axis == 'h':
-            a0, a1 = max(0, p0 - reach), min(H, p0 + reach + 1)
-            col = ink[a0:a1, i]
-        else:
-            a0, a1 = max(0, p0 - reach), min(W, p0 + reach + 1)
-            col = ink[i, a0:a1]
-        idx = np.where(col)[0]
-        if len(idx) == 0:
-            continue
-        c = idx[np.argmin(np.abs(idx - (p0 - a0)))]
-        a = c
-        while a > 0 and col[a - 1]:
-            a -= 1
-        b = c
-        while b < len(col) - 1 and col[b + 1]:
-            b += 1
-        ts.append(b - a + 1)
-    if not ts:
-        return 0.0
-    return float(np.median(ts))
-
-
-def estimate_border_thickness(h_segs, v_segs, gray_v, sat, region):
-    """페이지의 실제 컷 테두리 굵기 추정: 커버리지·잉크 점수가 높은(확실한) 테두리 후보들의 두께 중앙값.
-    권/챕터마다 테두리 굵기가 다르므로(3~7px) 페이지별로 적응."""
-    x0, y0, x1, y1 = region
-    w, h = x1 - x0, y1 - y0
-    ts = []
-    for axis, segs, lo, hi, slo, shi, L in (('h', h_segs, y0, y1, x0, x1, h), ('v', v_segs, x0, x1, y0, y1, w)):
-        for pos, cov in _cluster_and_coverage(segs, max(4, L * 0.003), lo, hi, slo, shi):
-            if cov < 0.6:
-                continue
-            if _ink_score(gray_v, sat, axis, pos, slo, shi) < 0.6:
-                continue
-            t = _line_thickness(gray_v, sat, axis, pos, slo, shi)
-            if t > 0:
-                ts.append(t)
-    if not ts:
-        return None
-    return float(np.median(ts))
-
-
 def find_best_divider(region, h_segs, v_segs, gray_v, sat, min_coverage=0.4,
-                       min_ink=0.3, margin_frac=0.05, require_gutter=True, min_thick=None):
+                       min_ink=0.3, margin_frac=0.05):
     x0, y0, x1, y1 = region
     w, h = x1 - x0, y1 - y0
     best = None  # (score, axis, pos)
-    if min_thick is None:
-        # 페이지 높이 기준 상대값 (300dpi A4급 3343px -> 약 5.3px): 6px 테두리는 통과, 3~5px 그림선은 제외
-        min_thick = max(3.0, gray_v.shape[0] * 0.00135)
 
     h_res = _cluster_and_coverage(h_segs, pos_tol=max(4, h * 0.003),
                                    region_lo=y0 + h * margin_frac, region_hi=y1 - h * margin_frac,
@@ -180,10 +104,6 @@ def find_best_divider(region, h_segs, v_segs, gray_v, sat, min_coverage=0.4,
             continue
         ink = _ink_score(gray_v, sat, 'h', pos, x0, x1)
         if ink < min_ink:
-            continue
-        if require_gutter and not _has_gutter(gray_v, 'h', pos, x0, x1):
-            continue
-        if min_thick and _line_thickness(gray_v, sat, 'h', pos, x0, x1) < min_thick:
             continue
         score = coverage * ink
         if best is None or score > best[0]:
@@ -198,10 +118,6 @@ def find_best_divider(region, h_segs, v_segs, gray_v, sat, min_coverage=0.4,
         ink = _ink_score(gray_v, sat, 'v', pos, y0, y1)
         if ink < min_ink:
             continue
-        if require_gutter and not _has_gutter(gray_v, 'v', pos, y0, y1):
-            continue
-        if min_thick and _line_thickness(gray_v, sat, 'v', pos, y0, y1) < min_thick:
-            continue
         score = coverage * ink
         if best is None or score > best[0]:
             best = (score, 'v', pos)
@@ -209,13 +125,13 @@ def find_best_divider(region, h_segs, v_segs, gray_v, sat, min_coverage=0.4,
     return best
 
 
-def recursive_split(region, h_segs, v_segs, gray_v, sat, min_area_ratio, total_area, depth=0, min_thick=None):
+def recursive_split(region, h_segs, v_segs, gray_v, sat, min_area_ratio, total_area, depth=0):
     x0, y0, x1, y1 = region
     area = (x1 - x0) * (y1 - y0)
     if area < total_area * min_area_ratio or depth > 8:
         return [region]
 
-    best = find_best_divider(region, h_segs, v_segs, gray_v, sat, min_thick=min_thick)
+    best = find_best_divider(region, h_segs, v_segs, gray_v, sat)
     if best is None:
         return [region]
 
@@ -232,38 +148,8 @@ def recursive_split(region, h_segs, v_segs, gray_v, sat, min_area_ratio, total_a
         rx0, ry0, rx1, ry1 = r
         if rx1 - rx0 < 5 or ry1 - ry0 < 5:
             continue
-        result.extend(recursive_split(r, h_segs, v_segs, gray_v, sat, min_area_ratio, total_area, depth + 1, min_thick))
+        result.extend(recursive_split(r, h_segs, v_segs, gray_v, sat, min_area_ratio, total_area, depth + 1))
     return result if result else [region]
-
-
-def _region_border_score(gray_v, sat, region, search=12):
-    """region의 네 변(상/하/좌/우) 각각에 실제 검정 잉크 테두리선이 있는지 점수화.
-    데코/제목 그림처럼 사각 테두리가 전혀 없는 영역(장식 이미지)을 컷과 구분하기 위함:
-    실제 컷은 인쇄된 사각 테두리로 둘러싸여 있어 네 변 대부분에서 높은 ink score가 나오지만,
-    장식 그림은 재귀분할이 임의로 잡은 경계일 뿐이라 그 위치에 실제 선이 없다."""
-    x0, y0, x1, y1 = region
-    top = _ink_score(gray_v, sat, 'h', y0, x0, x1, search=search)
-    bottom = _ink_score(gray_v, sat, 'h', y1, x0, x1, search=search)
-    left = _ink_score(gray_v, sat, 'v', x0, y0, y1, search=search)
-    right = _ink_score(gray_v, sat, 'v', x1, y0, y1, search=search)
-    return [top, bottom, left, right]
-
-
-def _looks_like_panel(gray_v, sat, region, page_margin, min_edge_score=0.5, min_sides=3):
-    """region이 실제 컷(사각 테두리로 닫힌 영역)인지 검증.
-    페이지 바깥 여백과 맞닿은 변은 원래 테두리선이 없을 수 있으므로(트림에 블리드된 컷) 검사에서 제외하되,
-    검사 대상 변이 2개 미만으로 줄어들면(예: 3면이 모두 페이지 여백인 장식/제목 영역) 그 여유를 악용해
-    통과하는 것을 막기 위해 무조건 불합격 처리한다."""
-    x0, y0, x1, y1 = region
-    mx0, my0, mx1, my1 = page_margin
-    edges = _region_border_score(gray_v, sat, region)
-    at_margin = [y0 <= my0 + 2, y1 >= my1 - 2, x0 <= mx0 + 2, x1 >= mx1 - 2]
-    checked = [s for s, m in zip(edges, at_margin) if not m]
-    if len(checked) < 2:
-        return False
-    passed = sum(1 for s in checked if s >= min_edge_score)
-    need = min(min_sides, len(checked))
-    return passed >= need
 
 
 def _refine_to_border(img, leaf, pad_frac=0.03, min_keep_ratio=0.55):
@@ -326,15 +212,11 @@ def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, de
     else:
         x0, y0, x1, y1 = inner_margin
 
-    # 채도 대신 '채널 간 편차(chroma)'를 사용: 거의 순수 검정(예: BGR 0,0,5)은 HSV 채도가
-    # 255로 튀어 오검출되므로, max(BGR)-min(BGR) 가 작은 무채색 픽셀만 잉크로 인정
-    sat = (img.max(axis=2).astype(np.int16) - img.min(axis=2).astype(np.int16)).astype(np.uint8)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
 
     total_area = (x1 - x0) * (y1 - y0)
-    ref_t = estimate_border_thickness(h_segs, v_segs, gray, sat, (x0, y0, x1, y1))
-    # 기준 두께의 약 80% 미만인 선은 그림 속 직선으로 간주 (기준 추정 실패 시 페이지 높이 비례 기본값)
-    min_thick = max(2.0, ref_t * 0.8) if ref_t else max(3.0, h * 0.00135)
-    regions = recursive_split((x0, y0, x1, y1), h_segs, v_segs, gray, sat, min_area_ratio, total_area, min_thick=min_thick)
+    regions = recursive_split((x0, y0, x1, y1), h_segs, v_segs, gray, sat, min_area_ratio, total_area)
 
     # 내용이 거의 없는(빈 여백/거터) 영역 제거
     filtered = []
@@ -352,22 +234,14 @@ def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, de
     regions = filtered
 
     # 실제 테두리 사각형에 맞춰 경계 미세 조정 (여백/캡션 포함 방지)
-    page_margin = (x0, y0, x1, y1)
-    candidates = []  # (최종 크롭에 쓸 좌표, 판정에 쓸 좌표들)
-    for r in regions:
-        if refine_borders:
+    # 테두리를 찾지 못한 영역(예: 제목/헤더 블록처럼 컷 테두리가 없는 장식 영역)은 컷이 아닌 것으로 보고 제외
+    if refine_borders:
+        refined = []
+        for r in regions:
             new_r, ok = _refine_to_border(img, r)
-        else:
-            new_r, ok = r, False
-        final_r = new_r if ok else r
-        candidates.append((final_r, [r, new_r] if ok else [r]))
-
-    # 사각 테두리가 없는 영역(장면 제목 옆 장식 그림 등) 제외: 실제 컷은 인쇄된 테두리로 닫혀 있음.
-    # refine 전/후 좌표 중 하나라도 테두리 검증을 통과하면 인정한다 - refine이 컨투어를 잘못 확장해
-    # 경계가 실제 선에서 벗어나는 경우에도, 또 refine 전 좌표가 아직 실제 선에 못 맞춰진 경우에도
-    # 진짜 컷을 오검출로 놓치지 않기 위함.
-    regions = [final_r for final_r, checks in candidates
-               if any(_looks_like_panel(gray, sat, c, page_margin) for c in checks)]
+            if ok:
+                refined.append(new_r)
+        regions = refined
 
     # 읽기 순서 정렬
     regions.sort(key=lambda r: r[1])

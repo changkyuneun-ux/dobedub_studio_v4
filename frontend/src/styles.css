@@ -7006,12 +7006,14 @@ button {
 .v3-webtoon-cut-output-row.is-preview { background: var(--v3-accent-bg); }
 .v3-webtoon-cut-output-row.is-selected { box-shadow: inset 3px 0 0 var(--v3-accent); }
 .v3-webtoon-cut-output-row img { background: #fff; border: 1px solid var(--v3-border-inner); border-radius: 6px; height: 48px; object-fit: contain; width: 58px; }
+.v3-webtoon-cut-thumb-fallback { align-items: center; background: #fff; border: 1px dashed var(--v3-border-inner); border-radius: 6px; color: var(--v3-text-muted); display: flex; font-size: 9px; height: 48px; justify-content: center; line-height: 1.25; text-align: center; width: 58px; }
 .v3-webtoon-cut-output-row b { color: var(--v3-text-heading); display: block; font-family: var(--v3-font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-webtoon-cut-output-row small { color: var(--v3-text-muted); font-size: 10px; }
 .v3-webtoon-cut-output-row em { color: var(--v3-accent-text); font-size: 10px; font-style: normal; font-weight: 800; }
 .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-list { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row { align-content: start; grid-template-columns: 20px 1fr; min-height: 168px; }
 .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row img { grid-column: 1 / -1; height: 94px; width: 100%; }
+.v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-thumb-fallback { grid-column: 1 / -1; height: 94px; width: 100%; }
 .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row span, .v3-webtoon-cut-output-layout.is-grid .v3-webtoon-cut-output-row em { grid-column: 1 / -1; }
 .v3-webtoon-cut-preview { align-content: start; display: grid; gap: 10px; padding: 12px; }
 .v3-webtoon-cut-preview img { background: #fff; border: 1px solid var(--v3-border-inner); border-radius: 7px; max-height: 300px; object-fit: contain; width: 100%; }

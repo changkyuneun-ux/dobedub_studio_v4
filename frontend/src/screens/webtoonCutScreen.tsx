@@ -462,7 +462,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                   {outputs.map((output) => (
                     <button key={output.outputId} className={`v3-webtoon-cut-output-row${previewOutputId === output.outputId ? " is-preview" : ""}${selectedOutputIds.has(output.outputId) ? " is-selected" : ""}`} type="button" onClick={() => setPreviewOutputId(output.outputId)}>
                       <input type="checkbox" checked={selectedOutputIds.has(output.outputId)} onChange={() => toggleOutput(output.outputId)} onClick={(event) => event.stopPropagation()} />
-                      <img src={output.viewUrl} alt={output.displayPath} loading="lazy" />
+                      <RetryingCutThumbnail src={output.viewUrl} alt={output.displayPath} />
                       <span><b>{output.displayPath}</b><small>page {output.pageNumber || "-"} · cut {output.cutIndex} · {output.width || "-"}×{output.height || "-"}</small></span>
                       <em>{usageLabel(output)}</em>
                     </button>
@@ -572,6 +572,46 @@ function usageLabel(output: WebtoonCutOutputItem): string {
   if (output.usedInBatchCount > 0) return "Batch 사용";
   if (output.usedInPromptCount > 0) return "Grok 사용";
   return "미사용";
+}
+
+function RetryingCutThumbnail({ src, alt }: { src: string; alt: string }) {
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setAttempt(0);
+    setFailed(false);
+  }, [src]);
+
+  if (failed) {
+    return <span className="v3-webtoon-cut-thumb-fallback">썸네일<br />재시도 실패</span>;
+  }
+
+  return (
+    <img
+      src={attempt > 0 ? withRetryQuery(src, attempt) : src}
+      alt={alt}
+      loading="lazy"
+      onError={() => {
+        if (attempt < 2) {
+          setAttempt((value) => value + 1);
+        } else {
+          setFailed(true);
+        }
+      }}
+    />
+  );
+}
+
+function withRetryQuery(src: string, attempt: number): string {
+  try {
+    const url = new URL(src, window.location.origin);
+    url.searchParams.set("thumbRetry", String(attempt));
+    return url.toString();
+  } catch {
+    const separator = src.includes("?") ? "&" : "?";
+    return `${src}${separator}thumbRetry=${attempt}`;
+  }
 }
 
 function canDeleteJob(job: WebtoonCutJobResponse): boolean {
