@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from backend.app.core.security import ADMIN_ROLES, CurrentUser, require_permission
 from backend.app.core.config import get_settings
-from backend.app.db.models import Asset
+from backend.app.db.models import Asset, WebtoonCutJob
 from backend.app.db.session import SessionLocal
 from backend.app.services.studio_api_service import s3_asset_storage
 from backend.app.services import webtoon_cut_service
@@ -14,6 +15,10 @@ import uuid
 
 
 router = APIRouter(prefix="/webtoon-cuts", tags=["webtoon-cuts"])
+
+
+def _scope(current_user: CurrentUser) -> str | None:
+    return None if current_user.role in ADMIN_ROLES else current_user.id
 
 
 @router.post("/uploads/presign", status_code=201)
@@ -150,7 +155,7 @@ def get_webtoon_cut_job(
 ):
     try:
         with SessionLocal() as session:
-            return webtoon_cut_service.get_job(session, job_id, created_by=current_user.id)
+            return webtoon_cut_service.get_job(session, job_id, created_by=_scope(current_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
     except PermissionError as exc:
@@ -164,7 +169,7 @@ def cancel_webtoon_cut_job(
 ):
     try:
         with SessionLocal() as session:
-            return webtoon_cut_service.cancel_job(session, job_id, created_by=current_user.id)
+            return webtoon_cut_service.cancel_job(session, job_id, created_by=_scope(current_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
     except PermissionError as exc:
@@ -178,7 +183,7 @@ def delete_webtoon_cut_job(
 ):
     try:
         with SessionLocal() as session:
-            return webtoon_cut_service.delete_job(session, job_id, created_by=current_user.id)
+            return webtoon_cut_service.delete_job(session, job_id, created_by=_scope(current_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
     except PermissionError as exc:
@@ -198,7 +203,7 @@ def list_webtoon_cut_outputs(
     current_user: CurrentUser = Depends(require_permission("history:read")),
 ):
     try:
-        created_by_filter = None if current_user.role in ADMIN_ROLES else current_user.id
+        created_by_filter = _scope(current_user)
         with SessionLocal() as session:
             return webtoon_cut_service.list_outputs(
                 session,
@@ -228,7 +233,7 @@ def handoff_to_grok_prompt(
                 session,
                 job_id=job_id,
                 output_ids=list(payload.get("outputIds") or []),
-                created_by=current_user.id,
+                created_by=_scope(current_user),
             )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -248,9 +253,43 @@ def handoff_to_batch(
                 session,
                 job_id=job_id,
                 output_ids=list(payload.get("outputIds") or []),
-                created_by=current_user.id,
+                created_by=_scope(current_user),
             )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/jobs/{job_id}/download")
+def download_webtoon_cut_outputs(
+    job_id: str,
+    outputIds: list[str] | None = Query(default=None, alias="outputIds"),
+    current_user: CurrentUser = Depends(require_permission("history:read")),
+):
+    try:
+        with SessionLocal() as session:
+            chunks, skipped, _filename = webtoon_cut_service.stream_selected_outputs_zip(
+                session,
+                job_id=job_id,
+                output_ids=list(outputIds or []),
+                created_by=_scope(current_user),
+            )
+            job = session.get(WebtoonCutJob, job_id)
+            if job is None:
+                raise KeyError(job_id)
+            return StreamingResponse(
+                chunks,
+                media_type="application/zip",
+                headers={
+                    **webtoon_cut_service.ZIP_RESPONSE_HEADERS,
+                    "Content-Disposition": webtoon_cut_service.content_disposition_for_selected_outputs(job),
+                    "X-Webtoon-Cut-Zip-Skipped": str(skipped),
+                },
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import zipfile
 from sqlalchemy import event
 
-from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
+from backend.app.core.security import create_access_token
+from backend.app.db.models import Asset, User, WebtoonCutJob, WebtoonCutOutput
 
 
 def _asset(asset_id: str, *, file_name: str = "source.pdf", asset_type: str = "webtoon_source_original") -> Asset:
@@ -16,6 +18,11 @@ def _asset(asset_id: str, *, file_name: str = "source.pdf", asset_type: str = "w
         storage_key=f"webtoon-cut/tests/{asset_id}/{file_name}",
         metadata_json={"createdBy": "user_1"},
     )
+
+
+def _headers(user_id: str, *, role: str = "OPERATOR") -> dict[str, str]:
+    token = create_access_token({"id": user_id, "name": user_id, "role": role})
+    return {"Authorization": f"Bearer {token['accessToken']}"}
 
 
 def test_create_job_blocks_second_active_job_for_same_user(db_session):
@@ -335,3 +342,143 @@ def test_delete_job_rejects_active_jobs(db_session):
         assert "진행 중인 컷 분할 작업은 삭제할 수 없습니다" in str(exc)
     else:
         raise AssertionError("active jobs must not be deleted")
+
+
+def test_admin_scope_delete_hides_other_users_terminal_job(db_session):
+    from backend.app.services.webtoon_cut_service import delete_job, list_jobs
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(
+        WebtoonCutJob(
+            id="wcut_other_user",
+            status="completed",
+            input_kind="image",
+            source_asset_id="asset_source",
+            display_name="011.jpg",
+            safe_stem="011",
+            created_by="other_user",
+        )
+    )
+    db_session.commit()
+
+    result = delete_job(db_session, job_id="wcut_other_user", created_by=None)
+    history = list_jobs(db_session, created_by=None)
+
+    assert result == {"deleted": True, "jobId": "wcut_other_user"}
+    assert [item["jobId"] for item in history["items"]] == []
+
+
+def test_admin_api_can_delete_job_visible_in_global_history(api_client):
+    from backend.app.db.session import SessionLocal
+
+    with SessionLocal() as session:
+        session.add(User(id="cut_admin", name="Cut Admin", role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True))
+        session.add(_asset("asset_source"))
+        session.add(
+            WebtoonCutJob(
+                id="wcut_other_user_api",
+                status="completed",
+                input_kind="image",
+                source_asset_id="asset_source",
+                display_name="011.jpg",
+                safe_stem="011",
+                created_by="other_user",
+            )
+        )
+        session.commit()
+
+    response = api_client.delete("/api/webtoon-cuts/jobs/wcut_other_user_api", headers=_headers("cut_admin", role="SUPER_ADMIN"))
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True, "jobId": "wcut_other_user_api"}
+    with SessionLocal() as session:
+        assert session.get(WebtoonCutJob, "wcut_other_user_api").deleted_at is not None
+
+
+def test_stream_selected_outputs_zip_contains_only_selected_cuts(db_session, tmp_path):
+    from backend.app.services.webtoon_cut_service import stream_selected_outputs_zip
+
+    first_path = tmp_path / "001-01.png"
+    second_path = tmp_path / "001-02.png"
+    first_path.write_bytes(b"first-png")
+    second_path.write_bytes(b"second-png")
+    db_session.add(_asset("asset_source"))
+    db_session.add(
+        Asset(
+            id="asset_cut_1",
+            asset_type="webtoon_cut_image",
+            file_name="001-01.png",
+            mime_type="image/png",
+            size_bytes=9,
+            storage_backend="local",
+            storage_key=str(first_path),
+            metadata_json={"createdBy": "user_1"},
+        )
+    )
+    db_session.add(
+        Asset(
+            id="asset_cut_2",
+            asset_type="webtoon_cut_image",
+            file_name="001-02.png",
+            mime_type="image/png",
+            size_bytes=10,
+            storage_backend="local",
+            storage_key=str(second_path),
+            metadata_json={"createdBy": "user_1"},
+        )
+    )
+    db_session.add(
+        WebtoonCutJob(
+            id="wcut_download",
+            status="completed",
+            input_kind="pdf",
+            source_asset_id="asset_source",
+            display_name="source.pdf",
+            safe_stem="source",
+            created_by="user_1",
+        )
+    )
+    db_session.add(
+        WebtoonCutOutput(
+            id="wcut_out_1",
+            job_id="wcut_download",
+            asset_id="asset_cut_1",
+            status="ready",
+            display_path="source/001-01.png",
+            page_number=1,
+            cut_index=1,
+            flags_json=[],
+            metadata_json={"createdBy": "user_1"},
+            created_by="user_1",
+        )
+    )
+    db_session.add(
+        WebtoonCutOutput(
+            id="wcut_out_2",
+            job_id="wcut_download",
+            asset_id="asset_cut_2",
+            status="ready",
+            display_path="source/001-02.png",
+            page_number=1,
+            cut_index=2,
+            flags_json=[],
+            metadata_json={"createdBy": "user_1"},
+            created_by="user_1",
+        )
+    )
+    db_session.commit()
+
+    chunks, skipped, filename = stream_selected_outputs_zip(
+        db_session,
+        job_id="wcut_download",
+        output_ids=["wcut_out_2"],
+        created_by="user_1",
+    )
+    archive_path = tmp_path / "selected.zip"
+    archive_path.write_bytes(b"".join(chunks))
+
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.namelist() == ["source/001-02.png"]
+        assert archive.read("source/001-02.png") == b"second-png"
+    assert skipped == 0
+    assert filename == "source_cuts_selected.zip"

@@ -59,6 +59,7 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
 def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filter() -> None:
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    backend_api = Path("backend/app/api/v1/webtoon_cuts.py").read_text(encoding="utf-8")
 
     assert 'type ViewMode = "list" | "grid"' in source
     assert "jobStatusFilter" in source
@@ -79,6 +80,12 @@ def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filt
     assert "deleteWebtoonCutJob" in source
     assert "deleteWebtoonCutJob" in client
     assert "이력 삭제" in source
+    assert "window.confirm" not in source
+    assert "v3-webtoon-cut-delete-modal" in source
+    assert "선택 컷 다운로드" in source
+    assert "downloadSelectedOutputs" in source
+    assert "downloadWebtoonCutOutputsZip" in client
+    assert '@router.get("/jobs/{job_id}/download"' in backend_api
     assert "이전" in source
     assert "다음" in source
     assert "previewOutput" in source

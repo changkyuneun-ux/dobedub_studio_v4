@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
 from typing import Iterable
+from typing import BinaryIO, Iterator
+from urllib.parse import quote
+import zipfile
 
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
@@ -10,11 +15,14 @@ from sqlalchemy.orm import Session
 from backend.app.core.timezone_utils import utc_now
 from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
 from backend.app.services.webtoon_cut_naming import make_source_identity
+from backend.app.services.zip_encoding_service import normalize_zip_path
 
 
 ACTIVE_JOB_STATUSES = {"pending", "running"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 REVIEW_REQUIRED_FLAGS = {"review_required", "thin", "many", "review_continuous", "missing_output", "error"}
+CHUNK_SIZE = 1024 * 1024
+ZIP_RESPONSE_HEADERS = {"Content-Encoding": "identity"}
 
 
 def create_job(
@@ -61,7 +69,7 @@ def create_job(
     return _job_payload(job)
 
 
-def cancel_job(db: Session, job_id: str, *, created_by: str) -> dict:
+def cancel_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     if job.status in TERMINAL_JOB_STATUSES:
         return _job_payload(job)
@@ -74,12 +82,12 @@ def cancel_job(db: Session, job_id: str, *, created_by: str) -> dict:
     return _job_payload(job)
 
 
-def get_job(db: Session, job_id: str, *, created_by: str) -> dict:
+def get_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     return _job_payload(job)
 
 
-def delete_job(db: Session, job_id: str, *, created_by: str) -> dict:
+def delete_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by, include_deleted=True)
     if job.status not in TERMINAL_JOB_STATUSES:
         raise ValueError("진행 중인 컷 분할 작업은 삭제할 수 없습니다. 먼저 취소 또는 완료 후 삭제하세요.")
@@ -235,7 +243,7 @@ def validate_output_selection(
     return valid
 
 
-def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str) -> dict:
+def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
     for output in outputs:
@@ -251,7 +259,7 @@ def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_id
     }
 
 
-def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str) -> dict:
+def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
     for output in outputs:
@@ -267,21 +275,156 @@ def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: lis
     }
 
 
-def _load_selected_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str) -> list[WebtoonCutOutput]:
+def stream_selected_outputs_zip(
+    db: Session,
+    *,
+    job_id: str,
+    output_ids: list[str],
+    created_by: str | None,
+) -> tuple[Iterator[bytes], int, str]:
+    job = _require_job(db, job_id, created_by=created_by)
+    requested_ids = [str(item) for item in output_ids if str(item).strip()]
+    if not requested_ids:
+        raise ValueError("다운로드할 컷을 선택해주세요.")
+    stmt = (
+        select(WebtoonCutOutput, Asset)
+        .join(Asset, Asset.id == WebtoonCutOutput.asset_id)
+        .where(WebtoonCutOutput.job_id == job_id)
+        .where(WebtoonCutOutput.id.in_(requested_ids))
+        .order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))
+    )
+    if created_by:
+        stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
+    rows = db.execute(stmt).all()
+    if len(rows) != len(set(requested_ids)):
+        raise ValueError("선택한 컷을 찾을 수 없습니다.")
+
+    used: set[str] = set()
+    entries: list[dict] = []
+    skipped = 0
+    for output, asset in rows:
+        entry_name = _zip_entry_name_for_cut(output.display_path, asset.file_name, used)
+        used.add(entry_name)
+        if not asset.storage_key:
+            skipped += 1
+            continue
+        entries.append({
+            "entryName": entry_name,
+            "storageBackend": asset.storage_backend or "local",
+            "storageKey": asset.storage_key,
+        })
+    if not entries:
+        raise ValueError("내려받을 컷 파일이 없습니다.")
+
+    def generate() -> Iterator[bytes]:
+        buffer = _StreamBuffer()
+        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_STORED) as archive:
+            for entry in entries:
+                with archive.open(entry["entryName"], mode="w") as target, _open_output_asset_stream(entry) as source:
+                    while True:
+                        chunk = source.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        target.write(chunk)
+                        yield from buffer.drain()
+                yield from buffer.drain()
+        yield from buffer.drain()
+
+    return generate(), skipped, selected_outputs_zip_filename(job)
+
+
+def selected_outputs_zip_filename(job: WebtoonCutJob) -> str:
+    stem = Path(normalize_zip_path(str(job.display_name or job.safe_stem or job.id))).stem or "webtoon_cut"
+    return f"{stem}_cuts_selected.zip"
+
+
+def content_disposition_for_selected_outputs(job: WebtoonCutJob) -> str:
+    filename = selected_outputs_zip_filename(job)
+    fallback = "webtoon_cut_selected.zip"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _load_selected_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> list[WebtoonCutOutput]:
     _require_job(db, job_id, created_by=created_by)
     if not output_ids:
         raise ValueError("선택한 컷이 없습니다.")
-    outputs = db.scalars(
+    stmt = (
         select(WebtoonCutOutput)
         .where(WebtoonCutOutput.job_id == job_id)
-        .where(WebtoonCutOutput.created_by == created_by)
         .where(WebtoonCutOutput.id.in_(output_ids))
         .order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index))
-    ).all()
+    )
+    if created_by:
+        stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
+    outputs = db.scalars(stmt).all()
     if len(outputs) != len(set(output_ids)):
         raise ValueError("선택한 컷을 찾을 수 없습니다.")
     validate_output_selection([_output_payload(output) for output in outputs], expected_job_id=job_id, exclude_review_required=False)
     return list(outputs)
+
+
+def _zip_entry_name_for_cut(display_path: str, file_name: str, used: set[str]) -> str:
+    relative_path = _safe_zip_relative_path(display_path)
+    if relative_path is None:
+        relative_path = PurePosixPath(Path(str(file_name or "cut.png")).name)
+    candidate = str(relative_path)
+    if candidate not in used:
+        return candidate
+    path = PurePosixPath(candidate)
+    stem = path.stem or "cut"
+    suffix = path.suffix or ".png"
+    parent = "" if str(path.parent) == "." else f"{path.parent}/"
+    index = 1
+    while f"{parent}{stem}-{index}{suffix}" in used:
+        index += 1
+    return f"{parent}{stem}-{index}{suffix}"
+
+
+def _safe_zip_relative_path(value: str) -> PurePosixPath | None:
+    raw = normalize_zip_path(str(value or "").strip()).replace("\\", "/")
+    if not raw:
+        return None
+    path = PurePosixPath(raw)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path
+
+
+@contextmanager
+def _open_output_asset_stream(entry: dict) -> Iterator[BinaryIO]:
+    if entry.get("storageBackend") == "s3":
+        from backend.app.services import studio_api_service
+
+        with studio_api_service.s3_asset_storage().open_read(str(entry.get("storageKey") or "")) as source:
+            yield source
+        return
+
+    path = Path(str(entry.get("storageKey") or ""))
+    with path.open("rb") as source:
+        yield source
+
+
+class _StreamBuffer:
+    def __init__(self) -> None:
+        self._parts: list[bytes] = []
+        self._position = 0
+
+    def write(self, data: bytes) -> int:
+        chunk = bytes(data)
+        if chunk:
+            self._parts.append(chunk)
+            self._position += len(chunk)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._position
+
+    def flush(self) -> None:
+        return None
+
+    def drain(self) -> Iterator[bytes]:
+        while self._parts:
+            yield self._parts.pop(0)
 
 
 def _paged_outputs(outputs: list[WebtoonCutOutput], *, page: int, page_size: int) -> dict:

@@ -8,6 +8,7 @@ import {
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { shellNavigate } from "../helpers/navigation";
+import { downloadProtectedAsset } from "../helpers/workflow";
 import { StudioRoute } from "../router";
 import { saveWebtoonCutHandoff } from "../state/durableWorkspace";
 
@@ -48,6 +49,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingDeleteJob, setPendingDeleteJob] = useState<WebtoonCutJobResponse | null>(null);
   const isHistoryMode = mode === "history";
 
   const selectedJob = useMemo(
@@ -233,11 +235,17 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       setNotice("진행 중인 작업은 삭제할 수 없습니다. 먼저 취소 또는 완료 후 삭제하세요.");
       return;
     }
-    if (!window.confirm(`"${job.displayName}" 컷 분할 이력을 삭제할까요? S3 원본과 컷 파일은 보존되고 이력 목록에서만 숨겨집니다.`)) return;
+    setPendingDeleteJob(job);
+  }
+
+  async function confirmDeleteHistoryJob() {
+    const job = pendingDeleteJob;
+    if (!job) return;
     setLoading(true);
     try {
       await apiClient.deleteWebtoonCutJob(job.jobId);
       setNotice("컷 분할 이력을 삭제했습니다. 원본과 컷 파일은 S3에 보존됩니다.");
+      setPendingDeleteJob(null);
       setOutputs([]);
       setSelectedOutputIds(new Set());
       setPreviewOutputId("");
@@ -245,6 +253,30 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       await refreshJobs();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "컷 분할 이력을 삭제하지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadSelectedOutputs() {
+    if (!selectedJob || !selectedOutputIds.size) {
+      setNotice("다운로드할 컷을 선택해주세요.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const selectedIds = [...selectedOutputIds];
+      if (selectedIds.length === 1) {
+        const output = outputs.find((item) => item.outputId === selectedIds[0]);
+        if (!output) throw new Error("선택한 컷을 현재 목록에서 찾을 수 없습니다.");
+        await downloadProtectedAsset(output.downloadUrl, output.displayPath.split("/").pop() || "webtoon-cut.png");
+      } else {
+        const blob = await apiClient.downloadWebtoonCutOutputsZip(selectedJob.jobId, selectedIds);
+        downloadBlob(blob, `${stripExtension(selectedJob.displayName)}_cuts_selected.zip`);
+      }
+      setNotice(`선택 컷 ${selectedIds.length}개 다운로드를 시작했습니다.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "선택 컷 다운로드에 실패했습니다.");
     } finally {
       setLoading(false);
     }
@@ -454,6 +486,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
 
               <div className="v3-webtoon-cut-pipelines">
                 <strong>선택 컷 {selectedOutputIds.size}개</strong>
+                <button className="v3-secondary-button" type="button" disabled={!selectedOutputIds.size || loading} onClick={() => void downloadSelectedOutputs()}>선택 컷 다운로드</button>
                 <button className="v3-primary-button" type="button" onClick={() => void handoff("grok")}>Grok 프롬프트 화면으로 보내기</button>
                 <button className="v3-secondary-button v3-webtoon-cut-batch-button" type="button" onClick={() => void handoff("batch")}>Batch 처리 화면으로 보내기</button>
               </div>
@@ -461,6 +494,21 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
           </div>
         </section>
       )}
+      {pendingDeleteJob ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3WebtoonCutDeleteTitle" onClick={() => !loading && setPendingDeleteJob(null)}>
+          <div className="v3-modal-panel v3-webtoon-cut-delete-modal" onClick={(event) => event.stopPropagation()}>
+            <h2 id="v3WebtoonCutDeleteTitle" className="v3-modal-title">컷 분할 이력 삭제</h2>
+            <p className="v3-modal-body-text">
+              <strong>{pendingDeleteJob.displayName}</strong> 컷 분할 이력을 삭제할까요?
+              S3 원본과 컷 파일은 보존되고 이력 목록에서만 숨겨집니다.
+            </p>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => setPendingDeleteJob(null)}>취소</button>
+              <button className="v3-danger-button" type="button" disabled={loading} onClick={() => void confirmDeleteHistoryJob()}>삭제</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }
@@ -501,6 +549,17 @@ function describeSelectedFileStructure(
 
 function stripExtension(fileName: string): string {
   return fileName.replace(/\.[^.]+$/, "");
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName || "webtoon-cut-selected.zip";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function progressPercent(job: WebtoonCutJobResponse | null): number {

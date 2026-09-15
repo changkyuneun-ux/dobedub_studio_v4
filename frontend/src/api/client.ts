@@ -1769,6 +1769,11 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ outputIds })
     }),
+  downloadWebtoonCutOutputsZip: (jobId: string, outputIds: string[]) => {
+    const query = new URLSearchParams();
+    outputIds.forEach((outputId) => query.append("outputIds", outputId));
+    return requestBlob(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/download?${query.toString()}`);
+  },
   createBatchJob: (payload: { workflowId: string; sourceKind?: "webtoon_cut" | "asset_list"; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string; requestItemId?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
