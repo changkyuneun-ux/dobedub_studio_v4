@@ -160,7 +160,8 @@ network_config() {
   subnet="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].SubnetId' --output text)"
   sgs="$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --region "$AWS_REGION" --query 'NetworkInterfaces[0].Groups[*].GroupId' --output text | tr '\t' ',')"
   local public
-  public="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" --query 'services[0].networkConfiguration.awsvpcConfiguration.assignPublicIp' --output text)"
+  public="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
+    --query "services[0].deployments[?status=='PRIMARY'].networkConfiguration.awsvpcConfiguration.assignPublicIp | [0]" --output text)"
   echo "awsvpcConfiguration={subnets=[${subnet}],securityGroups=[${sgs}],assignPublicIp=${public:-DISABLED}}"
 }
 
