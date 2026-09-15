@@ -1,6 +1,26 @@
 import { GrokImagePromptDraftResponse, PromptGenerationBatchResponse, ResolutionTier, UploadResponse } from "../api/client";
 
 export type PromptUploadItem = UploadResponse & { requestedFrames: number };
+export type WebtoonCutHandoffTarget = "grok_prompt" | "batch";
+export type WebtoonCutHandoffItem = {
+  outputId: string;
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes?: number;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
+  downloadUrl: string;
+  sourceRelativePath: string;
+};
+export type WebtoonCutHandoffSnapshot = {
+  target: WebtoonCutHandoffTarget;
+  jobId: string;
+  inputAssetIds: string[];
+  sourceRelativePaths: string[];
+  items: WebtoonCutHandoffItem[];
+  createdAt: string;
+};
 
 export type PromptWorkspaceSnapshot = {
   workflowId: string;
@@ -54,6 +74,23 @@ export function loadRunpodWorkspace(userId: string): RunpodWorkspaceSnapshot {
 
 export function saveRunpodWorkspace(userId: string, snapshot: RunpodWorkspaceSnapshot) {
   save(`${prefix}.runpod.${userId}`, snapshot);
+}
+
+export function saveWebtoonCutHandoff(userId: string, snapshot: WebtoonCutHandoffSnapshot) {
+  save(`${prefix}.webtoon-cut-handoff.${userId}`, snapshot);
+}
+
+export function loadWebtoonCutHandoff(userId: string, target: WebtoonCutHandoffTarget): WebtoonCutHandoffSnapshot | null {
+  const snapshot = load<WebtoonCutHandoffSnapshot | null>(`${prefix}.webtoon-cut-handoff.${userId}`, null);
+  return snapshot?.target === target ? snapshot : null;
+}
+
+export function clearWebtoonCutHandoff(userId: string) {
+  try {
+    window.sessionStorage.removeItem(`${prefix}.webtoon-cut-handoff.${userId}`);
+  } catch {
+    // Browser storage is a convenience layer; failing to clear it must not block work.
+  }
 }
 
 export function promptWorkspaceFromBatch(batch: PromptGenerationBatchResponse): Pick<PromptWorkspaceSnapshot, "workflowId" | "drafts" | "batchId"> {

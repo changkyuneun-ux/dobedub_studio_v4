@@ -5,6 +5,7 @@ import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
 import { shellNavigate } from "../helpers/navigation";
 import { StudioRoute } from "../router";
+import { clearWebtoonCutHandoff, loadWebtoonCutHandoff, WebtoonCutHandoffSnapshot } from "../state/durableWorkspace";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; workflows: WorkflowItem[] };
 
@@ -110,6 +111,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [batchNegativePrompt, setBatchNegativePrompt] = useState("");
   const [instructionStatus, setInstructionStatus] = useState<{ configured: boolean; count: number } | null>(null);
   const [selectedZipFile, setSelectedZipFile] = useState<File | null>(null);
+  const [webtoonCutInput, setWebtoonCutInput] = useState<WebtoonCutHandoffSnapshot | null>(null);
   const [activeJobs, setActiveJobs] = useState<BatchJobResponse[]>([]);
   const [history, setHistory] = useState<BatchJobResponse[]>([]);
   const [workers, setWorkers] = useState<Array<{ workerId: string; workerName: string }>>([]);
@@ -165,6 +167,12 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   useEffect(() => {
     void refreshActive();
     void loadHistory(1);
+    const handoff = loadWebtoonCutHandoff(user.id, "batch");
+    if (handoff?.items.length) {
+      setWebtoonCutInput(handoff);
+      clearWebtoonCutHandoff(user.id);
+      setNotice(`컷 분할 이력에서 ${handoff.items.length}개 컷을 Batch 입력으로 연결했습니다. 워크플로우 선택 후 작업 요청하세요.`);
+    }
   }, []);
 
   useEffect(() => {
@@ -297,11 +305,15 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       return;
     }
     setSelectedZipFile(file);
+    if (file) {
+      setWebtoonCutInput(null);
+    }
     setNotice(file ? "" : "선택된 ZIP 파일이 없습니다.");
   }
 
   function resetBatchCreation() {
     setSelectedZipFile(null);
+    setWebtoonCutInput(null);
     setRequestedFrames(DEFAULT_REQUESTED_FRAMES);
     setResolutionTier("sd");
     setBatchNegativePrompt(workflowDefaultNegativePrompt);
@@ -312,8 +324,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   }
 
   function requestBatchConfirmation() {
-    if (!workflowId || !selectedZipFile) {
-      setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
+    if (!workflowId || (!selectedZipFile && !webtoonCutInput?.items.length)) {
+      setNotice("워크플로우와 ZIP 파일 또는 컷 분할 입력을 먼저 선택하세요.");
       return;
     }
     if (!instructionStatus?.configured) {
@@ -325,8 +337,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   }
 
   async function startBatch() {
-    if (!workflowId || !selectedZipFile) {
-      setNotice("워크플로우와 ZIP 파일을 먼저 선택하세요.");
+    if (!workflowId || (!selectedZipFile && !webtoonCutInput?.items.length)) {
+      setNotice("워크플로우와 ZIP 파일 또는 컷 분할 입력을 먼저 선택하세요.");
       return;
     }
     if (!instructionStatus?.configured) {
@@ -336,14 +348,29 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     setBusy(true);
     setNotice("");
     try {
-      const created = await apiClient.createBatchJobFromZip({
-        workflowId,
-        requestedFrames,
-        resolutionTier,
-        negativePrompt: batchNegativePrompt,
-        file: selectedZipFile
-      });
+      const created = webtoonCutInput?.items.length
+        ? await apiClient.createBatchJob({
+            workflowId,
+            requestedFrames,
+            resolutionTier,
+            negativePrompt: batchNegativePrompt,
+            sourceDirName: `webtoon-cut-${webtoonCutInput.jobId}`,
+            items: webtoonCutInput.items.map((item, index) => ({
+              assetId: item.assetId,
+              fileName: item.fileName,
+              relativePath: item.sourceRelativePath || item.fileName,
+              requestItemId: item.outputId || `cut_${index + 1}`,
+            }))
+          })
+        : await apiClient.createBatchJobFromZip({
+            workflowId,
+            requestedFrames,
+            resolutionTier,
+            negativePrompt: batchNegativePrompt,
+            file: selectedZipFile!
+          });
       setSelectedZipFile(null);
+      setWebtoonCutInput(null);
       if (zipInput.current) {
         zipInput.current.value = "";
       }
@@ -378,6 +405,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   }
 
   const selectedZipSummary = fileSizeLabel(selectedZipFile);
+  const batchInputReady = Boolean(selectedZipFile || webtoonCutInput?.items.length);
   const firstItemIndex = history.length ? (page - 1) * PAGE_SIZE + 1 : 0;
   const lastItemIndex = history.length ? Math.min(total, page * PAGE_SIZE) : 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -420,9 +448,9 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <div className={`v3-batch-linked-state${instructionMissing ? " is-error" : ""}`}>{instructionConfigured ? `지시문 연결됨 (${instructionStatus?.count || 0})` : "지시문 없음"}</div>
           </div>
           <button className="v3-batch-folder-card" type="button" onClick={() => zipInput.current?.click()}>
-            <span>작업 ZIP</span>
-            <strong>{selectedZipFile?.name || "ZIP 파일 선택"}</strong>
-            <small>{selectedZipSummary}</small>
+            <span>작업 입력</span>
+            <strong>{webtoonCutInput?.items.length ? `컷 분할 입력 ${webtoonCutInput.items.length}개` : selectedZipFile?.name || "ZIP 파일 선택"}</strong>
+            <small>{webtoonCutInput?.items.length ? `webtoon-cut-${webtoonCutInput.jobId}` : selectedZipSummary}</small>
           </button>
           <input
             className="v3-batch-hidden-input"
@@ -455,10 +483,10 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <small>{resolutionTier === "hd" ? "최대 921K px" : "기본 409K px"}</small>
           </div>
           <div className="v3-batch-create-action">
-            <button className="v3-primary-button" type="button" disabled={busy || !selectedZipFile || !instructionStatus?.configured} onClick={requestBatchConfirmation}>
+            <button className="v3-primary-button" type="button" disabled={busy || !batchInputReady || !instructionStatus?.configured} onClick={requestBatchConfirmation}>
               작업 요청
             </button>
-            <small>{selectedZipFile ? selectedZipFile.name : `${formatFrameDuration(requestedFrames, workflowId)} · ${resolutionTier.toUpperCase()}`}</small>
+            <small>{webtoonCutInput?.items.length ? `컷 ${webtoonCutInput.items.length}개` : selectedZipFile ? selectedZipFile.name : `${formatFrameDuration(requestedFrames, workflowId)} · ${resolutionTier.toUpperCase()}`}</small>
           </div>
           <label className="v3-batch-negative-card">
             <span>Built-in Negative Prompt</span>

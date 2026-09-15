@@ -8,8 +8,12 @@ export function shellNavigate(key: string, onGoTo: (route: StudioRoute) => void)
     onGoTo("home.dashboard");
   } else if (key === "workspace" || key === "promptManagement") {
     onGoTo("create.promptManagement");
+  } else if (key === "webtoonCutSplit") {
+    onGoTo("webtoonCuts.split");
+  } else if (key === "webtoonCutHistory") {
+    onGoTo("webtoonCuts.history");
   } else if (key === "webtoonCuts") {
-    onGoTo("webtoonCuts");
+    onGoTo("webtoonCuts.split");
   } else if (key === "batchJobs") {
     onGoTo("create.batchJobs");
   } else if (key === "runpodRequests") {

@@ -84,6 +84,8 @@ export type StudioRoute =
   // 콘솔 전환 버튼의 기본 도착지.
   | "admin.dashboard"
   | "webtoonCuts"
+  | "webtoonCuts.split"
+  | "webtoonCuts.history"
   | "create.load"
   | "create.promptManagement"
   | "create.batchJobs"
@@ -131,6 +133,8 @@ const ROUTE_PATH: Record<StudioRoute, string> = {
   "access.manual": "/studio/access/manual",
   "home.dashboard": "/studio/home",
   "webtoonCuts": "/studio/webtoon-cuts",
+  "webtoonCuts.split": "/studio/webtoon-cuts/split",
+  "webtoonCuts.history": "/studio/webtoon-cuts/history",
   "create.load": "/studio/create/load",
   "create.promptManagement": "/studio/create/prompts",
   "create.batchJobs": "/studio/create/batch-jobs",

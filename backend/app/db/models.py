@@ -144,6 +144,146 @@ class Asset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
 
 
+class WebtoonCutJob(Base):
+    __tablename__ = "webtoon_cut_jobs"
+    __table_args__ = (
+        Index("ix_webtoon_cut_jobs_created_by_status", "created_by", "status"),
+        Index("ix_webtoon_cut_jobs_created_at_id", "created_at", "id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    input_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id"), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    safe_stem: Mapped[str] = mapped_column(String(191), nullable=False)
+    total_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    generated_cut_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_required_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_unit_label: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    manifest_asset_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("assets.id"), nullable=True)
+    summary_asset_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("assets.id"), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+    source_asset: Mapped[Asset] = relationship(foreign_keys=[source_asset_id])
+    sources: Mapped[list["WebtoonCutSource"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    units: Mapped[list["WebtoonCutUnit"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    outputs: Mapped[list["WebtoonCutOutput"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    downloads: Mapped[list["WebtoonCutDownload"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+
+class WebtoonCutSource(Base):
+    __tablename__ = "webtoon_cut_sources"
+    __table_args__ = (
+        Index("ix_webtoon_cut_sources_job_order", "job_id", "sort_index"),
+        Index("ix_webtoon_cut_sources_display_path", "display_path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), ForeignKey("webtoon_cut_jobs.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id"), nullable=False)
+    input_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    zip_entry_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    safe_stem: Mapped[str] = mapped_column(String(191), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(191), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sort_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+
+    job: Mapped[WebtoonCutJob] = relationship(back_populates="sources")
+    asset: Mapped[Asset] = relationship()
+
+
+class WebtoonCutUnit(Base):
+    __tablename__ = "webtoon_cut_units"
+    __table_args__ = (
+        Index("ix_webtoon_cut_units_job_status", "job_id", "status"),
+        Index("ix_webtoon_cut_units_job_order", "job_id", "source_id", "page_number", "unit_index"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), ForeignKey("webtoon_cut_jobs.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(64), ForeignKey("webtoon_cut_sources.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    unit_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    display_label: Mapped[str] = mapped_column(String(512), nullable=False)
+    render_asset_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("assets.id"), nullable=True)
+    debug_asset_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("assets.id"), nullable=True)
+    detected_cut_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    flags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+    job: Mapped[WebtoonCutJob] = relationship(back_populates="units")
+    source: Mapped[WebtoonCutSource] = relationship()
+
+
+class WebtoonCutOutput(Base):
+    __tablename__ = "webtoon_cut_outputs"
+    __table_args__ = (
+        Index("ix_webtoon_cut_outputs_job_page_cut", "job_id", "page_number", "cut_index"),
+        Index("ix_webtoon_cut_outputs_job_status", "job_id", "status"),
+        Index("ix_webtoon_cut_outputs_display_path", "display_path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), ForeignKey("webtoon_cut_jobs.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("webtoon_cut_sources.id", ondelete="CASCADE"), nullable=True)
+    unit_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("webtoon_cut_units.id", ondelete="SET NULL"), nullable=True)
+    asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready", index=True)
+    display_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cut_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    used_in_prompt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    used_in_batch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    i2v_result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+
+    job: Mapped[WebtoonCutJob] = relationship(back_populates="outputs")
+    asset: Mapped[Asset] = relationship()
+
+
+class WebtoonCutDownload(Base):
+    __tablename__ = "webtoon_cut_downloads"
+    __table_args__ = (
+        Index("ix_webtoon_cut_downloads_job_created", "job_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), ForeignKey("webtoon_cut_jobs.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id"), nullable=False)
+    selection_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+
+    job: Mapped[WebtoonCutJob] = relationship(back_populates="downloads")
+    asset: Mapped[Asset] = relationship()
+
+
 class Collection(Base):
     # A-02: 자산을 묶는 사용자 컬렉션(화면 5c). created_by는 audit_logs.actor_id와
     # 같은 이유로 users.id에 FK를 걸지 않는다(느슨한 참조).

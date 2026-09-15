@@ -68,7 +68,8 @@ const HOME_NAV_ITEMS: NavItem[] = [
 ];
 
 const LOCAL_NAV_ITEMS: NavItem[] = [
-  { key: "webtoonCuts", label: "이미지 컷 분할", permission: "jobs:run" }
+  { key: "webtoonCutSplit", label: "컷 분할 처리", permission: "jobs:run" },
+  { key: "webtoonCutHistory", label: "컷 분할 이력", permission: "jobs:run" }
 ];
 
 // ADMIN 영역: design_handoff "4 Admin.dc.html" 사이드바 공통 상단.
@@ -101,18 +102,20 @@ export type AppShellAreaKey = "home" | "local" | "generate" | "admin";
 
 export const AREA_META: Record<AppShellAreaKey, { label: string; description: string }> = {
   home: { label: "HOME", description: "시스템 상태 · 작업 현황" },
-  local: { label: "LOCAL", description: "브라우저 로컬 처리 · 서버 업로드 없음" },
+  local: { label: "IMAGE CUT", description: "S3 업로드 · 서버 컷 분리 · 로컬 다운로드" },
   generate: { label: "GENERATE", description: "영상 생성 · 검수 작업 영역" },
   admin: { label: "ADMIN", description: "권한 · 워크플로 · 인프라 운영" }
 };
 
-const GROUP_AREA: Record<string, AppShellAreaKey | null> = { HOME: "home", LOCAL: "local", GENERATE: "generate", ADMIN: "admin", HELP: null };
+const GROUP_AREA: Record<string, AppShellAreaKey | null> = { HOME: "home", LOCAL: "local", "이미지 컷 관리": "local", GENERATE: "generate", ADMIN: "admin", HELP: null };
 
 function NavIcon({ name }: { name: string }) {
   const common = { width: 15, height: 15, viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   switch (name) {
     case "dashboard": return <svg {...common}><path d="M2 6.6 7 2.4l5 4.2" /><path d="M3.4 7.6v4h7.2v-4" /></svg>;
-    case "webtoonCuts": return <svg {...common}><rect x="1.8" y="1.8" width="10.4" height="10.4" rx="2" /><line x1="7" y1="2" x2="7" y2="12" strokeDasharray="2 2" /></svg>;
+    case "webtoonCuts":
+    case "webtoonCutSplit":
+    case "webtoonCutHistory": return <svg {...common}><rect x="1.8" y="1.8" width="10.4" height="10.4" rx="2" /><line x1="7" y1="2" x2="7" y2="12" strokeDasharray="2 2" /></svg>;
     case "taskHistory": return <svg {...common}><line x1="2" y1="3.2" x2="12" y2="3.2" /><line x1="2" y1="7" x2="12" y2="7" /><line x1="2" y1="10.8" x2="8.4" y2="10.8" /></svg>;
     case "batchJobs": return <svg {...common}><rect x="1.6" y="1.6" width="5" height="5" rx="1" /><rect x="7.6" y="1.6" width="5" height="5" rx="1" /><rect x="1.6" y="7.6" width="5" height="5" rx="1" /><rect x="7.6" y="7.6" width="5" height="5" rx="1" /></svg>;
     case "promptManagement": return <svg {...common}><rect x="1.8" y="2.4" width="10.4" height="8" rx="2" /><line x1="4.2" y1="5.4" x2="9.8" y2="5.4" /><line x1="4.2" y1="7.8" x2="7.6" y2="7.8" /></svg>;
@@ -168,7 +171,7 @@ export function AppShell({
     ? [{ label: "HOME", items: HOME_NAV_ITEMS }, { label: "ADMIN", items: ADMIN_NAV_ITEMS }]
     : [
       { label: "HOME", items: HOME_NAV_ITEMS },
-      { label: "LOCAL", items: LOCAL_NAV_ITEMS },
+      { label: "이미지 컷 관리", items: LOCAL_NAV_ITEMS },
       { label: "GENERATE", items: GENERATE_NAV_ITEMS }
     ];
   const visibleNavGroups = navGroups.map((group) => ({
@@ -210,12 +213,6 @@ export function AppShell({
             동작을 더 눈에 띄게 한다. */}
         {/* 2026-09-13: area="local"(이미지 컷 분할)에서도 전환 버튼이 사라지지 않도록
             generate 한정 → admin이 아닌 모든 영역으로 완화(사용자 리포트). */}
-        {/* 영역 헤더 블록(지침 §3): 현재 영역 배지 + 1줄 설명. 영역이 무엇인지 문장으로 1회 선언. */}
-        <div className="v3-sidebar-area">
-          <div className="v3-sidebar-area-label"><NavIcon name={currentArea === "home" ? "dashboard" : currentArea === "local" ? "webtoonCuts" : currentArea === "admin" ? "adminRoles" : "runpodRequests"} /><span>{areaMeta.label}</span></div>
-          <span className="v3-sidebar-area-desc">{areaMeta.description}</span>
-        </div>
-
         {visibleNavGroups.map((group) => {
           const groupArea = GROUP_AREA[group.label] ?? null;
           const isCurrentGroup = groupArea === currentArea;
