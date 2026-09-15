@@ -117,7 +117,20 @@ def fetch_serverless_billing_daily(
         "endTime": end_time,
     })
     url = f"{BILLING_BASE_URL}/billing/serverless?{query}"
-    request = urllib.request.Request(url, method="GET", headers={"Authorization": f"Bearer {api_key}"})
+    # 2026-09-15 실사용 중 발견: api.runpod.io는 Cloudflare 봇 차단이 걸려 있어
+    # User-Agent 없이(Python urllib 기본값) 요청하면 "HTTP 403 error code: 1010"
+    # (Cloudflare가 자동화 클라이언트로 판단해 차단)로 거부된다. 잡 제출에 쓰는
+    # api.runpod.ai(runpod_headers() 위)는 이 보호가 없어 지금까지 드러나지
+    # 않았던 문제 - 여기만 브라우저형 User-Agent/Accept를 명시해 우회한다.
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; dobedub-studio-dashboard/1.0; +https://dobedub.io)",
+        },
+    )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
