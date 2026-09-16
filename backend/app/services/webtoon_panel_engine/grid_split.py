@@ -5,9 +5,17 @@ import sys
 
 from backend.app.services.webtoon_panel_engine.reading_order import order_reading_sequence
 
-def get_line_components(mask, axis):
+# 거터(컷 사이 여백) 판정 기준 — 원본 batch_split/grid_split 기준.
+GUTTER_WHITE_THR = 200
+GUTTER_MIN_FRAC = 0.75
+GUTTER_MIN_BAND = 1
+
+
+def get_line_components(mask, axis, max_line_thick=20, edge_half=4):
     """axis='h' -> horizontal line segments, axis='v' -> vertical line segments.
-    Returns list of dicts: {pos, start, end, x0,y0,x1,y1}"""
+    Returns list of dicts: {pos, start, end, x0,y0,x1,y1}
+    테두리선에 어두운 그림/말풍선 일부가 맞닿아 두꺼운 성분으로 합쳐지면 중심 좌표가
+    실제 컷 경계에서 벗어난다. 두꺼운 성분은 중심 대신 양쪽 edge를 후보선으로 내보낸다."""
     num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     segs = []
     for i in range(1, num):
@@ -15,9 +23,13 @@ def get_line_components(mask, axis):
         if area < 20:
             continue
         if axis == 'h':
-            segs.append({'pos': y + h / 2, 'start': x, 'end': x + w, 'x0': x, 'y0': y, 'x1': x + w, 'y1': y + h})
+            poss = [y + h / 2] if h <= max_line_thick else [y + edge_half, y + h - edge_half]
+            for pos in poss:
+                segs.append({'pos': pos, 'start': x, 'end': x + w, 'x0': x, 'y0': y, 'x1': x + w, 'y1': y + h})
         else:
-            segs.append({'pos': x + w / 2, 'start': y, 'end': y + h, 'x0': x, 'y0': y, 'x1': x + w, 'y1': y + h})
+            poss = [x + w / 2] if w <= max_line_thick else [x + edge_half, x + w - edge_half]
+            for pos in poss:
+                segs.append({'pos': pos, 'start': y, 'end': y + h, 'x0': x, 'y0': y, 'x1': x + w, 'y1': y + h})
     return segs
 
 
@@ -92,12 +104,17 @@ def _ink_score(gray_v, sat, axis, pos, lo, hi, search=1):
     return best_score
 
 
-def _has_gutter(gray_v, axis, pos, lo, hi, min_off=3, max_off=70, white_thr=200, min_frac=0.75):
+def _has_gutter(gray_v, axis, pos, lo, hi, min_off=3, max_off=70, white_thr=None, min_frac=None,
+                min_band=None):
     """후보 테두리선 바로 옆에 흰 거터가 있는지 검사해 그림 속 선 오검출을 줄인다."""
+    white_thr = GUTTER_WHITE_THR if white_thr is None else white_thr
+    min_frac = GUTTER_MIN_FRAC if min_frac is None else min_frac
+    min_band = GUTTER_MIN_BAND if min_band is None else min_band
     lo, hi = int(lo), int(hi)
     p0 = int(round(pos))
     height, width = gray_v.shape
     for sign in (-1, 1):
+        run = 0
         for off in range(min_off, max_off + 1):
             p = p0 + sign * off
             if axis == 'h':
@@ -109,13 +126,17 @@ def _has_gutter(gray_v, axis, pos, lo, hi, min_off=3, max_off=70, white_thr=200,
                     break
                 v = gray_v[lo:hi, p]
             if len(v) and (v > white_thr).mean() >= min_frac:
-                return True
+                run += 1
+                if run >= min_band:
+                    return True
+            else:
+                run = 0
     return False
 
 
 def _line_thickness(gray_v, sat, axis, pos, lo, hi, step=5, reach=15):
     """후보선의 잉크 두께 중앙값. 실제 인쇄 컷 테두리와 그림 속 가는 선을 구분한다."""
-    ink = (gray_v < 100) & (sat < 20)
+    ink = (gray_v < 150) & (sat < 20)
     height, width = gray_v.shape
     p0 = int(round(pos))
     thicknesses = []
@@ -344,7 +365,7 @@ def _expand_to_nearby_ink(img, region, search_region, pad_frac=0.06):
     return (ex0 + ux0, ey0 + uy0, ex0 + ux1, ey0 + uy1)
 
 
-def _refine_to_border(img, leaf, pad_frac=0.06, min_keep_ratio=0.55, include_nearby_ink=True):
+def _refine_to_border(img, leaf, pad_frac=0.03, min_keep_ratio=0.55, include_nearby_ink=False):
     """재귀 분할로 얻은 leaf 영역을 실제 인쇄된 테두리 사각형에 맞춰 미세 조정.
     (한쪽 변의 구분선을 못 찾아 여백/캡션까지 포함되는 문제를 보정)"""
     h_img, w_img = img.shape[:2]
@@ -411,7 +432,7 @@ def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, de
 
     total_area = (x1 - x0) * (y1 - y0)
     ref_t = estimate_border_thickness(h_segs, v_segs, gray, sat, (x0, y0, x1, y1))
-    min_thick = max(2.0, ref_t * 0.8) if ref_t else max(3.0, h * 0.00135)
+    min_thick = max(2.0, ref_t * 0.65) if ref_t else max(3.0, h * 0.00135)
     regions = recursive_split((x0, y0, x1, y1), h_segs, v_segs, gray, sat, min_area_ratio, total_area, min_thick=min_thick)
 
     # 내용이 거의 없는(빈 여백/거터) 영역 제거
@@ -433,10 +454,10 @@ def split_panels(image_path, out_dir, inner_margin=None, min_area_ratio=0.02, de
     candidates = []
     for r in regions:
         if refine_borders:
-            border_r, ok = _refine_to_border(img, r, include_nearby_ink=False)
+            border_r, ok = _refine_to_border(img, r)
         else:
             border_r, ok = r, False
-        final_r = _expand_to_nearby_ink(img, border_r, r) if ok else r
+        final_r = border_r if ok else r
         candidates.append((final_r, [r, border_r] if ok else [r]))
 
     regions = [

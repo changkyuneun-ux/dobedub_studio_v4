@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 
-def test_refine_to_border_preserves_nearby_speech_bubble_protrusion():
+def test_refine_to_border_does_not_expand_crop_to_speech_bubble_protrusion():
     from backend.app.services.webtoon_panel_engine.grid_split import _refine_to_border
 
     image = np.full((360, 520, 3), 255, dtype=np.uint8)
@@ -18,7 +18,7 @@ def test_refine_to_border_preserves_nearby_speech_bubble_protrusion():
     refined, ok = _refine_to_border(image, (100, 40, 480, 330))
 
     assert ok is True
-    assert refined[1] <= 30
+    assert refined[1] >= 110
 
 
 def test_dark_background_split_names_panels_by_visual_reading_order(tmp_path):
@@ -140,3 +140,28 @@ def test_science_book_page_016_matches_reference_batch_split_count(tmp_path):
         (3, 1032, 968),
         (4, 928, 967),
     ]
+
+
+def test_science_book_page_024_matches_reference_batch_split_count(tmp_path):
+    source_pdf = Path(
+        "/Users/changkyuneun/Downloads/과학사 100 원본 2/"
+        "과학사_2권_내지_인쇄용_수정.pdf"
+    )
+    if not source_pdf.exists():
+        pytest.skip("local science book regression PDF is not available")
+
+    from backend.app.services.webtoon_panel_engine.runtime import process_pdf_page
+
+    result = process_pdf_page(source_pdf, page_number=24, output_dir=tmp_path / "page-024", dpi=300)
+
+    assert result.mode == "grid"
+    assert len(result.cuts) == 7
+    assert sorted((cut.width, cut.height) for cut in result.cuts) == sorted([
+        (752, 787),
+        (526, 1130),
+        (518, 1130),
+        (752, 404),
+        (1815, 607),
+        (767, 789),
+        (1041, 788),
+    ])

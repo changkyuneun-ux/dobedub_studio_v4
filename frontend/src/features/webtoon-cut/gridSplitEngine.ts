@@ -23,10 +23,10 @@ import type { PixelRegion } from "./types";
 type LineSeg = { pos: number; start: number; end: number };
 
 function isInkPixel(r: number, g: number, b: number): boolean {
-  // grid_split.py의 _line_thickness가 실제로 쓰는 기준과 동일: gray(BT.601)<100 && chroma<20.
+  // grid_split.py의 _line_thickness가 실제로 쓰는 기준과 동일: gray(BT.601)<150 && chroma<20.
   // (grid_split.py의 split_panels()는 "sat" 인자에 HSV saturation이 아니라 chroma(max-min)를
   // 넘긴다 - 순수 검정 근처에서 HSV saturation이 불안정하게 튀는 문제를 피하기 위함.)
-  return grayValue(r, g, b) < 100 && chroma(r, g, b) < 20;
+  return grayValue(r, g, b) < 150 && chroma(r, g, b) < 20;
 }
 
 export function pageMargin(image: ImageData): PixelRegion {
@@ -146,13 +146,23 @@ function labelComponents(
 
 /** grid_split.py의 get_line_components 포팅. */
 function getLineComponents(mask: Uint8Array, width: number, height: number, axis: "h" | "v"): LineSeg[] {
+  const maxLineThick = 20;
+  const edgeHalf = 4;
   const segs: LineSeg[] = [];
   for (const c of labelComponents(mask, width, height)) {
     if (c.area < 20) continue;
     if (axis === "h") {
-      segs.push({ pos: c.y0 + (c.y1 - c.y0) / 2, start: c.x0, end: c.x1 });
+      const componentHeight = c.y1 - c.y0;
+      const positions = componentHeight <= maxLineThick
+        ? [c.y0 + componentHeight / 2]
+        : [c.y0 + edgeHalf, c.y1 - edgeHalf];
+      positions.forEach((pos) => segs.push({ pos, start: c.x0, end: c.x1 }));
     } else {
-      segs.push({ pos: c.x0 + (c.x1 - c.x0) / 2, start: c.y0, end: c.y1 });
+      const componentWidth = c.x1 - c.x0;
+      const positions = componentWidth <= maxLineThick
+        ? [c.x0 + componentWidth / 2]
+        : [c.x0 + edgeHalf, c.x1 - edgeHalf];
+      positions.forEach((pos) => segs.push({ pos, start: c.y0, end: c.y1 }));
     }
   }
   return segs;
@@ -467,9 +477,9 @@ function expandToNearbyInk(image: ImageData, region: PixelRegion, searchRegion: 
 function refineToBorder(
   image: ImageData,
   leaf: PixelRegion,
-  padFrac = 0.06,
+  padFrac = 0.03,
   minKeepRatio = 0.55,
-  includeNearbyInk = true
+  includeNearbyInk = false
 ): { region: PixelRegion; ok: boolean } {
   const { width: wImg, height: hImg, data } = image;
   const { x0, y0, x1, y1 } = leaf;
@@ -529,7 +539,7 @@ export function detectGridRegions(image: ImageData): PixelRegion[] {
   const margin = pageMargin(image);
   const totalArea = (margin.x1 - margin.x0) * (margin.y1 - margin.y0);
   const refThickness = estimateBorderThickness(hSegs, vSegs, image, margin);
-  const minThick = refThickness ? Math.max(2, refThickness * 0.8) : Math.max(3, height * 0.00135);
+  const minThick = refThickness ? Math.max(2, refThickness * 0.65) : Math.max(3, height * 0.00135);
 
   const rawRegions = recursiveSplit(margin, hSegs, vSegs, image, PAGE_POLICY.minAreaRatio, totalArea, minThick);
 
