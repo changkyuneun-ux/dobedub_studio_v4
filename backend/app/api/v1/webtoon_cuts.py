@@ -104,6 +104,9 @@ def create_webtoon_cut_job(
     payload: dict,
     current_user: CurrentUser = Depends(require_permission("jobs:run")),
 ):
+    metadata = dict(payload.get("metadata") or {})
+    if payload.get("splitMode"):
+        metadata["splitMode"] = payload.get("splitMode")
     try:
         with SessionLocal() as session:
             return webtoon_cut_service.create_job(
@@ -111,7 +114,7 @@ def create_webtoon_cut_job(
                 source_asset_id=str(payload.get("assetId") or payload.get("sourceAssetId") or ""),
                 input_kind=str(payload.get("inputKind") or ""),
                 created_by=current_user.id,
-                metadata=dict(payload.get("metadata") or {}),
+                metadata=metadata,
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="원본 asset을 찾을 수 없습니다.") from exc

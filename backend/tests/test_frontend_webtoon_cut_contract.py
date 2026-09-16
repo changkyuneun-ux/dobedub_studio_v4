@@ -36,9 +36,17 @@ def test_webtoon_cut_is_top_level_image_cut_route_with_server_pipeline() -> None
 
 def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> None:
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
 
     assert "S3 업로드 · 서버 컷 분리 · I2V 입력 연결" in source
     assert "처리 구조" not in source
+    assert "splitMode" in source
+    assert "인쇄 만화 · grid 방식" in source
+    assert "어두운 배경 웹툰" in source
+    assert "v3-webtoon-cut-mode-choice" in source
+    assert "splitModeLabel(activeJob.splitMode)" in source
+    assert "splitModeLabel(job.splitMode)" in source
+    assert "setSplitMode" in source
     assert "입력 구조 정보" in source
     assert "상대경로" in source
     assert "원본 이미지 수" in source
@@ -47,6 +55,8 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
     assert "presignWebtoonCutUpload" in source
     assert "completeWebtoonCutUpload" in source
     assert "createWebtoonCutJob" in source
+    assert "splitMode," in source
+    assert "splitMode?: WebtoonCutSplitMode" in client
     assert "cancelWebtoonCutJob" in source
     assert '{isRunning ? "작업 취소" : "작업 요청"}' in source
     assert "PDF · ZIP · JPG · PNG · WEBP · GIF" in source

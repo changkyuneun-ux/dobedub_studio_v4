@@ -116,6 +116,43 @@ def test_process_job_marks_job_failed_when_worker_step_raises(db_session, tmp_pa
     assert "synthetic split failure" in job.error_message
 
 
+def test_process_image_job_passes_job_split_mode_to_runtime(db_session, tmp_path, monkeypatch):
+    from backend.app.services import webtoon_cut_worker
+
+    db_session.add(_source_asset())
+    job = _running_job("wcut_dark_mode_test")
+    job.input_kind = "image"
+    job.metadata_json = {
+        "displayStem": "dark-scroll",
+        "createdBy": "user_1",
+        "splitMode": "dark-webtoon",
+    }
+    db_session.add(job)
+    db_session.commit()
+    source = tmp_path / "dark-scroll.png"
+    source.write_bytes(b"png")
+    seen = []
+    cut_path = tmp_path / "panel-01.png"
+    cut_path.write_bytes(b"png")
+
+    def fake_process_image_file(image_path, *, output_dir, page_number=None, split_mode="print"):
+        seen.append((Path(image_path).name, page_number, split_mode))
+        return RenderedUnitResult(
+            page_number=page_number,
+            cuts=[CutResult(path=cut_path, cut_index=1, width=72, height=36, flags=[])],
+            debug_overlay_path=None,
+            mode="dark_bg",
+            flags=[],
+        )
+
+    monkeypatch.setattr(webtoon_cut_worker, "process_image_file", fake_process_image_file)
+    monkeypatch.setattr(webtoon_cut_worker, "s3_asset_storage", lambda: _FakeStorage())
+
+    webtoon_cut_worker._process_image_job("wcut_dark_mode_test", source, tmp_path)
+
+    assert seen == [("dark-scroll.png", None, "dark-webtoon")]
+
+
 def test_zip_unit_count_includes_pdf_pages_and_supported_images(tmp_path, monkeypatch):
     from backend.app.services import webtoon_cut_worker
 

@@ -34,20 +34,40 @@ def page_count(pdf_path: Path) -> int:
     raise RuntimeError(f"pdfinfo failed: {pdf_path}")
 
 
-def process_pdf_page(pdf_path: Path, *, page_number: int, output_dir: Path, dpi: int = 300) -> RenderedUnitResult:
+def process_pdf_page(
+    pdf_path: Path,
+    *,
+    page_number: int,
+    output_dir: Path,
+    dpi: int = 300,
+    split_mode: str = "print",
+) -> RenderedUnitResult:
     tmpdir = Path(tempfile.mkdtemp(prefix="webtoon_pdf_page_"))
     try:
         rendered = _render_page(pdf_path, page_number, dpi=dpi, tmpdir=tmpdir)
-        return process_image_file(rendered, output_dir=output_dir, page_number=page_number)
+        return process_image_file(rendered, output_dir=output_dir, page_number=page_number, split_mode=split_mode)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def process_image_file(image_path: Path, *, output_dir: Path, page_number: int | None = None) -> RenderedUnitResult:
+def process_image_file(
+    image_path: Path,
+    *,
+    output_dir: Path,
+    page_number: int | None = None,
+    split_mode: str = "print",
+) -> RenderedUnitResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     panel_tmp = Path(tempfile.mkdtemp(prefix="webtoon_panels_"))
     try:
-        from backend.app.services.webtoon_panel_engine.batch_split import split_panels
+        if split_mode == "dark-webtoon":
+            from backend.app.services.webtoon_panel_engine.dark_bg_split import split_panels
+
+            mode = "dark_bg"
+        else:
+            from backend.app.services.webtoon_panel_engine.batch_split import split_panels
+
+            mode = "grid"
 
         saved = [Path(path) for path in split_panels(str(image_path), str(panel_tmp), debug=True)]
         flags: list[str] = []
@@ -82,7 +102,7 @@ def process_image_file(image_path: Path, *, output_dir: Path, page_number: int |
             page_number=page_number,
             cuts=cuts,
             debug_overlay_path=debug_target,
-            mode="grid",
+            mode=mode,
             flags=flags,
         )
     finally:

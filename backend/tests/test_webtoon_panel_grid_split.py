@@ -45,6 +45,30 @@ def test_runtime_routes_panel_detection_through_batch_split_entrypoint(tmp_path,
     assert [(cut.cut_index, cut.width, cut.height) for cut in result.cuts] == [(1, 60, 40)]
 
 
+def test_runtime_routes_dark_background_mode_through_dark_split_entrypoint(tmp_path, monkeypatch):
+    from backend.app.services.webtoon_panel_engine import dark_bg_split
+    from backend.app.services.webtoon_panel_engine.runtime import process_image_file
+
+    source = tmp_path / "source.png"
+    image = np.full((120, 160, 3), 32, dtype=np.uint8)
+    cv2.imwrite(str(source), image)
+    called = []
+
+    def fake_split_panels(image_path: str, out_dir: str, debug: bool = False):
+        called.append((Path(image_path).name, debug))
+        panel = Path(out_dir) / "panel_01.png"
+        cv2.imwrite(str(panel), np.full((36, 72, 3), 180, dtype=np.uint8))
+        return [str(panel)]
+
+    monkeypatch.setattr(dark_bg_split, "split_panels", fake_split_panels, raising=False)
+
+    result = process_image_file(source, output_dir=tmp_path / "out", split_mode="dark-webtoon")
+
+    assert called == [("source.png", True)]
+    assert result.mode == "dark_bg"
+    assert [(cut.cut_index, cut.width, cut.height) for cut in result.cuts] == [(1, 72, 36)]
+
+
 def test_science_book_page_016_matches_reference_batch_split_count(tmp_path):
     source_pdf = Path(
         "/Users/changkyuneun/Downloads/과학사 100 원본/"

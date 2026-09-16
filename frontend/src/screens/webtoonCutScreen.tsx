@@ -3,7 +3,8 @@ import {
   apiClient,
   HealthResponse,
   WebtoonCutJobResponse,
-  WebtoonCutOutputItem
+  WebtoonCutOutputItem,
+  WebtoonCutSplitMode
 } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
@@ -30,6 +31,7 @@ const OUTPUTS_PAGE_SIZE = 50;
 export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [splitMode, setSplitMode] = useState<WebtoonCutSplitMode>("print");
   const [uploadedStorageKey, setUploadedStorageKey] = useState("");
   const [imageSizeLabel, setImageSizeLabel] = useState("서버 분석 후 확정");
   const [dragging, setDragging] = useState(false);
@@ -202,7 +204,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       const job = await apiClient.createWebtoonCutJob({
         assetId: uploaded.assetId,
         inputKind: inputKindFromFile(selectedFile),
-        metadata: { originalFileName: selectedFile.name }
+        splitMode,
+        metadata: { originalFileName: selectedFile.name, splitMode }
       });
       setActiveJob(job);
       setSelectedJobId(job.jobId);
@@ -364,11 +367,40 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
               <div className="v3-webtoon-cut-source-panel">
                 <label>입력 구조 정보</label>
                 <strong>{selectedFile ? selectedFile.name : "파일 선택 후 자동 표시"}</strong>
+                <div className="v3-webtoon-cut-mode" aria-label="컷 분리 방식">
+                  <label>컷 분리 방식</label>
+                  <div className="v3-webtoon-cut-mode-choice" role="radiogroup" aria-label="컷 분리 방식">
+                    <button
+                      className={`v3-webtoon-cut-mode-option${splitMode === "print" ? " is-active" : ""}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={splitMode === "print"}
+                      disabled={loading || isRunning}
+                      onClick={() => setSplitMode("print")}
+                    >
+                      <strong>인쇄 만화 · grid 방식</strong>
+                      <small>흰 배경 · 검은 컷 테두리 기준</small>
+                    </button>
+                    <button
+                      className={`v3-webtoon-cut-mode-option${splitMode === "dark-webtoon" ? " is-active" : ""}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={splitMode === "dark-webtoon"}
+                      disabled={loading || isRunning}
+                      onClick={() => setSplitMode("dark-webtoon")}
+                    >
+                      <strong>어두운 배경 웹툰</strong>
+                      <small>검정/진회색 배경 여백 기준</small>
+                    </button>
+                  </div>
+                </div>
+                <small>잘못 선택하면 오류 없이 페이지 전체가 1컷으로 저장될 수 있습니다.</small>
                 <div className="v3-webtoon-cut-source-grid">
                   <span>상대경로</span><b>{selectedFileStructure.inputRelativePath}</b>
                   <span>원본 이미지 수</span><b>{selectedFileStructure.sourceCountLabel}</b>
                   <span>파일 크기</span><b>{selectedFileStructure.fileSizeLabel}</b>
                   <span>원본 크기</span><b>{selectedFileStructure.imageSizeLabel}</b>
+                  <span>분리 방식</span><b>{splitModeLabel(splitMode)}</b>
                   <span>출력 구조</span><b>{selectedFileStructure.outputPolicyLabel}</b>
                   <span>S3 상대경로</span><b>{selectedFileStructure.s3RelativePath}</b>
                 </div>
@@ -393,7 +425,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
             <div className="v3-webtoon-cut-running">
               <div className="v3-webtoon-cut-progress">
                 <strong>{activeJob?.jobId || "CUT-대기"}</strong>
-                <span>{activeJob ? `${activeJob.displayName} · ${activeJob.currentUnitLabel || activeJob.status}` : "진행 중인 작업 없음"}</span>
+                <span>{activeJob ? `${activeJob.displayName} · ${splitModeLabel(activeJob.splitMode)} · ${activeJob.currentUnitLabel || activeJob.status}` : "진행 중인 작업 없음"}</span>
                 <div className="v3-webtoon-cut-progressbar"><i style={{ width: `${progressPercent(activeJob)}%` }} /></div>
                 <small>{activeJob ? `${activeJob.completedUnits} / ${activeJob.totalUnits || "-"} · ${progressPercent(activeJob)}%` : "0 / 0 · 0%"}</small>
               </div>
@@ -424,7 +456,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                 <div key={job.jobId} className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`}>
                   <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => { setSelectedJobId(job.jobId); void refreshOutputs(job.jobId); }}>
                     <strong>{job.displayName}</strong>
-                    <span>{job.status} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
+                    <span>{job.status} · {splitModeLabel(job.splitMode)} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
                   </button>
                   <span className="v3-webtoon-cut-job-actions">
                     <button
@@ -565,6 +597,10 @@ function downloadBlob(blob: Blob, fileName: string): void {
 function progressPercent(job: WebtoonCutJobResponse | null): number {
   if (!job?.totalUnits) return 0;
   return Math.min(100, Math.round((job.completedUnits / job.totalUnits) * 100));
+}
+
+function splitModeLabel(splitMode?: WebtoonCutSplitMode): string {
+  return splitMode === "dark-webtoon" ? "어두운 배경 웹툰" : "인쇄 만화 · grid 방식";
 }
 
 function usageLabel(output: WebtoonCutOutputItem): string {

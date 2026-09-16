@@ -100,17 +100,19 @@ def _process_pdf_job(
     zip_internal_relative_dir: str | None = None,
 ) -> None:
     total = page_count(pdf_path)
+    split_mode = "print"
     for page_number in range(1, total + 1):
         with SessionLocal() as session:
             job = session.get(WebtoonCutJob, job_id)
             if job is None or _job_should_stop(job):
                 return
+            split_mode = _job_split_mode(job)
             job.current_unit_label = f"page {page_number:03d}"
             job.updated_at = _now()
             session.commit()
         page_out = workdir / "pages" / f"{page_number:03d}"
         try:
-            result = process_pdf_page(pdf_path, page_number=page_number, output_dir=page_out)
+            result = process_pdf_page(pdf_path, page_number=page_number, output_dir=page_out, split_mode=split_mode)
             with SessionLocal() as session:
                 job = session.get(WebtoonCutJob, job_id)
                 if job is None or _job_should_stop(job):
@@ -137,14 +139,16 @@ def _process_image_job(
     zip_stem: str | None = None,
     zip_internal_relative_dir: str | None = None,
 ) -> None:
+    split_mode = "print"
     with SessionLocal() as session:
         job = session.get(WebtoonCutJob, job_id)
         if job is None or _job_should_stop(job):
             return
+        split_mode = _job_split_mode(job)
         job.current_unit_label = image_path.name
         job.updated_at = _now()
         session.commit()
-    result = process_image_file(image_path, output_dir=workdir / "image", page_number=None)
+    result = process_image_file(image_path, output_dir=workdir / "image", page_number=None, split_mode=split_mode)
     with SessionLocal() as session:
         job = session.get(WebtoonCutJob, job_id)
         if job is None or _job_should_stop(job):
@@ -271,6 +275,11 @@ def _store_cut_asset(session: Session, path: Path, *, rel_path: str, created_by:
     session.add(asset)
     session.flush()
     return asset
+
+
+def _job_split_mode(job: WebtoonCutJob) -> str:
+    value = str((job.metadata_json or {}).get("splitMode") or "print").strip()
+    return value if value in {"print", "dark-webtoon"} else "print"
 
 
 def _materialize_asset(asset: Asset, workdir: Path) -> Path:

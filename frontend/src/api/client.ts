@@ -542,12 +542,15 @@ export type WebtoonCutUploadPresignResponse = {
   headers: Record<string, string>;
 };
 
+export type WebtoonCutSplitMode = "print" | "dark-webtoon";
+
 export type WebtoonCutJobResponse = {
   jobId: string;
   status: string;
   inputKind: string;
   sourceAssetId: string;
   displayName: string;
+  splitMode: WebtoonCutSplitMode;
   totalUnits: number;
   completedUnits: number;
   generatedCutCount: number;
@@ -1758,7 +1761,7 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  createWebtoonCutJob: (payload: { assetId: string; inputKind: string; metadata?: Record<string, unknown> }) =>
+  createWebtoonCutJob: (payload: { assetId: string; inputKind: string; splitMode?: WebtoonCutSplitMode; metadata?: Record<string, unknown> }) =>
     requestJson<WebtoonCutJobResponse>("/api/webtoon-cuts/jobs", {
       method: "POST",
       body: JSON.stringify(payload)

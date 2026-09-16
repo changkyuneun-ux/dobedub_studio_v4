@@ -53,6 +53,25 @@ def test_create_job_blocks_second_active_job_for_same_user(db_session):
         raise AssertionError("expected active job guard")
 
 
+def test_create_job_persists_split_mode_in_metadata_and_payload(db_session):
+    from backend.app.services.webtoon_cut_service import create_job
+
+    db_session.add(_asset("asset_source", file_name="dark-scroll.png"))
+    db_session.commit()
+
+    payload = create_job(
+        db_session,
+        source_asset_id="asset_source",
+        input_kind="image",
+        created_by="user_1",
+        metadata={"splitMode": "dark-webtoon"},
+    )
+
+    job = db_session.get(WebtoonCutJob, payload["jobId"])
+    assert payload["splitMode"] == "dark-webtoon"
+    assert job.metadata_json["splitMode"] == "dark-webtoon"
+
+
 def test_cancel_job_sets_cancelled_terminal_status(db_session):
     from backend.app.services.webtoon_cut_service import cancel_job, create_job
 

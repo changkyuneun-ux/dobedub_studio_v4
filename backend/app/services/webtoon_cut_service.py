@@ -23,6 +23,7 @@ TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 REVIEW_REQUIRED_FLAGS = {"review_required", "thin", "many", "review_continuous", "missing_output", "error"}
 CHUNK_SIZE = 1024 * 1024
 ZIP_RESPONSE_HEADERS = {"Content-Encoding": "identity"}
+SPLIT_MODES = {"print", "dark-webtoon"}
 
 
 def create_job(
@@ -46,6 +47,7 @@ def create_job(
         raise ValueError("이미 진행 중인 컷 분할 작업이 있습니다. 완료 또는 취소 후 다시 요청하세요.")
     identity = make_source_identity(source.file_name)
     now = _now()
+    split_mode = _normalize_split_mode((metadata or {}).get("splitMode"))
     job = WebtoonCutJob(
         id=f"wcut_{uuid.uuid4().hex[:12]}",
         status="pending",
@@ -54,10 +56,11 @@ def create_job(
         display_name=identity.display_name,
         safe_stem=identity.safe_stem,
         metadata_json={
+            **(metadata or {}),
             "displayStem": identity.display_stem,
             "sourceStorageKey": source.storage_key,
             "createdBy": created_by,
-            **(metadata or {}),
+            "splitMode": split_mode,
         },
         created_by=created_by,
         created_at=now,
@@ -503,6 +506,7 @@ def _assert_asset_owner(asset: Asset, created_by: str) -> None:
 
 
 def _job_payload(job: WebtoonCutJob) -> dict:
+    metadata = job.metadata_json or {}
     return {
         "jobId": job.id,
         "status": job.status,
@@ -515,11 +519,17 @@ def _job_payload(job: WebtoonCutJob) -> dict:
         "reviewRequiredCount": job.review_required_count,
         "failedUnits": job.failed_units,
         "currentUnitLabel": job.current_unit_label,
+        "splitMode": _normalize_split_mode(metadata.get("splitMode")),
         "cancelRequestedAt": job.cancel_requested_at.isoformat() if job.cancel_requested_at else None,
         "createdBy": job.created_by,
         "createdAt": job.created_at.isoformat() if job.created_at else None,
         "updatedAt": job.updated_at.isoformat() if job.updated_at else None,
     }
+
+
+def _normalize_split_mode(value: object) -> str:
+    text = str(value or "print").strip()
+    return text if text in SPLIT_MODES else "print"
 
 
 def _output_payload(output: WebtoonCutOutput) -> dict:
