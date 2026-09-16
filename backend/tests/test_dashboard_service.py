@@ -12,6 +12,7 @@ from backend.app.services.dashboard_service import (
     RANGE_KEYS,
     _classify_status,
     _daily_volume,
+    _duration_cost_breakdown,
     _evaluate_alerts,
     _kst_day_range,
     _range_bounds,
@@ -239,6 +240,56 @@ def test_filter_options_lists_distinct_users_and_workflows(summary):
     workflow_ids = {item["id"] for item in options["workflows"]}
     assert {"u1", "u2"} <= user_ids
     assert {"wan22_i2v_720p.json", "character_ref_i2v.json"} <= workflow_ids
+
+
+def test_duration_cost_breakdown_separates_utc_and_kst_counts(db_session):
+    """RunPod cost rows stay UTC-billed, but job counts expose both UTC and KST days."""
+    db_session.add(User(id="duration_user", name="작업자", role="OPERATOR", permissions_json=[], is_active=True))
+    _task(
+        db_session,
+        "kst_only",
+        status="COMPLETED",
+        created=datetime(2026, 9, 15, 16, 0, 0),  # KST 2026-09-16, UTC 2026-09-15
+        workflow="1-images_10s_chain_81.json",
+        user_id="duration_user",
+    ).runpod_status_json = {"executionTime": 10_000}
+    _task(
+        db_session,
+        "utc_and_kst",
+        status="COMPLETED",
+        created=datetime(2026, 9, 16, 1, 0, 0),  # KST 2026-09-16
+        workflow="1-images_10s_chain_81.json",
+        user_id="duration_user",
+    ).runpod_status_json = {"executionTime": 10_000}
+    _task(
+        db_session,
+        "utc_only",
+        status="FAILED",
+        created=datetime(2026, 9, 16, 16, 0, 0),  # KST 2026-09-17
+        workflow="wan22_default_81.json",
+        user_id="duration_user",
+    ).runpod_status_json = {"executionTime": 5_000}
+    db_session.flush()
+
+    with patch(
+        "backend.app.services.dashboard_service._cached_serverless_billing",
+        return_value=({"2026-09-16": {"totalAmount": 12.0}}, None),
+    ):
+        result = _duration_cost_breakdown(
+            db_session,
+            get_settings(),
+            datetime(2026, 9, 16, 0, 0, 0),
+            datetime(2026, 9, 17, 0, 0, 0),
+        )
+
+    row = result["byDay"]["2026-09-16"]
+    assert row["submitted"] == 2
+    assert row["completed"] == 1
+    assert row["failed"] == 1
+    assert row["kst"] == {"submitted": 2, "completed": 2, "failed": 0}
+    assert row["totalCostUsd"] == 12.0
+    assert row["split"]["tenSec"]["count"] == 1
+    assert row["split"]["fiveSec"]["count"] == 1
 
 
 def test_alert_rules():

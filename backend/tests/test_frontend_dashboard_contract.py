@@ -90,3 +90,17 @@ def test_duration_cost_table_has_ten_row_pagination():
     assert "10건 / 페이지" in SCREEN
     assert "v3-dash-duration-pagination" in SCREEN
     assert ".v3-dash-duration-pagination" in STYLES
+
+
+def test_duration_cost_table_separates_utc_and_kst_counts_from_utc_costs():
+    assert "제출(UTC)" in SCREEN
+    assert "완료(UTC)" in SCREEN
+    assert "실패(UTC)" in SCREEN
+    assert "제출(KST)" in SCREEN
+    assert "완료(KST)" in SCREEN
+    assert "실패(KST)" in SCREEN
+    assert "row.kst.submitted" in SCREEN
+    assert "row.kst.completed" in SCREEN
+    assert "row.kst.failed" in SCREEN
+    assert "비용은 RunPod 청구 기준(UTC 캘린더일)" in SCREEN
+    assert "kst: DurationCostCount" in CLIENT

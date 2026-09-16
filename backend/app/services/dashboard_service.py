@@ -615,6 +615,15 @@ def _execution_seconds(status_json: dict | None) -> float:
         return 0.0
 
 
+def _kst_calendar_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
+    start_kst = datetime(day.year, day.month, day.day, tzinfo=SEOUL_TIMEZONE)
+    end_kst = start_kst + timedelta(days=1)
+    return (
+        start_kst.astimezone(UTC_TIMEZONE).replace(tzinfo=None),
+        end_kst.astimezone(UTC_TIMEZONE).replace(tzinfo=None),
+    )
+
+
 def _cached_serverless_billing(settings: Settings, since_day: date, until_day: date) -> tuple[dict[str, dict], str | None]:
     """RunPod 서버리스 일별 청구를 짧게 캐시한다(대시보드 응답마다 외부 호출 방지).
 
@@ -744,6 +753,38 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
             entry["count"][bucket] += 1
             entry["execSeconds"][bucket] += _execution_seconds(status_json)
 
+    # 비용은 RunPod billing API와 정확히 대조하기 위해 UTC 캘린더일 기준을 유지한다.
+    # 반면 운영자가 "오늘 몇 건"을 볼 때는 KST 달력일이 필요하므로, 같은 날짜 라벨
+    # (예: 2026-09-16)에 대해 별도 KST 건수도 함께 내려준다. KST 9/16은 UTC
+    # 9/15 15:00~9/16 15:00이므로, 아래 쿼리는 UTC 집계 범위와 일부러 다르다.
+    kst_counts: dict[str, dict[str, int]] = {
+        day: {"submitted": 0, "completed": 0, "failed": 0}
+        for day in day_keys
+    }
+    first_kst_start, _ = _kst_calendar_day_bounds_utc(date.fromisoformat(day_keys[0]))
+    _, last_kst_end = _kst_calendar_day_bounds_utc(date.fromisoformat(day_keys[-1]))
+    kst_rows = session.execute(
+        select(WorkflowTask.created_at, WorkflowTask.status).where(
+            _live_tasks(),
+            WorkflowTask.execution_mode == "runpod",
+            WorkflowTask.created_at >= first_kst_start,
+            WorkflowTask.created_at < last_kst_end,
+        )
+    ).all()
+    for created_at, status in kst_rows:
+        if created_at is None:
+            continue
+        day_key = created_at.replace(tzinfo=UTC_TIMEZONE).astimezone(SEOUL_TIMEZONE).date().isoformat()
+        entry = kst_counts.get(day_key)
+        if entry is None:
+            continue
+        entry["submitted"] += 1
+        status_kind = _classify_status(status)
+        if status_kind == "completed":
+            entry["completed"] += 1
+        elif status_kind == "failed":
+            entry["failed"] += 1
+
     since_day = date.fromisoformat(day_keys[0])
     until_day = date.fromisoformat(day_keys[-1])
     billing_by_day, billing_error = _cached_serverless_billing(settings, since_day, until_day)
@@ -770,6 +811,7 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
             "submitted": entry["submitted"],
             "completed": entry["completed"],
             "failed": entry["failed"],
+            "kst": kst_counts.get(day_key, {"submitted": 0, "completed": 0, "failed": 0}),
             "totalCostUsd": None if day_total_cost is None else round(day_total_cost, 4),
             "split": None,
         }

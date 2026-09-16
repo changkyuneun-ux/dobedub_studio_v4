@@ -354,11 +354,14 @@ export type DashboardFilterOption = { id?: string | null; name: string };
 // costUsd/totalCostUsd/costPerJobUsd가 null이면 "실제로 0원"이 아니라 RunPod
 // 빌링 조회 자체가 실패했다는 뜻 - billingError가 채워져 있으면 항상 이 상태다
 // (2026-09-15: 건수는 정상인데 비용만 전부 $0.00으로 보이던 버그의 수정).
+export type DurationCostCount = { submitted: number; completed: number; failed: number };
 export type DurationCostBucket = { count: number; costUsd: number | null };
 export type DurationCostDay = {
   submitted: number;
   completed: number;
   failed: number;
+  /** 같은 날짜 라벨의 KST 캘린더일 작업 건수. 비용은 계속 UTC billing row에만 연결된다. */
+  kst: DurationCostCount;
   totalCostUsd: number | null;
   split: { fiveSec: DurationCostBucket; tenSec: DurationCostBucket; unclassified: DurationCostBucket } | null;
 };

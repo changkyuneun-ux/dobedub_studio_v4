@@ -308,8 +308,8 @@ function Kpi({ label, value, sub, tone }: { label: string; value: React.ReactNod
 
 // 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분 카드
 // (spec: 대시보드 수정 설계 - 두비덥 스튜디오 v3 카드/테이블 스타일 재사용,
-// 2026-09-15 목업 UI 기준). durationCostBreakdown은 UTC 캘린더일 기준이라
-// 아래 "작업량 추이"(KST)와 자정 전후로 최대 하루 어긋날 수 있음 - 각주에 명시.
+// 2026-09-15 목업 UI 기준). 비용/5초·10초 비용 배분은 RunPod billing과 맞추기
+// 위해 UTC 캘린더일 기준을 유지하고, 작업 건수는 UTC/KST를 함께 노출한다.
 //
 // 통화 표기: RunPod 청구 원본 통화(USD)를 그대로 표시한다. 목업 초안은 KRW를
 // 우선 노출했으나, 이 카드의 핵심 요구사항이 "총액이 RunPod 청구와 정확히
@@ -373,9 +373,12 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
             <thead>
               <tr>
                 <th>날짜(UTC)</th>
-                <th className="is-right">제출</th>
-                <th className="is-right">완료</th>
-                <th className="is-right">실패</th>
+                <th className="is-right">제출(UTC)</th>
+                <th className="is-right">완료(UTC)</th>
+                <th className="is-right">실패(UTC)</th>
+                <th className="is-right">제출(KST)</th>
+                <th className="is-right">완료(KST)</th>
+                <th className="is-right">실패(KST)</th>
                 <th className="is-right">전체비용</th>
                 <th className="is-right is-group-5s">5초컷 건수</th>
                 <th className="is-right is-group-5s">5초컷 비용</th>
@@ -392,6 +395,9 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
                     <td className="is-right is-mono">{formatNumber(row.submitted)}</td>
                     <td className="is-right is-mono">{formatNumber(row.completed)}</td>
                     <td className="is-right is-mono">{formatNumber(row.failed)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.kst.submitted)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.kst.completed)}</td>
+                    <td className="is-right is-mono">{formatNumber(row.kst.failed)}</td>
                     <td className="is-right is-mono">{formatUsd(row.totalCostUsd)}</td>
                     {row.split ? (
                       <>
@@ -429,7 +435,7 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
       <div className="v3-dash-duration-footnote">
         <b>2026-09-09 이전(UTC)</b>은 10초컷 워크플로 데이터가 없어(0건, 실 프로덕션 확인) 5초컷/10초컷으로 나누지 않고 전체 제출·완료·실패 건수와 전체비용만 표기합니다.{" "}
         <b>2026-09-10부터</b>는 워크플로 종류로 구분하고, 그 날 RunPod 청구 총액을 각 그룹의 실측 GPU 실행시간(executionTime) 비율로 배분합니다 — 두 값의 합은 항상 그 날 전체비용과 일치합니다.
-        날짜는 RunPod 청구 기준(UTC 캘린더일)이라 위 "작업량 추이" 그래프의 날짜(KST)와 자정 전후로 최대 하루 어긋날 수 있습니다.
+        비용은 RunPod 청구 기준(UTC 캘린더일)으로 계산하고, 작업 건수는 같은 날짜 라벨의 UTC/KST 캘린더일 기준을 분리 표기합니다.
       </div>
     </div>
   );
