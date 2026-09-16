@@ -153,6 +153,14 @@ def test_process_image_job_passes_job_split_mode_to_runtime(db_session, tmp_path
     assert seen == [("dark-scroll.png", None, "dark-webtoon")]
 
 
+def test_webtoon_cut_zip_paths_are_repaired_before_output_naming():
+    from backend.app.services.webtoon_cut_naming import validate_zip_entry_path
+
+    mojibake = "OTT_6화/24화_001.png".encode("utf-8").decode("latin-1")
+
+    assert validate_zip_entry_path(mojibake) == "OTT_6화/24화_001.png"
+
+
 def test_zip_unit_count_includes_pdf_pages_and_supported_images(tmp_path, monkeypatch):
     from backend.app.services import webtoon_cut_worker
 

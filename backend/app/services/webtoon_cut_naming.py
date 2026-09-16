@@ -5,6 +5,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from backend.app.services.zip_encoding_service import normalize_zip_path
+
 
 _UNSAFE_SEGMENT_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _SUPPORTED_SOURCE_SUFFIXES = {
@@ -89,7 +91,7 @@ def output_relative_path(
 
 
 def validate_zip_entry_path(entry_name: str) -> str:
-    raw = str(entry_name or "").replace("\\", "/").strip()
+    raw = normalize_zip_path(str(entry_name or "")).replace("\\", "/").strip()
     if not raw:
         raise ValueError("ZIP entry path is empty")
     if raw.startswith("/"):
