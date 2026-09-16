@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   apiClient,
   BatchJobResponse,
@@ -249,6 +249,7 @@ export function Create3aScreen({
   const [runpodJobSearch, setRunpodJobSearch] = useState("");
   const [runpodSelectionLoading, setRunpodSelectionLoading] = useState(false);
   const [selectedPromptHistoryItem, setSelectedPromptHistoryItem] = useState<GrokImagePromptDraftResponse | null>(null);
+  const runpodHistoryListRef = useRef<HTMLDivElement | null>(null);
   const selectedBatchJobId = selectedBatchJob?.id || "";
   useEffect(() => {
     if (historyTab !== "runpod") return;
@@ -381,6 +382,10 @@ export function Create3aScreen({
     if (!nextItem) return;
     event.preventDefault();
     onSelect(nextItem);
+  };
+  const selectRunpodHistoryRow = (item: HistoryItem) => {
+    onSelect(item);
+    runpodHistoryListRef.current?.focus();
   };
   const toggleRunpodSelection = (taskId: string) => {
     setSelectedRunpodTaskIds((current) => current.includes(taskId)
@@ -780,6 +785,7 @@ export function Create3aScreen({
         </div>
       </div>
       <div
+        ref={runpodHistoryListRef}
         className="v3-card v3-runpod-history-table"
         role="listbox"
         aria-label="RunPod 작업 이력"
@@ -820,7 +826,7 @@ export function Create3aScreen({
               aria-selected={isSelected}
               className={`v3-review-table-row v3-history-row ${runpodRowToneClass(resultStatusTone)} ${isSelected ? "is-selected" : ""}`}
               style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID, cursor: "pointer" }}
-              onClick={() => onSelect(item)}
+              onClick={() => selectRunpodHistoryRow(item)}
             >
               <span>
                 {isTerminalHistoryStatus(item.status) ? (
@@ -1027,12 +1033,17 @@ function PromptGenerationHistory({
   const [promptBatchCandidateOpen, setPromptBatchCandidateOpen] = useState(false);
   const [selectedPromptHistoryDraftId, setSelectedPromptHistoryDraftId] = useState("");
   const [retryingDraftId, setRetryingDraftId] = useState("");
+  const promptHistoryListRef = useRef<HTMLDivElement | null>(null);
   const pageSize = 10;
   const selectedPromptBatchJobId = selectedPromptBatchJob?.id || "";
 
   function selectPromptHistoryItem(item: GrokImagePromptDraftResponse | null) {
     setSelectedPromptHistoryDraftId(item?.draftId || "");
     onSelectGrokItem(item);
+  }
+  function selectPromptHistoryRow(item: GrokImagePromptDraftResponse) {
+    selectPromptHistoryItem(item);
+    promptHistoryListRef.current?.focus();
   }
 
   async function loadPromptHistory(targetPage = page) {
@@ -1130,6 +1141,7 @@ function PromptGenerationHistory({
   return (
     <div className="v3-prompt-history-layout">
       <div
+        ref={promptHistoryListRef}
         className="v3-card v3-prompt-history-card"
         role="listbox"
         aria-label="프롬프트 생성 이력"
@@ -1203,7 +1215,7 @@ function PromptGenerationHistory({
             role="option"
             aria-selected={selectedPromptHistoryDraftId === item.draftId}
             onClick={() => {
-              selectPromptHistoryItem(item);
+              selectPromptHistoryRow(item);
             }}
           >
             <span className="v3-review-seg-name">{(page - 1) * pageSize + index + 1}</span>

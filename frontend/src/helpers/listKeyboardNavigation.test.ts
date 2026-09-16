@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextListSelectionId } from "./listKeyboardNavigation";
+import { isEditableKeyboardTarget, nextListSelectionId } from "./listKeyboardNavigation";
 
 describe("nextListSelectionId", () => {
   const items = [{ id: "a" }, { id: "b" }, { id: "c" }];
@@ -21,6 +21,20 @@ describe("nextListSelectionId", () => {
   });
 
   it("starts from the first item when current selection is not in the visible list", () => {
-    expect(nextListSelectionId(items, "missing", "ArrowDown", (item) => item.id)).toBe("b");
+    expect(nextListSelectionId(items, "missing", "ArrowDown", (item) => item.id)).toBe("a");
+  });
+
+  it("does not reserve arrow navigation for row buttons and checkboxes", () => {
+    expect(isEditableKeyboardTarget({ tagName: "BUTTON" } as unknown as EventTarget)).toBe(false);
+    expect(isEditableKeyboardTarget({ tagName: "INPUT", type: "checkbox" } as unknown as EventTarget)).toBe(false);
+    expect(isEditableKeyboardTarget({ tagName: "A" } as unknown as EventTarget)).toBe(false);
+  });
+
+  it("keeps arrow navigation inside text editing controls", () => {
+    expect(isEditableKeyboardTarget({ tagName: "INPUT", type: "text" } as unknown as EventTarget)).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "INPUT", type: "search" } as unknown as EventTarget)).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "SELECT" } as unknown as EventTarget)).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "TEXTAREA" } as unknown as EventTarget)).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "DIV", isContentEditable: true } as unknown as EventTarget)).toBe(true);
   });
 });

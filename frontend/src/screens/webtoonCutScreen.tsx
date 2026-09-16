@@ -31,6 +31,8 @@ const OUTPUTS_PAGE_SIZE = 50;
 
 export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props) {
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const jobListRef = useRef<HTMLDivElement | null>(null);
+  const outputListRef = useRef<HTMLDivElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [splitMode, setSplitMode] = useState<WebtoonCutSplitMode>("print");
   const [uploadedStorageKey, setUploadedStorageKey] = useState("");
@@ -343,6 +345,16 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     event.preventDefault();
     setPreviewOutputId(nextOutputId);
   }
+  function selectJobRow(jobId: string) {
+    setSelectedJobId(jobId);
+    jobListRef.current?.focus();
+    void refreshOutputs(jobId);
+  }
+
+  function selectOutputRow(outputId: string) {
+    setPreviewOutputId(outputId);
+    outputListRef.current?.focus();
+  }
 
   return (
     <AppShell
@@ -470,6 +482,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
 
           <div className="v3-webtoon-cut-history">
             <div
+              ref={jobListRef}
               className="v3-webtoon-cut-job-list"
               role="listbox"
               aria-label="컷 분할 작업 이력"
@@ -483,7 +496,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                   aria-selected={selectedJob?.jobId === job.jobId}
                   className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`}
                 >
-                  <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => { setSelectedJobId(job.jobId); void refreshOutputs(job.jobId); }}>
+                  <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => selectJobRow(job.jobId)}>
                     <strong>{job.displayName}</strong>
                     <span>{job.status} · {splitModeLabel(job.splitMode)} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
                   </button>
@@ -520,6 +533,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
 
               <div className={`v3-webtoon-cut-output-layout is-${viewMode}`}>
                 <div
+                  ref={outputListRef}
                   className="v3-webtoon-cut-output-list"
                   role="listbox"
                   aria-label="분리 컷 목록"
@@ -533,7 +547,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                       aria-selected={previewOutputId === output.outputId}
                       className={`v3-webtoon-cut-output-row${previewOutputId === output.outputId ? " is-preview" : ""}${selectedOutputIds.has(output.outputId) ? " is-selected" : ""}`}
                       type="button"
-                      onClick={() => setPreviewOutputId(output.outputId)}
+                      onClick={() => selectOutputRow(output.outputId)}
                     >
                       <input type="checkbox" checked={selectedOutputIds.has(output.outputId)} onChange={() => toggleOutput(output.outputId)} onClick={(event) => event.stopPropagation()} />
                       <RetryingCutThumbnail src={output.viewUrl} alt={output.displayPath} />

@@ -7,7 +7,9 @@ export function nextListSelectionId<T>(
   getId: (item: T) => string
 ): string {
   if (!isListNavigationKey(key) || !items.length) return selectedId;
-  const currentIndex = Math.max(0, items.findIndex((item) => getId(item) === selectedId));
+  const foundIndex = items.findIndex((item) => getId(item) === selectedId);
+  if (foundIndex < 0) return getId(items[0]);
+  const currentIndex = foundIndex;
   if (key === "Home") return getId(items[0]);
   if (key === "End") return getId(items[items.length - 1]);
   if (key === "ArrowDown") return getId(items[Math.min(items.length - 1, currentIndex + 1)]);
@@ -15,9 +17,14 @@ export function nextListSelectionId<T>(
 }
 
 export function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  return ["BUTTON", "INPUT", "SELECT", "TEXTAREA", "A"].includes(target.tagName);
+  if (!target || typeof target !== "object") return false;
+  const element = target as { tagName?: string; type?: string; isContentEditable?: boolean };
+  if (element.isContentEditable) return true;
+  const tagName = String(element.tagName || "").toUpperCase();
+  if (tagName === "TEXTAREA" || tagName === "SELECT") return true;
+  if (tagName !== "INPUT") return false;
+  const inputType = String(element.type || "text").toLowerCase();
+  return !["button", "checkbox", "radio", "reset", "submit"].includes(inputType);
 }
 
 function isListNavigationKey(key: string): key is ListNavigationKey {
