@@ -29,6 +29,7 @@ from backend.app.api.v1.sandbox_pod import router as sandbox_pod_router
 from backend.app.api.v1.dashboard import router as dashboard_router
 from backend.app.api.v1.segment_defaults import router as segment_defaults_router
 from backend.app.api.v1.system import router as system_router
+from backend.app.api.v1.webtoon_cuts import router as webtoon_cuts_router
 from backend.app.api.v1.workflows import router as workflows_router
 from backend.app.core.config import get_settings
 from backend.app.core.observability import ensure_request_id, observe_response
@@ -40,6 +41,7 @@ from backend.app.services.batch_job_service import promote_ready_batch_drafts, r
 from backend.app.services.prompt_batch_service import process_next_prompt_generation_draft
 from backend.app.services.request_item_recovery_service import materialize_orphan_request_items
 from backend.app.services.workflow_storage_service import bootstrap_workflow_store
+from backend.app.services.webtoon_cut_worker_runtime import monitor_webtoon_cut_jobs
 
 
 LOGGER = logging.getLogger(__name__)
@@ -111,12 +113,16 @@ async def _lifecycle(_: FastAPI):
             await asyncio.sleep(settings.task_monitor_interval_seconds)
 
     monitor_task = asyncio.create_task(monitor_loop(), name="task-status-monitor")
+    webtoon_cut_monitor_task = asyncio.create_task(monitor_webtoon_cut_jobs(), name="webtoon-cut-monitor")
     try:
         yield
     finally:
         monitor_task.cancel()
+        webtoon_cut_monitor_task.cancel()
         with suppress(asyncio.CancelledError):
             await monitor_task
+        with suppress(asyncio.CancelledError):
+            await webtoon_cut_monitor_task
 
 
 def create_app() -> FastAPI:
@@ -182,6 +188,7 @@ def create_app() -> FastAPI:
         system_router,
         sandbox_pod_router,
         dashboard_router,
+        webtoon_cuts_router,
     ]
     for prefix in (settings.api_prefix, "/api"):
         for router in api_routers:

@@ -26,6 +26,10 @@ COPY . .
 
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils poppler-data \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 RUN mkdir -p /app/data/uploads /app/data/outputs /app/data/reports /app/data/workflows /app/data/metadata

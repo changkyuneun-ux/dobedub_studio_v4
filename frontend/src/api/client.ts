@@ -347,6 +347,36 @@ export type DashboardDailyVolume = {
 
 export type DashboardFilterOption = { id?: string | null; name: string };
 
+// 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분 카드. UTC 캘린더일 기준(다른
+// 카드의 KST 일자와 최대 ~9시간 어긋날 수 있음 - RunPod 청구가 UTC일 단위라 총액
+// 정합성을 위해 UTC를 우선함). split이 없으면(null) 아직 5초/10초 구분 전
+// (2026-09-10 UTC 이전) 날짜로, 전체 제출/완료/실패/비용만 표시한다.
+// costUsd/totalCostUsd/costPerJobUsd가 null이면 "실제로 0원"이 아니라 RunPod
+// 빌링 조회 자체가 실패했다는 뜻 - billingError가 채워져 있으면 항상 이 상태다
+// (2026-09-15: 건수는 정상인데 비용만 전부 $0.00으로 보이던 버그의 수정).
+export type DurationCostBucket = { count: number; costUsd: number | null };
+export type DurationCostDay = {
+  submitted: number;
+  completed: number;
+  failed: number;
+  totalCostUsd: number | null;
+  split: { fiveSec: DurationCostBucket; tenSec: DurationCostBucket; unclassified: DurationCostBucket } | null;
+};
+export type DurationCostSummary = {
+  sinceUtc: string;
+  untilUtc: string;
+  fiveSec: DurationCostBucket & { costPerJobUsd?: number | null };
+  tenSec: DurationCostBucket & { costPerJobUsd?: number | null };
+  unclassified: DurationCostBucket & { costPerJobUsd?: number | null };
+};
+export type DashboardDurationCostBreakdown = {
+  byDay: Record<string, DurationCostDay>;
+  /** 구분 대상(09-10 UTC 이후) 날짜가 하나도 없으면 null */
+  summary: DurationCostSummary | null;
+  /** RunPod 빌링 API 조회 실패 사유(원인 문자열). 성공이면 null. */
+  billingError?: string | null;
+};
+
 export type DashboardSummary = {
   range: DashboardRange;
   since?: string | null;
@@ -375,6 +405,7 @@ export type DashboardSummary = {
   filterOptions: { users: DashboardFilterOption[]; workflows: DashboardFilterOption[] };
   byUser: Array<{ userId?: string | null; name: string; submitted: number; failed: number }>;
   byWorkflow: Array<{ workflowId: string; workflowName: string; submitted: number; avgElapsedSeconds?: number | null }>;
+  durationCostBreakdown: DashboardDurationCostBreakdown;
   system: {
     comfy: { configured: boolean; executionMode: string; dryRun: boolean };
     promptLlm: { configured: boolean; provider?: string | null; model?: string | null; timeoutSeconds?: number | null };
@@ -499,6 +530,82 @@ export type S3UploadCompleteResponse = UploadResponse & {
   storageBackend: "s3";
   storageKey: string;
   publicUrl?: string | null;
+};
+
+export type WebtoonCutUploadPresignResponse = {
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  storageBackend: "s3";
+  storageKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+};
+
+export type WebtoonCutJobResponse = {
+  jobId: string;
+  status: string;
+  inputKind: string;
+  sourceAssetId: string;
+  displayName: string;
+  totalUnits: number;
+  completedUnits: number;
+  generatedCutCount: number;
+  reviewRequiredCount: number;
+  failedUnits: number;
+  currentUnitLabel?: string | null;
+  cancelRequestedAt?: string | null;
+  createdBy?: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type WebtoonCutOutputItem = {
+  outputId: string;
+  jobId: string;
+  assetId: string;
+  viewUrl: string;
+  downloadUrl: string;
+  displayPath: string;
+  pageNumber?: number | null;
+  cutIndex: number;
+  width?: number | null;
+  height?: number | null;
+  flags: string[];
+  usedInPromptCount: number;
+  usedInBatchCount: number;
+  i2vResultCount: number;
+  createdBy?: string;
+};
+
+export type WebtoonCutHandoffResponse = {
+  target: "grok_prompt" | "batch";
+  jobId: string;
+  sourceDisplayName?: string;
+  inputAssetIds: string[];
+  sourceRelativePaths: string[];
+  items: Array<{
+    outputId: string;
+    assetId: string;
+    fileName: string;
+    mimeType: string;
+    sourceRelativePath: string;
+    imageWidth?: number | null;
+    imageHeight?: number | null;
+    downloadUrl: string;
+  }>;
+};
+
+export type WebtoonCutJobListResponse = {
+  items: WebtoonCutJobResponse[];
+  page: number;
+  pageSize: number;
+};
+
+export type WebtoonCutOutputListResponse = {
+  items: WebtoonCutOutputItem[];
+  page: number;
+  pageSize: number;
 };
 
 export type GrokImagePromptDraftResponse = {
@@ -1533,7 +1640,7 @@ export const apiClient = {
     }),
   createImagePromptBatch: (payload: {
     workflowId: string;
-    items: Array<{ assetId: string; slotIndex: number; requestedFrames?: number; negativePrompt?: string }>;
+    items: Array<{ assetId: string; slotIndex: number; requestedFrames?: number; negativePrompt?: string; sourceRelativePath?: string }>;
   }) =>
     requestJson<PromptGenerationBatchResponse>("/api/prompts/image-drafts/batches", {
       method: "POST",
@@ -1641,7 +1748,64 @@ export const apiClient = {
     requestJson<{ assetId: string; deleted: boolean }>(`/api/uploads/${encodeURIComponent(assetId)}`, {
       method: "DELETE"
     }),
-  createBatchJob: (payload: { workflowId: string; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string }> }) =>
+  presignWebtoonCutUpload: (payload: { fileName: string; mimeType: string; sizeBytes: number }) =>
+    requestJson<WebtoonCutUploadPresignResponse>("/api/webtoon-cuts/uploads/presign", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  completeWebtoonCutUpload: (payload: { assetId: string; fileName: string; mimeType: string; storageKey: string; sizeBytes: number }) =>
+    requestJson<S3UploadCompleteResponse>("/api/webtoon-cuts/uploads/complete", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  createWebtoonCutJob: (payload: { assetId: string; inputKind: string; metadata?: Record<string, unknown> }) =>
+    requestJson<WebtoonCutJobResponse>("/api/webtoon-cuts/jobs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  webtoonCutJobs: (params: { status?: string; inputKind?: string; query?: string; createdBy?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.inputKind) query.set("inputKind", params.inputKind);
+    if (params.query) query.set("query", params.query);
+    if (params.createdBy) query.set("createdBy", params.createdBy);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 20));
+    return requestJson<WebtoonCutJobListResponse>(`/api/webtoon-cuts/jobs?${query.toString()}`);
+  },
+  cancelWebtoonCutJob: (jobId: string) =>
+    requestJson<WebtoonCutJobResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST"
+    }),
+  deleteWebtoonCutJob: (jobId: string) =>
+    requestJson<{ deleted: boolean; jobId: string }>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE"
+    }),
+  webtoonCutOutputs: (jobId: string, params: { usedState?: string; flags?: string; query?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.usedState) query.set("usedState", params.usedState);
+    if (params.flags) query.set("flags", params.flags);
+    if (params.query) query.set("query", params.query);
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 50));
+    return requestJson<WebtoonCutOutputListResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/outputs?${query.toString()}`);
+  },
+  handoffWebtoonCutsToGrok: (jobId: string, outputIds: string[]) =>
+    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/grok`, {
+      method: "POST",
+      body: JSON.stringify({ outputIds })
+    }),
+  handoffWebtoonCutsToBatch: (jobId: string, outputIds: string[]) =>
+    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/batch`, {
+      method: "POST",
+      body: JSON.stringify({ outputIds })
+    }),
+  downloadWebtoonCutOutputsZip: (jobId: string, outputIds: string[]) => {
+    const query = new URLSearchParams();
+    outputIds.forEach((outputId) => query.append("outputIds", outputId));
+    return requestBlob(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/download?${query.toString()}`);
+  },
+  createBatchJob: (payload: { workflowId: string; sourceKind?: "webtoon_cut" | "asset_list"; sourceDirName?: string; sourceZipFileName?: string; requestedFrames?: number; resolutionTier?: ResolutionTier; negativePrompt?: string; items: Array<{ assetId: string; fileName?: string; relativePath?: string; requestItemId?: string }> }) =>
     requestJson<BatchJobResponse>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload)

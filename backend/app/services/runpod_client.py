@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -83,3 +84,70 @@ def connection_status(*, api_key: str, endpoint_id: str, base_url: str, timeout:
         "jobs": health.get("jobs") or {},
         "message": "RunPod endpoint health check succeeded.",
     }
+
+
+# --- 서버리스 빌링(계정 단위, 엔드포인트 실행과는 별개 호스트) ------------------
+# 2026-09-15: 대시보드 "컷 길이별 비용" 카드(5초컷/10초컷 배분)의 원천 데이터.
+# 주의: 잡 제출/상태 조회(runpod_request 위)는 RUNPOD_BASE_URL(api.runpod.ai/v2,
+# 엔드포인트별 실행 API)을 쓰지만, 빌링은 계정 단위 REST v2 API로 완전히 다른
+# 호스트(api.runpod.io — .ai가 아니라 .io)에 있다. 두 호스트를 혼동하면 404/HTML
+# 응답이 온다(과거 Sandbox Pod REST v2 host 버그와 같은 함정 - workflow_visibility류
+# 문제와 무관, RunPod 자체 API 설계).
+BILLING_BASE_URL = "https://api.runpod.io/v2"
+
+
+def fetch_serverless_billing_daily(
+    *, api_key: str, serverless_id: str, start_time: str, end_time: str, timeout: int = 20
+) -> dict[str, dict]:
+    """RunPod 서버리스 일별 청구 내역을 UTC 날짜 문자열(YYYY-MM-DD) 키로 반환한다.
+
+    ``start_time``/``end_time``은 RFC3339 문자열(예: "2026-09-10T00:00:00Z")이어야 한다.
+    비용이 0인 날짜는 RunPod 응답에서 그 레코드 자체가 빠지므로(레코드가 없다고
+    0비용을 의미하는 게 아니라 "그 버킷은 청구가 없어 생략됨"), 호출자가 없는
+    날짜를 0으로 채워야 한다. ``api_key``/``serverless_id``가 비어 있으면 빈
+    dict를 반환한다(설정 미완료를 예외로 취급하지 않음 - 대시보드는 그 구간을
+    그냥 "표시 안 함" 처리한다).
+    """
+    if not is_real_secret(api_key, "your_runpod_api_key") or not serverless_id:
+        return {}
+    query = urllib.parse.urlencode({
+        "serverlessId": serverless_id,
+        "bucketSize": "day",
+        "startTime": start_time,
+        "endTime": end_time,
+    })
+    url = f"{BILLING_BASE_URL}/billing/serverless?{query}"
+    # 2026-09-15 실사용 중 발견: api.runpod.io는 Cloudflare 봇 차단이 걸려 있어
+    # User-Agent 없이(Python urllib 기본값) 요청하면 "HTTP 403 error code: 1010"
+    # (Cloudflare가 자동화 클라이언트로 판단해 차단)로 거부된다. 잡 제출에 쓰는
+    # api.runpod.ai(runpod_headers() 위)는 이 보호가 없어 지금까지 드러나지
+    # 않았던 문제 - 여기만 브라우저형 User-Agent/Accept를 명시해 우회한다.
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; dobedub-studio-dashboard/1.0; +https://dobedub.io)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"RunPod billing HTTP {exc.code}: {detail}") from exc
+
+    by_day: dict[str, dict] = {}
+    for record in payload.get("records") or []:
+        day = str(record.get("startTime") or "")[:10]
+        if not day:
+            continue
+        by_day[day] = {
+            "totalAmount": float(record.get("totalAmount") or 0.0),
+            "gpuAmount": float(record.get("gpuAmount") or 0.0),
+            "cpuAmount": float(record.get("cpuAmount") or 0.0),
+            "diskAmount": float(record.get("diskAmount") or 0.0),
+            "feeAmount": float(record.get("feeAmount") or 0.0),
+        }
+    return by_day

@@ -77,14 +77,23 @@ def test_prompt_management_can_delete_unsubmitted_uploads() -> None:
     assert "프롬프트 항목 삭제" not in prompt_mapping
 
 
-def test_prompt_management_clears_upload_context_when_workflow_changes() -> None:
+def test_prompt_management_preserves_upload_targets_when_workflow_changes() -> None:
     source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
     select_workflow = source.split("function selectWorkflow(id: string)", 1)[1].split("async function refreshActivePromptGenerationBatches", 1)[0]
 
     assert "setWorkflowId(id)" in select_workflow
-    assert "setUploads([])" in select_workflow
+    assert "setUploads([])" not in select_workflow
     assert "setDrafts({})" in select_workflow
     assert "setActiveBatchPage(1)" in select_workflow
+
+
+def test_batch_management_preserves_zip_and_cut_targets_when_workflow_changes() -> None:
+    source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    workflow_select = source.split("<select value={workflowId}", 1)[1].split("</select>", 1)[0]
+
+    assert "setWorkflowId(event.target.value)" in workflow_select
+    assert "setSelectedZipFile(null)" not in workflow_select
+    assert "setWebtoonCutInput(null)" not in workflow_select
 
 
 def test_prompt_management_submits_canonical_selected_workflow_id() -> None:
@@ -153,7 +162,8 @@ def test_batch_job_creation_requires_workflow_grok_instruction_status() -> None:
     assert "지시문 없음" in screen
     assert "활성 프롬프트 지시문이 없습니다" in screen
     assert "관리자 > 프롬프트 생성 지시 관리" in screen
-    assert "disabled={busy || !selectedZipFile || !instructionStatus?.configured}" in screen
+    assert "const batchInputReady = Boolean(selectedZipFile || webtoonCutInput?.items.length);" in screen
+    assert "disabled={busy || !batchInputReady || !instructionStatus?.configured}" in screen
 
 
 def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
@@ -579,7 +589,7 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "프롬프트 생성" in screen
     assert "RunPod 영상 생성" in screen
     assert "Batch 작업 이력" in screen
-    assert "작업 ZIP" in screen
+    assert "작업 입력" in screen
     assert "ZIP 파일 선택" in screen
     assert "지시문 연결됨" in screen
     assert "길이 (프레임 수)" in screen

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import case, distinct, func, select, text
@@ -22,13 +22,18 @@ from backend.app.db.models import BatchJob, TaskExecutionPolicy, User, WorkflowT
 from backend.app.services.migration_status_service import migration_status
 from backend.app.services.admin_service import count_active_workflows
 from backend.app.services.prompt_llm_client import prompt_llm_status
-from backend.app.services.runpod_client import runpod_is_configured
+from backend.app.services.runpod_client import fetch_serverless_billing_daily, runpod_is_configured
 from backend.app.services.task_policy_service import (
     ACTIVE_TASK_STATUSES,
     DEFAULT_MAX_ACTIVE_TASKS_PER_USER,
     DEFAULT_MAX_ACTIVE_TASKS_TOTAL,
 )
 from backend.app.services.workflow_parser import workflow_files
+from backend.app.services.workflow_visibility import (
+    SUPPORTED_WORKFLOW_IDS,
+    TEN_SECOND_CHAIN_WORKFLOW_IDS,
+    canonical_workflow_id,
+)
 
 LOGGER = logging.getLogger("dobedub.dashboard")
 
@@ -53,6 +58,19 @@ _SANDBOX_CACHE_TTL_SECONDS = 30.0
 _sandbox_cache: dict[str, object] = {"at": 0.0, "value": None}
 _sandbox_refresh_lock = threading.Lock()
 _sandbox_refreshing = False
+
+# 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분. RunPod 인프라 측 최적화가
+# 완료된 UTC 2026-09-10 이후 구간만 분리 집계한다 - 그 이전은 10초컷 데이터가
+# 사실상 없고(실 프로덕션 조회로 확인) 워크플로 구성이 지금과 달라 실행시간
+# 기준 배분이 왜곡될 수 있다. 09-10 이전은 dailyVolume과 동일하게 합계만 노출.
+DURATION_SPLIT_CUTOFF_UTC = date(2026, 9, 10)
+_BILLING_CACHE_TTL_SECONDS = 300.0
+# 2026-09-15 버그 수정: 빌링 조회 실패(네트워크/인증/RunPod 측 오류)를 "그 구간
+# 청구가 실제로 0원"인 것처럼 5분간 캐시해 대시보드에 $0.00으로 보여주던 문제.
+# 실패는 훨씬 짧게(20초)만 캐시해 빠르게 재시도하고, 성공/실패를 구분해 카드가
+# "미조회"와 "실제 0원"을 다르게 표시할 수 있게 한다.
+_BILLING_ERROR_RETRY_SECONDS = 20.0
+_billing_cache: dict[str, object] = {"at": 0.0, "range": None, "value": None, "error": None}
 
 
 # --- pure helpers ------------------------------------------------------------
@@ -569,6 +587,250 @@ def _empty_sandbox(*, configured: bool) -> dict:
     }
 
 
+def _duration_bucket(workflow_id: str | None) -> str:
+    """workflow_id를 5초/10초/미분류로 분류한다(workflow_visibility가 유일한 판단 기준)."""
+    if not workflow_id:
+        return "unclassified"
+    canonical = canonical_workflow_id(workflow_id)
+    if canonical not in SUPPORTED_WORKFLOW_IDS:
+        return "unclassified"
+    return "tenSec" if canonical in TEN_SECOND_CHAIN_WORKFLOW_IDS else "fiveSec"
+
+
+def _execution_seconds(status_json: dict | None) -> float:
+    """runpod_status_json에서 RunPod가 보고한 executionTime(ms)을 초 단위로 뽑는다.
+
+    누락 시 0을 반환한다 - 그 잡은 실행시간 가중치에 기여하지 않고, 같은 날 다른
+    작업들의 executionTime으로만 비용이 배분된다. 그 날 하나도 없으면 그 날은
+    통째로 unclassified 처리된다(결측률은 실 프로덕션 조회로 0.03% 수준 확인됨).
+    """
+    if not isinstance(status_json, dict):
+        return 0.0
+    value = status_json.get("executionTime")
+    if value is None:
+        return 0.0
+    try:
+        return max(0.0, float(value)) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cached_serverless_billing(settings: Settings, since_day: date, until_day: date) -> tuple[dict[str, dict], str | None]:
+    """RunPod 서버리스 일별 청구를 짧게 캐시한다(대시보드 응답마다 외부 호출 방지).
+
+    반환값은 ``(일별 청구 dict, 에러 메시지 또는 None)``. Sandbox 블록
+    (_sandbox_cache)과 달리 백그라운드 스레드 갱신은 하지 않는다 - 청구
+    데이터는 분 단위로만 바뀌므로 성공 시 TTL(5분) 동안은 캐시를 그대로 쓰고,
+    만료되면 이 요청이 동기 호출한다. 실패(네트워크/인증/RunPod 측 오류)는
+    "그 구간 청구가 0원"이 아니라 "조회 실패"로 구분해 반환하고, 짧게(20초)만
+    캐시해 빠르게 재시도한다 - 실패를 0원으로 착각해 5분간 그대로 보여주는
+    사고를 막기 위함(2026-09-15 실사용 중 발견: 건수는 정상 표시되는데 비용만
+    전부 $0.00으로 보이는 문제의 원인이었다).
+    """
+    cache_key = f"{since_day.isoformat()}..{until_day.isoformat()}"
+    now = time.monotonic()
+    same_range = _billing_cache.get("range") == cache_key
+    age = now - float(_billing_cache.get("at") or 0.0)
+    cached_error = _billing_cache.get("error")
+
+    if same_range and cached_error is None and _billing_cache.get("value") is not None and age < _BILLING_CACHE_TTL_SECONDS:
+        return dict(_billing_cache["value"]), None  # type: ignore[arg-type]
+    if same_range and cached_error is not None and age < _BILLING_ERROR_RETRY_SECONDS:
+        return {}, str(cached_error)
+
+    try:
+        by_day = fetch_serverless_billing_daily(
+            api_key=settings.runpod_api_key,
+            serverless_id=settings.runpod_endpoint_id,
+            start_time=f"{since_day.isoformat()}T00:00:00Z",
+            end_time=f"{(until_day + timedelta(days=1)).isoformat()}T00:00:00Z",
+        )
+        error: str | None = None
+    except Exception as exc:  # noqa: BLE001 - 빌링 API 실패를 격리하되 원인은 카드에 노출
+        LOGGER.warning("dashboard duration-cost billing fetch failed: %s", exc)
+        by_day = {}
+        error = f"{type(exc).__name__}: {exc}"
+
+    _billing_cache["at"] = time.monotonic()
+    _billing_cache["range"] = cache_key
+    _billing_cache["value"] = by_day
+    _billing_cache["error"] = error
+    return dict(by_day), error
+
+
+def _utc_day_range(since: datetime, until: datetime) -> list[str]:
+    """[since, until) 구간이 걸치는 UTC 달력일 목록을 오름차순으로 반환한다.
+
+    RunPod 서버리스 빌링이 UTC 캘린더일로 집계되므로(_kst_day_range와 달리 KST
+    변환을 하지 않는다) 이 카드의 날짜 축은 dailyVolume 등 다른 카드와 최대
+    ~9시간(KST-UTC) 어긋날 수 있다 - 09-10 자정 KST 전후 소수 작업이 다른
+    카드에서는 09-10일에, 이 카드에서는 09-09일에 잡힐 수 있음(실측상 영향은
+    미미하며, 총 비용 정합성이 이 카드의 핵심 요구사항이라 UTC 기준을 우선함).
+    """
+    start = since.date()
+    end = (until - timedelta(microseconds=1)).date() if until > since else start
+    days: list[str] = []
+    cursor = start
+    while cursor <= end:
+        days.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return days
+
+
+def _duration_cost_breakdown(session: Session, settings: Settings, since: datetime, until: datetime) -> dict:
+    """일자별(UTC) RunPod 서버리스 작업 현황 + 실제 청구액을 합쳐 반환한다.
+
+    2026-09-10(UTC) 이전은 5초/10초 구분 없이 그 날의 전체 제출/완료/실패
+    건수와 RunPod 청구 총액만 담는다(``split: null``) - 요청 반영: "9월 10일
+    이후부터 구분, 9월 9일까지는 전체 건수와 비용으로 표기". 2026-09-10부터는
+    같은 항목에 5초컷/10초컷/미분류로 나눈 실행시간 비중 배분 비용을
+    ``split``에 추가한다. 한 날짜의 split.fiveSec+tenSec+unclassified 비용
+    합은 그 날 totalCostUsd와 항상 일치하고(반올림 오차는 unclassified가
+    흡수), 전체 구간 totalCostUsd 합은 RunPod 청구 합계와 일치한다(청구
+    레코드가 없는 날은 0비용으로 채움 - RunPod API가 무청구일을 레코드
+    생략으로 표현하기 때문).
+    """
+    rows = session.execute(
+        select(
+            WorkflowTask.workflow_id,
+            WorkflowTask.created_at,
+            WorkflowTask.status,
+            WorkflowTask.runpod_status_json,
+        ).where(
+            _live_tasks(),
+            WorkflowTask.execution_mode == "runpod",
+            WorkflowTask.created_at >= since,
+            WorkflowTask.created_at < until,
+        )
+    ).all()
+
+    day_keys = _utc_day_range(since, until)
+    if not day_keys:
+        return {"byDay": {}, "summary": None, "billingError": None}
+
+    per_day: dict[str, dict] = {
+        day: {
+            "submitted": 0,
+            "completed": 0,
+            "failed": 0,
+            "count": {"fiveSec": 0, "tenSec": 0, "unclassified": 0},
+            "execSeconds": {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0},
+        }
+        for day in day_keys
+    }
+
+    for workflow_id, created_at, status, status_json in rows:
+        if created_at is None:
+            continue
+        day_key = created_at.date().isoformat()
+        entry = per_day.get(day_key)
+        if entry is None:
+            # _utc_day_range는 since/until에서 직접 계산하므로 이 경로는 이론상
+            # 발생하지 않지만, 타임존/경계값 실수를 조용히 흡수하지 않기 위해
+            # 방어적으로 새 버킷을 만든다(요청 구간 밖 UTC일이 섞였다는 신호).
+            entry = per_day.setdefault(day_key, {
+                "submitted": 0, "completed": 0, "failed": 0,
+                "count": {"fiveSec": 0, "tenSec": 0, "unclassified": 0},
+                "execSeconds": {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0},
+            })
+        entry["submitted"] += 1
+        status_kind = _classify_status(status)
+        if status_kind == "completed":
+            entry["completed"] += 1
+        elif status_kind == "failed":
+            entry["failed"] += 1
+        if created_at.date() >= DURATION_SPLIT_CUTOFF_UTC:
+            bucket = _duration_bucket(workflow_id)
+            entry["count"][bucket] += 1
+            entry["execSeconds"][bucket] += _execution_seconds(status_json)
+
+    since_day = date.fromisoformat(day_keys[0])
+    until_day = date.fromisoformat(day_keys[-1])
+    billing_by_day, billing_error = _cached_serverless_billing(settings, since_day, until_day)
+
+    by_day: dict[str, dict] = {}
+    # 빌링 조회 실패 시 costUsd를 0으로 채우면 "실제로 무료"와 구분이 안 되므로
+    # None으로 남긴다(건수는 DB 조회만으로 구해지므로 정상 표시). 프론트는
+    # billingError 유무로 "-"/"조회 실패" 표시와 "$0.00" 표시를 구분한다.
+    summary_cost = {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0}
+    summary_count = {"fiveSec": 0, "tenSec": 0, "unclassified": 0}
+    summary_since: str | None = None
+    summary_until: str | None = None
+
+    for day_key in sorted(per_day):
+        entry = per_day[day_key]
+        if billing_error is not None:
+            day_total_cost = None
+        else:
+            # RunPod 빌링 API는 비용이 0인 날의 레코드를 아예 생략하므로, 없는
+            # 날은 0으로 채운다(0을 "데이터 없음"으로 오인하지 않도록 유의 -
+            # billing_error가 None일 때만 유효한 구분이다).
+            day_total_cost = float((billing_by_day.get(day_key) or {}).get("totalAmount") or 0.0)
+        row = {
+            "submitted": entry["submitted"],
+            "completed": entry["completed"],
+            "failed": entry["failed"],
+            "totalCostUsd": None if day_total_cost is None else round(day_total_cost, 4),
+            "split": None,
+        }
+        if date.fromisoformat(day_key) >= DURATION_SPLIT_CUTOFF_UTC:
+            exec_seconds = entry["execSeconds"]
+            weight_total = sum(exec_seconds.values())
+            if day_total_cost is None:
+                cost: dict[str, float | None] = {"fiveSec": None, "tenSec": None, "unclassified": None}
+            else:
+                cost = {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0}
+                if weight_total > 0 and day_total_cost > 0:
+                    cost["fiveSec"] = day_total_cost * exec_seconds["fiveSec"] / weight_total
+                    cost["tenSec"] = day_total_cost * exec_seconds["tenSec"] / weight_total
+                    cost["unclassified"] = day_total_cost - cost["fiveSec"] - cost["tenSec"]
+                elif day_total_cost > 0:
+                    cost["unclassified"] = day_total_cost
+
+            row["split"] = {
+                "fiveSec": {"count": entry["count"]["fiveSec"], "costUsd": None if cost["fiveSec"] is None else round(cost["fiveSec"], 4)},
+                "tenSec": {"count": entry["count"]["tenSec"], "costUsd": None if cost["tenSec"] is None else round(cost["tenSec"], 4)},
+                "unclassified": {"count": entry["count"]["unclassified"], "costUsd": None if cost["unclassified"] is None else round(cost["unclassified"], 4)},
+            }
+            summary_since = summary_since or day_key
+            summary_until = day_key
+            for bucket in ("fiveSec", "tenSec", "unclassified"):
+                if cost[bucket] is not None:
+                    summary_cost[bucket] += cost[bucket]
+                summary_count[bucket] += entry["count"][bucket]
+
+        by_day[day_key] = row
+
+    summary = None
+    if summary_since is not None:
+        def _per_job(bucket: str):
+            if billing_error is not None or not summary_count[bucket]:
+                return None
+            return round(summary_cost[bucket] / summary_count[bucket], 4)
+
+        summary = {
+            "sinceUtc": summary_since,
+            "untilUtc": summary_until,
+            "fiveSec": {
+                "count": summary_count["fiveSec"],
+                "costUsd": None if billing_error is not None else round(summary_cost["fiveSec"], 4),
+                "costPerJobUsd": _per_job("fiveSec"),
+            },
+            "tenSec": {
+                "count": summary_count["tenSec"],
+                "costUsd": None if billing_error is not None else round(summary_cost["tenSec"], 4),
+                "costPerJobUsd": _per_job("tenSec"),
+            },
+            "unclassified": {
+                "count": summary_count["unclassified"],
+                "costUsd": None if billing_error is not None else round(summary_cost["unclassified"], 4),
+                "costPerJobUsd": _per_job("unclassified"),
+            },
+        }
+
+    return {"byDay": by_day, "summary": summary, "billingError": billing_error}
+
+
 # --- entry point -------------------------------------------------------------
 
 
@@ -609,6 +871,10 @@ def dashboard_summary(
         "filterOptions": _filter_options(session, since, until),
         "byUser": _by_user(session, since, until),
         "byWorkflow": _by_workflow(session, since, until),
+        # 2026-09-15: 컷 길이별(5초/10초) 서버리스 비용 배분 카드. UTC 09-10 이전
+        # 구간은 byDay[day].split이 null(전체 제출/완료/실패/비용만) - 프론트가
+        # split 유무로 "구분 전/후"를 렌더링한다.
+        "durationCostBreakdown": _duration_cost_breakdown(session, settings, since, until),
         "system": _system_block(settings),
         "sandbox": sandbox,
         "worker": worker,

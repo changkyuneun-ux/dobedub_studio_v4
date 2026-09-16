@@ -3,99 +3,108 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_webtoon_cut_is_top_level_local_route_without_server_media_api() -> None:
+def test_webtoon_cut_is_top_level_image_cut_route_with_server_pipeline() -> None:
     router = Path("frontend/src/router.ts").read_text(encoding="utf-8")
     shell = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
     studio = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
     navigation = Path("frontend/src/helpers/navigation.ts").read_text(encoding="utf-8")
-    main = Path("frontend/src/main.tsx").read_text(encoding="utf-8")
     backend_api = "\n".join(path.read_text(encoding="utf-8") for path in Path("backend/app/api").rglob("*.py"))
 
     assert '"webtoonCuts"' in router
-    assert '"webtoonCuts": "/studio/webtoon-cuts"' in router
-    assert 'label: "LOCAL"' in shell
-    assert 'label: "GENERATE"' in shell
-    assert shell.index('label: "LOCAL"') < shell.index('label: "GENERATE"')
-    assert '{ key: "webtoonCuts", label: "이미지 컷 분할", permission: "jobs:run" }' in shell
+    assert '"webtoonCuts.split": "/studio/webtoon-cuts/split"' in router
+    assert '"webtoonCuts.history": "/studio/webtoon-cuts/history"' in router
+    assert 'local: { label: "IMAGE CUT"' in shell
+    assert 'generate: { label: "GENERATE"' in shell
+    assert 'label: "이미지 컷 관리", items: LOCAL_NAV_ITEMS' in shell
+    assert shell.index('label: "이미지 컷 관리", items: LOCAL_NAV_ITEMS') < shell.index('label: "GENERATE", items: GENERATE_NAV_ITEMS')
+    assert '{ key: "webtoonCutSplit", label: "컷 분할 처리", permission: "jobs:run" }' in shell
+    assert '{ key: "webtoonCutHistory", label: "컷 분할 이력", permission: "jobs:run" }' in shell
+    assert 'className="v3-sidebar-area"' not in shell
     generate_nav = shell.split("const GENERATE_NAV_ITEMS", 1)[1].split("];", 1)[0]
-    assert "webtoonCuts" not in generate_nav
-    assert 'key === "webtoonCuts"' in navigation
-    assert '"webtoonCuts": "jobs:run"' in studio
+    assert "webtoonCut" not in generate_nav
+    assert 'key === "webtoonCutSplit"' in navigation
+    assert 'key === "webtoonCutHistory"' in navigation
+    assert '"webtoonCuts.split": "jobs:run"' in studio
+    assert '"webtoonCuts.history": "jobs:run"' in studio
     assert "WebtoonCutScreen" in studio
-    assert '<WebtoonCutJobProvider key={user.id}' in main
-    assert main.index('<WebtoonCutJobProvider key={user.id}') < main.index('<StudioShell')
-    assert "</WebtoonCutJobProvider>" in main
-    assert "/webtoon-cuts/upload" not in backend_api
-    assert "/webtoon-cuts/download" not in backend_api
+    assert 'prefix="/webtoon-cuts"' in backend_api
+    assert '@router.post("/uploads/presign"' in backend_api
+    assert '@router.post("/jobs"' in backend_api
+    assert '@router.get("/jobs"' in backend_api
+    assert '@router.delete("/jobs/{job_id}"' in backend_api
 
 
-def test_webtoon_cut_screen_uses_browser_local_png_outputs_and_review_reprocess() -> None:
+def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> None:
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
-    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
 
-    assert "showDirectoryPicker" in source
-    assert "파일 또는 폴더 선택 / 끌어놓기" in source
-    assert "작업 디렉토리 선택" not in source
-    assert "manifest.json" in store
-    assert "summary.csv" in store
-    assert "_debug" in store
-    assert "image/png" in store
-    assert "continuous_sequence" in store
-    assert "canvas.height > canvas.width * 3" in store
-    assert "FULL_WIDTH_TRANSITION_RATIO = 0.95" in store
-    assert "MIN_STRONG_TRANSITION_CUT_HEIGHT" in store
-    assert "수평 장면 전환" in source
-    assert "apiClient" not in source
-
-
-def test_webtoon_cut_input_controls_allow_zip_file_selection_and_drop() -> None:
-    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
-    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
-
-    assert "chooseInputFiles" in source
-    assert "chooseInputDirectory" in source
-    assert ">파일 선택<" in source
-    assert ">폴더 선택<" in source
+    assert "S3 업로드 · 서버 컷 분리 · I2V 입력 연결" in source
+    assert "처리 구조" not in source
+    assert "입력 구조 정보" in source
+    assert "상대경로" in source
+    assert "원본 이미지 수" in source
+    assert "파일 크기" in source
+    assert "selectedFileStructure" in source
+    assert "presignWebtoonCutUpload" in source
+    assert "completeWebtoonCutUpload" in source
+    assert "createWebtoonCutJob" in source
+    assert "cancelWebtoonCutJob" in source
+    assert '{isRunning ? "작업 취소" : "작업 요청"}' in source
+    assert "PDF · ZIP · JPG · PNG · WEBP · GIF" in source
     assert 'accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip,image/jpeg,image/png,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed"' in source
-    file_button_block = source.split("function chooseInputFiles", 1)[1].split("function chooseInputDirectory", 1)[0]
-    assert "showDirectoryPicker" not in file_button_block
-    assert "showOpenFilePicker" in file_button_block
-    assert "fileInput.current?.click()" in file_button_block
-    directory_button_block = source.split("function chooseInputDirectory", 1)[1].split("function connectDefaultWorkspace", 1)[0]
-    assert 'showDirectoryPicker({ mode: "read" })' in directory_button_block
-    assert "handleDroppedFileSystemHandle" in store
-    assert "handle.kind === \"file\"" in store
-    assert ".getFile()" in store
+    assert "showDirectoryPicker" not in source
+    assert "v3-tab-row" not in source
+    assert "v3-tab-button" not in source
 
 
-def test_webtoon_cut_supports_specified_raster_image_files() -> None:
-    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
+def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filter() -> None:
     source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    backend_api = Path("backend/app/api/v1/webtoon_cuts.py").read_text(encoding="utf-8")
 
-    assert '["jpg", "jpeg", "png", "webp", "gif"]' in store
-    assert ".jpg,.jpeg,.png,.webp,.gif,.pdf,.zip" in source
-    assert "PDF · JPG · PNG · WEBP · GIF · ZIP" in source
+    assert 'type ViewMode = "list" | "grid"' in source
+    assert "jobStatusFilter" in source
+    assert "jobsPage" in source
+    assert "outputsPage" in source
+    assert "작업 상태" in source
+    assert '<option value="cancelled">취소</option>' in source
+    assert '<option value="failed">실패</option>' in source
+    assert "리스트" in source
+    assert "그리드" in source
+    assert "필터 결과 전체 선택" in source
+    assert "검수제외 전체 선택" not in source
+    assert "작업자" in source
+    assert "createdBy" in source
+    assert "workerFilter" in source
+    assert 'params.createdBy' in client
+    assert 'query.set("createdBy", params.createdBy)' in client
+    assert "deleteWebtoonCutJob" in source
+    assert "deleteWebtoonCutJob" in client
+    assert "이력 삭제" in source
+    assert "window.confirm" not in source
+    assert "v3-webtoon-cut-delete-modal" in source
+    assert "선택 컷 다운로드" in source
+    assert "downloadSelectedOutputs" in source
+    assert "downloadWebtoonCutOutputsZip" in client
+    assert '@router.get("/jobs/{job_id}/download"' in backend_api
+    assert "이전" in source
+    assert "다음" in source
+    assert "previewOutput" in source
+    assert "usedState" in source
 
 
-def test_webtoon_cut_does_not_prompt_for_output_directory_on_job_request() -> None:
-    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
-    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
-    filesystem = Path("frontend/src/features/webtoon-cut/filesystem.ts").read_text(encoding="utf-8")
+def test_webtoon_cut_handoff_persists_selection_for_prompt_and_batch_screens() -> None:
+    cut_screen = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    prompt_screen = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
+    batch_screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    workspace = Path("frontend/src/state/durableWorkspace.ts").read_text(encoding="utf-8")
 
-    assert "requestDefaultWebtoonWorkspace" not in store
-    assert "requestDefaultWebtoonWorkspace" not in filesystem
-    assert 'disabled={!snapshot.totalUnits || !snapshot.outputReady}' in source
-    assert 'snapshot.status === "running" ? webtoonCutJobStore.cancelRunningJob() : void webtoonCutJobStore.processSelectedInputs()' in source
-    assert '{snapshot.status === "running" ? "작업 중단" : "작업 요청"}' in source
-    assert "작업 요청 시 출력 폴더를 다시 묻지 않습니다" in source
-    assert "작업 폴더 연결" in source
-    assert "시스템 폴더가 아닌 별도 작업 폴더" in source
-    assert "webtoon-cut 기본 작업 폴더" not in source
-
-
-def test_webtoon_cut_provider_does_not_depend_on_react_default_import() -> None:
-    store = Path("frontend/src/features/webtoon-cut/webtoonCutStore.ts").read_text(encoding="utf-8")
-
-    assert 'import React' not in store
-    assert "React.createElement" not in store
-    assert "createElement(Fragment, null, children)" in store
+    assert "saveWebtoonCutHandoff" in cut_screen
+    assert "handoffWebtoonCutsToGrok" in cut_screen
+    assert "handoffWebtoonCutsToBatch" in cut_screen
+    assert "v3-webtoon-cut-batch-button" in cut_screen
+    assert ".v3-webtoon-cut-batch-button" in Path("frontend/src/styles.css").read_text(encoding="utf-8")
+    assert "loadWebtoonCutHandoff(user.id, \"grok_prompt\")" in prompt_screen
+    assert "loadWebtoonCutHandoff(user.id, \"batch\")" in batch_screen
+    assert "createBatchJob({" in batch_screen
+    assert "sourceKind: \"webtoon_cut\"" in batch_screen
+    assert "WebtoonCutHandoffSnapshot" in workspace

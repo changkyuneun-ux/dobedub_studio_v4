@@ -149,12 +149,43 @@ def _fit_zip_batch_job_id(
     return f"{worker_token}_{zip_token[:max_zip_length]}{date_suffix}{collision_suffix}"
 
 
+def _fit_webtoon_cut_batch_job_id(
+    worker_token: str,
+    source_token: str,
+    sequence: int,
+    date_token: str,
+    *,
+    max_length: int = 64,
+) -> str:
+    sequence_token = str(sequence)
+    worker_token = worker_token or "unknown"
+    source_token = source_token or "webtoon_cut"
+    # Format: 작업자_원본파일명_작업시퀀스번호_날짜
+    fixed_without_worker = 1 + 1 + len(sequence_token) + 1 + len(date_token)
+    max_worker_length = max(1, max_length - fixed_without_worker - 1)
+    fitted_worker = worker_token[:max_worker_length]
+    max_source_length = max(1, max_length - len(fitted_worker) - fixed_without_worker)
+    return f"{fitted_worker}_{source_token[:max_source_length]}_{sequence_token}_{date_token}"
+
+
 def _next_zip_batch_job_id(db: Session, *, created_by: str, created_at: datetime, zip_file_name: str) -> str:
     created_at_utc = _aware_utc(created_at)
     date_suffix = f"_{created_at_utc.astimezone(SEOUL_TIMEZONE).strftime('%y%m%d')}"
     worker_token = _safe_batch_token(_worker_batch_token(db, created_by))
     zip_token = _safe_batch_token(Path(Path(zip_file_name).name).stem, fallback="upload")
     return _fit_zip_batch_job_id(worker_token, zip_token, date_suffix, "")
+
+
+def _next_webtoon_cut_batch_job_id(db: Session, *, created_by: str, created_at: datetime, source_name: str) -> str:
+    created_at_utc = _aware_utc(created_at)
+    date_token = created_at_utc.astimezone(SEOUL_TIMEZONE).strftime("%y%m%d")
+    worker_token = _safe_batch_token(_worker_batch_token(db, created_by))
+    source_token = _safe_batch_token(Path(Path(source_name).name).stem, fallback="webtoon_cut")
+    for sequence in range(1, 10000):
+        candidate = _fit_webtoon_cut_batch_job_id(worker_token, source_token, sequence, date_token)
+        if db.get(BatchJob, candidate) is None:
+            return candidate
+    raise ValueError("동일 원본의 Batch ID 시퀀스를 더 이상 생성할 수 없습니다.")
 
 
 def zip_batch_job_id(db: Session, *, created_by: str, zip_file_name: str) -> str:
@@ -188,11 +219,13 @@ def create_batch_job(db: Session, payload: dict[str, Any], *, created_by: str) -
     created_at = _aware_utc(utc_now()).replace(tzinfo=None)
     source_dir_name = unicodedata.normalize("NFC", str(payload.get("sourceDirName") or "").strip())
     source_zip_file_name = unicodedata.normalize("NFC", str(payload.get("sourceZipFileName") or "").strip())
-    batch_id = (
-        _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
-        if source_zip_file_name
-        else _next_batch_job_id(db, created_by=created_by, created_at=created_at)
-    )
+    source_kind = str(payload.get("sourceKind") or "").strip()
+    if source_zip_file_name:
+        batch_id = _next_zip_batch_job_id(db, created_by=created_by, created_at=created_at, zip_file_name=source_zip_file_name)
+    elif source_kind == "webtoon_cut":
+        batch_id = _next_webtoon_cut_batch_job_id(db, created_by=created_by, created_at=created_at, source_name=source_dir_name)
+    else:
+        batch_id = _next_batch_job_id(db, created_by=created_by, created_at=created_at)
     ensure_batch_job_id_available(db, batch_id)
 
     batch = BatchJob(
