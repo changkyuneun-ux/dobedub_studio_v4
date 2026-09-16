@@ -215,7 +215,7 @@ def list_outputs(
         if wanted:
             outputs = [
                 output
-                for output in _dedupe_outputs_by_display_path(db.scalars(stmt.order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))).all())
+                for output in _dedupe_outputs_by_display_path(db.scalars(stmt.order_by(*_output_reading_order_columns())).all())
                 if wanted.intersection(set(output.flags_json or []))
             ]
             return _paged_outputs(outputs, page=page, page_size=page_size)
@@ -294,7 +294,7 @@ def stream_selected_outputs_zip(
         .join(Asset, Asset.id == WebtoonCutOutput.asset_id)
         .where(WebtoonCutOutput.job_id == job_id)
         .where(WebtoonCutOutput.id.in_(requested_ids))
-        .order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index), asc(WebtoonCutOutput.created_at))
+        .order_by(*_output_reading_order_columns())
     )
     if created_by:
         stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
@@ -355,7 +355,7 @@ def _load_selected_outputs(db: Session, *, job_id: str, output_ids: list[str], c
         select(WebtoonCutOutput)
         .where(WebtoonCutOutput.job_id == job_id)
         .where(WebtoonCutOutput.id.in_(output_ids))
-        .order_by(asc(WebtoonCutOutput.page_number), asc(WebtoonCutOutput.cut_index))
+        .order_by(*_output_reading_order_columns())
     )
     if created_by:
         stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
@@ -445,12 +445,7 @@ def _paged_deduped_outputs(db: Session, stmt, *, page: int, page_size: int) -> d
             func.row_number()
             .over(
                 partition_by=WebtoonCutOutput.display_path,
-                order_by=(
-                    asc(WebtoonCutOutput.page_number),
-                    asc(WebtoonCutOutput.cut_index),
-                    asc(WebtoonCutOutput.created_at),
-                    asc(WebtoonCutOutput.id),
-                ),
+                order_by=_output_reading_order_columns(),
             )
             .label("display_path_rank")
         )
@@ -459,7 +454,7 @@ def _paged_deduped_outputs(db: Session, stmt, *, page: int, page_size: int) -> d
     output_ids = db.scalars(
         select(ranked.c.id)
         .where(ranked.c.display_path_rank == 1)
-        .order_by(asc(ranked.c.page_number), asc(ranked.c.cut_index), asc(ranked.c.created_at), asc(ranked.c.id))
+        .order_by(asc(ranked.c.display_path), asc(ranked.c.created_at), asc(ranked.c.id))
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
@@ -479,6 +474,18 @@ def _dedupe_outputs_by_display_path(outputs: Iterable[WebtoonCutOutput]) -> list
         seen.add(key)
         deduped.append(output)
     return deduped
+
+
+def _output_reading_order_columns():
+    # ZIP 내부 다중 이미지에서는 page_number가 모두 NULL이고 cut_index가 각 원본 이미지마다
+    # 1부터 다시 시작한다. page_number/cut_index 우선 정렬은 001-01, 002-01, 001-02처럼
+    # 원본 이미지 순서를 섞으므로, 실제 저장/표시 경로(display_path)를 canonical order로 둔다.
+    # PDF 출력도 zero-padded page-cut 형식(001-01.png)이므로 display_path 정렬과 읽기 순서가 일치한다.
+    return (
+        asc(WebtoonCutOutput.display_path),
+        asc(WebtoonCutOutput.created_at),
+        asc(WebtoonCutOutput.id),
+    )
 
 
 def _require_job(db: Session, job_id: str, *, created_by: str | None, include_deleted: bool = False) -> WebtoonCutJob:

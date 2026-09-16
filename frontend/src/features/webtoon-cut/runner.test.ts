@@ -59,6 +59,12 @@ describe("webtoon cut runner", () => {
     expect(outputFileName(`묶음/${decomposed}.pdf`, 3, 2)).toBe("묶음/과학사 100 원본/003-02.png");
   });
 
+  it("keeps numbered image source stems as the local cut sequence prefix", () => {
+    expect(outputFileName("episode/001.jpg", null, 1)).toBe("episode/001/001-01.png");
+    expect(outputFileName("episode/001.jpg", null, 4)).toBe("episode/001/001-04.png");
+    expect(outputFileName("episode/002.jpg", null, 1)).toBe("episode/002/002-01.png");
+  });
+
   it("reports stage-level progress while a source unit is processed", async () => {
     const progress: Array<{ stage: string; completed: number; total: number; generatedCuts: number; unitId?: string }> = [];
 

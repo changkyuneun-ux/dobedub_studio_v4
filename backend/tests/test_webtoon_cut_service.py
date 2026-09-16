@@ -199,6 +199,51 @@ def test_list_outputs_deduplicates_existing_duplicate_display_paths(db_session):
     assert [item["displayPath"] for item in outputs["items"]] == ["source/001-01.png"]
 
 
+def test_list_outputs_preserves_zip_image_source_sequence_before_cut_index(db_session):
+    from backend.app.services.webtoon_cut_service import create_job, list_outputs, register_output
+
+    db_session.add(_asset("asset_source", file_name="episode.zip"))
+    for asset_id, file_name in [
+        ("asset_001_01", "001-01.png"),
+        ("asset_001_02", "001-02.png"),
+        ("asset_001_03", "001-03.png"),
+        ("asset_002_01", "002-01.png"),
+        ("asset_002_02", "002-02.png"),
+    ]:
+        db_session.add(_asset(asset_id, file_name=file_name, asset_type="webtoon_cut_image"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="zip", created_by="user_1")
+
+    # 실제 작업은 001.jpg의 모든 컷을 저장한 뒤 002.jpg로 넘어가지만, 기존 조회 정렬이
+    # page_number/cut_index 우선이면 001-01, 002-01, 001-02...처럼 원본 이미지 순서가 깨진다.
+    for asset_id, display_path, cut_index in [
+        ("asset_001_01", "episode_cuts/001/001-01.png", 1),
+        ("asset_001_02", "episode_cuts/001/001-02.png", 2),
+        ("asset_001_03", "episode_cuts/001/001-03.png", 3),
+        ("asset_002_01", "episode_cuts/002/002-01.png", 1),
+        ("asset_002_02", "episode_cuts/002/002-02.png", 2),
+    ]:
+        register_output(
+            db_session,
+            job_id=job["jobId"],
+            asset_id=asset_id,
+            display_path=display_path,
+            page_number=None,
+            cut_index=cut_index,
+            created_by="user_1",
+        )
+
+    outputs = list_outputs(db_session, job_id=job["jobId"], created_by="user_1", page=1, page_size=10)
+
+    assert [item["displayPath"] for item in outputs["items"]] == [
+        "episode_cuts/001/001-01.png",
+        "episode_cuts/001/001-02.png",
+        "episode_cuts/001/001-03.png",
+        "episode_cuts/002/002-01.png",
+        "episode_cuts/002/002-02.png",
+    ]
+
+
 def test_list_outputs_only_loads_requested_page_from_db(db_session):
     from backend.app.db.session import SessionLocal
     from backend.app.services.webtoon_cut_service import list_outputs

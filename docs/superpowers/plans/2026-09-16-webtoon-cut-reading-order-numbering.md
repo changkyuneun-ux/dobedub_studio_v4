@@ -15,13 +15,14 @@
 - Do not change actual panel detection/cropping geometry unless a test proves ordering cannot be fixed without it.
 - Do not change backend database schema, Alembic migrations, Docker dependencies, S3 storage layout, or API response shape.
 - Keep existing naming policy: `001-01.png`, `001-02.png`, etc. Only ensure the numeric suffix maps to visual order.
+- For ZIP inputs containing multiple numbered source images, each source image keeps its own local cut sequence. Example: `001.jpg`, `002.jpg` must produce `001/001-01.png`, `001/001-02.png`, ... then `002/002-01.png`, `002/002-02.png`, not a global sequence such as `001-01`, `002-02`, `003-03` and not an interleaved listing such as `001-01`, `002-01`, `001-02`.
 - Must cover both server pipeline (`backend/app/services/webtoon_panel_engine`) and browser-local pipeline (`frontend/src/features/webtoon-cut`) because both can generate numbered cut outputs.
 - Reading order definition:
   - Primary order: visual row top-to-bottom.
   - Within a row: left-to-right.
   - Row grouping must tolerate panels with slightly different `y0` values but similar vertical center/overlap.
   - Staggered/overlapping panels should still be deterministic and not randomly change between runs.
-- Output `cut_index`, output file name, DB `WebtoonCutOutput.cut_index`, manifest `outputs[*].path`, and summary CSV `cut` must all agree.
+- Output `cut_index`, output file name, DB `WebtoonCutOutput.cut_index`, manifest `outputs[*].path`, and summary CSV `cut` must all agree within the same source image/page. History queries, selected-cut downloads, and I2V handoff payloads must order outputs by canonical display path so ZIP image sources are grouped by original image sequence before their local cut sequence.
 - Add failing tests before production edits.
 - Run focused tests first, then `./scripts/verify.sh`.
 - Commit/deploy only when explicitly requested after implementation.
