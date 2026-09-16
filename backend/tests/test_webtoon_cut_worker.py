@@ -161,6 +161,12 @@ def test_webtoon_cut_zip_paths_are_repaired_before_output_naming():
     assert validate_zip_entry_path(mojibake) == "OTT_6화/24화_001.png"
 
 
+def test_webtoon_cut_zip_paths_repair_cp437_hangul_jamo_mojibake():
+    from backend.app.services.webtoon_cut_naming import validate_zip_entry_path
+
+    assert validate_zip_entry_path("OTT_6ßäÆßà¬/24ßäÆßà¬_001.png") == "OTT_6화/24화_001.png"
+
+
 def test_zip_unit_count_includes_pdf_pages_and_supported_images(tmp_path, monkeypatch):
     from backend.app.services import webtoon_cut_worker
 

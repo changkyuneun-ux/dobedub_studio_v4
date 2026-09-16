@@ -25,3 +25,9 @@ def test_normalize_zip_path_repairs_utf8_cp437_mojibake():
 
 def test_normalize_zip_path_repairs_cp949_latin1_mojibake():
     assert normalize_zip_path(_cp949_latin1_mojibake("과학사_3권_내지_인쇄용_수정.pdf")) == "과학사_3권_내지_인쇄용_수정.pdf"
+
+
+def test_normalize_zip_path_prefers_composed_hangul_over_mixed_cjk_candidate():
+    broken = "source_cuts/OTT_6ßäÆßà¬/24ßäÆßà¬_001/24ßäÆßà¬_001-01.png"
+
+    assert normalize_zip_path(broken) == "source_cuts/OTT_6화/24화_001/24화_001-01.png"

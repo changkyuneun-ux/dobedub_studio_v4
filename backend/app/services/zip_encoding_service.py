@@ -16,8 +16,9 @@ def normalize_zip_path(value: str | None) -> str:
     candidates = {raw}
     candidates.update(_decode_mojibake_candidates(raw, "cp437"))
     candidates.update(_decode_mojibake_candidates(raw, "latin-1"))
+    candidates = {unicodedata.normalize("NFC", candidate) for candidate in candidates}
     repaired = max(candidates, key=_readability_score)
-    return unicodedata.normalize("NFC", repaired)
+    return repaired
 
 
 def _decode_mojibake_candidates(value: str, byte_encoding: str) -> set[str]:
@@ -38,13 +39,15 @@ def _decode_mojibake_candidates(value: str, byte_encoding: str) -> set[str]:
 
 def _readability_score(value: str) -> int:
     hangul = sum(1 for char in value if "\uac00" <= char <= "\ud7a3")
+    hangul_jamo = sum(1 for char in value if "\u1100" <= char <= "\u11ff" or "\u3130" <= char <= "\u318f")
+    cjk_ideographs = sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
     ascii_printable = sum(1 for char in value if " " <= char <= "~")
     controls = sum(1 for char in value if ord(char) < 32 or 0x80 <= ord(char) <= 0x9F)
     replacement = value.count("\ufffd")
     mojibake_markers = sum(1 for char in value if char in _MOJIBAKE_MARKERS)
     # Keep ordinary ASCII paths stable, but strongly prefer readable Korean
     # when a mojibake path can be repaired.
-    return hangul * 20 + ascii_printable - controls * 20 - replacement * 50 - mojibake_markers * 4
+    return hangul * 20 + hangul_jamo * 12 + ascii_printable - cjk_ideographs * 8 - controls * 20 - replacement * 50 - mojibake_markers * 4
 
 
 _MOJIBAKE_MARKERS = set(
