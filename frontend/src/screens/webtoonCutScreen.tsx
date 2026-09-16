@@ -121,6 +121,18 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
             <strong>브라우저 로컬 처리</strong>
             <small>업로드 · 다운로드 없음</small>
             <span className="v3-webtoon-cut-good">✓ ECS는 화면 코드와 정책만 제공</span>
+            <label className="v3-webtoon-cut-mode">
+              컷 분리 모드
+              <select
+                value={snapshot.splitMode}
+                disabled={snapshot.status === "running"}
+                onChange={(event) => webtoonCutJobStore.setSplitMode(event.target.value === "dark-webtoon" ? "dark-webtoon" : "print")}
+              >
+                <option value="print">인쇄 만화 · 기존 grid 엔진</option>
+                <option value="dark-webtoon">어두운 배경 웹툰</option>
+              </select>
+            </label>
+            <small>어두운 배경 웹툰 모드는 검정/진회색 여백 기준입니다. 잘못 선택하면 오류 없이 페이지 전체가 1컷으로 저장될 수 있습니다.</small>
             <button className="v3-secondary-button" type="button" onClick={() => void connectDefaultWorkspace()} disabled={!window.showDirectoryPicker}>
               작업 폴더 연결
             </button>
@@ -172,7 +184,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo }: Props) {
           <div><span>처리 대상</span><strong>{snapshot.totalUnits ? `${snapshot.totalUnits}개 파일` : "-"}</strong><small>{unsupportedCount ? `PDF/ZIP 등 후속 처리 ${unsupportedCount}개` : "지원 이미지 즉시 처리"}</small></div>
           <div><span>작업 위치</span><strong>{snapshot.workLocation || "-"}</strong><small>선택한 입력 기준으로 자동 파생</small></div>
           <div><span>출력 위치</span><strong>{snapshot.outputLocation || "-"}</strong><small>선택한 작업 폴더 · PNG · manifest.json · summary.csv · _debug/</small></div>
-          <div><span>적용 정책</span><strong>자동 감지 · 원본 crop</strong><small>I2V 입력 이미지 목적</small></div>
+          <div><span>적용 정책</span><strong>{snapshot.splitMode === "dark-webtoon" ? "어두운 배경 웹툰" : "인쇄 만화 grid"}</strong><small>{snapshot.splitMode === "dark-webtoon" ? "검정/진회색 배경 여백 기준 · 원본 crop" : "기존 자동 감지 · 원본 crop"}</small></div>
           <div><span>검수 정책</span><strong>수평 전환은 검수에서 재처리</strong><small>continuous_sequence 후보만 적용</small></div>
         </div>
         {snapshot.notice ? <p className="v3-inline-notice">{snapshot.notice}</p> : null}

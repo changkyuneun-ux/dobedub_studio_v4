@@ -37,6 +37,16 @@ describe("webtoon cut UI store", () => {
     expect(workspace.files()).toContain("sample_cuts");
   });
 
+  it("keeps the selected split mode in the job snapshot", () => {
+    webtoonCutJobStore.initialize("split-mode-test");
+
+    expect(webtoonCutJobStore.getSnapshot().splitMode).toBe("print");
+
+    webtoonCutJobStore.setSplitMode("dark-webtoon");
+
+    expect(webtoonCutJobStore.getSnapshot().splitMode).toBe("dark-webtoon");
+  });
+
   it("treats a manifest paused before any unit finished as still resumable (job was interrupted, not merely unrun)", async () => {
     // status가 "paused"라는 것 자체가 실행 도중 취소되었다는 의미이므로, 완료된 단위가
     // 0개라도 "진행 중이던 작업"은 맞다 — 한 번도 실행하지 않은 경우(=manifest.json 자체가

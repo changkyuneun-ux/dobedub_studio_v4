@@ -4,12 +4,13 @@ import { writeAtomically, type DirectoryPort } from "./filesystem";
 import { fileStem, safeOutputName } from "./naming";
 import { encodeCut, serializeSummary, verifyPngOutput } from "./artifacts";
 import { buildSourceInventory, iterateSource, type SourceInputCollection, type SourceInputItem } from "./inputSources";
-import type { InputKind, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest } from "./types";
+import type { InputKind, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WebtoonCutSplitMode } from "./types";
 
 export type RunnerJobRequest = {
   jobId: string;
   inputKind: InputKind;
   inputName: string;
+  splitMode?: WebtoonCutSplitMode;
   inputs: SourceInputCollection | SourceInputItem[];
 };
 
@@ -80,7 +81,7 @@ export async function runWebtoonCutJob(request: RunnerJobRequest, ports: RunnerP
       if (signal.aborted) {
         return finalizeManifest(manifest, ports, summaryRows, "paused", completedUnitCount, generatedCutCount);
       }
-      const cuts = detectCuts(source.image, "auto", source.sourceKind === "pdf-page" ? "pdf" : "image");
+      const cuts = detectCuts(source.image, "auto", source.sourceKind === "pdf-page" ? "pdf" : "image", request.splitMode || "print");
       ports.onProgress?.({
         stage: "detect",
         unitId: source.unitId,
@@ -223,6 +224,7 @@ function createManifest(request: RunnerJobRequest, expectedUnitCount: number): W
     completedAt: null,
     options: {
       mode: "auto",
+      splitMode: request.splitMode || "print",
       pdfScale: PDF_RENDER_SCALE,
       outputFormat: "png",
       pagePolicy: PAGE_POLICY,

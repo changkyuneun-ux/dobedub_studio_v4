@@ -6928,6 +6928,8 @@ button {
 .v3-webtoon-cut-card strong { color: var(--v3-accent-text); font-size: 15px; }
 .v3-webtoon-cut-card small, .v3-webtoon-cut-dropzone small, .v3-webtoon-cut-action small { color: var(--v3-text-secondary); font-size: 11px; line-height: 1.5; }
 .v3-webtoon-cut-good { color: var(--v3-accent-text); font-size: 11px; font-weight: 800; }
+.v3-webtoon-cut-mode { display: grid; gap: 6px; }
+.v3-webtoon-cut-mode select { background: var(--v3-bg-canvas); border: 1px solid var(--v3-border); border-radius: 7px; color: var(--v3-text-heading); font: inherit; min-height: 34px; padding: 0 10px; }
 .v3-webtoon-cut-dropzone { border-style: dashed; min-height: 116px; place-content: center; text-align: center; }
 .v3-webtoon-cut-dropzone.is-dragging { background: var(--v3-accent-bg); border-color: var(--v3-accent); }
 .v3-webtoon-cut-input-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }

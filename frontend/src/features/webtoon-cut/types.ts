@@ -2,7 +2,9 @@ import type { SUMMARY_COLUMNS } from "./constants";
 
 export type CutMode = "auto" | "page" | "strip";
 
-export type DetectorMode = "grid" | "gutter" | "transition" | "fullpage" | "end_card";
+export type WebtoonCutSplitMode = "print" | "dark-webtoon";
+
+export type DetectorMode = "grid" | "gutter" | "transition" | "dark_bg" | "fullpage" | "end_card";
 
 export type InputKind = "image" | "pdf" | "directory" | "zip";
 
@@ -109,6 +111,7 @@ export type SummaryRow = Record<SummaryColumn, string | number | null>;
 
 export type CutJobOptions = {
   mode: CutMode;
+  splitMode: WebtoonCutSplitMode;
   pdfScale: number;
   outputFormat: "png";
   pagePolicy: Readonly<{
@@ -205,6 +208,7 @@ export type WorkerRequest =
         jobId: string;
         inputKind: InputKind;
         inputName: string;
+        splitMode?: WebtoonCutSplitMode;
         inputs: unknown;
         outputRoot: FileSystemDirectoryHandle;
       };

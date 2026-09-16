@@ -5,7 +5,7 @@ import { classifySourceName, sourceUnitId, type SourceInputItem } from "./inputS
 import { readExistingManifest, runWebtoonCutJob, type RunnerJobRequest, type RunnerPorts } from "./runner";
 import { clearPersistedInputs, hasHandlePermission, loadPersistedWebtoonCutSession, persistInputDirectoryHandle, persistInputFileHandles, persistWorkspaceHandle } from "./persistence";
 import { serializeSummary } from "./artifacts";
-import type { GeneratedOutput, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WorkerEvent } from "./types";
+import type { GeneratedOutput, RunnerProgressEvent, SummaryRow, UnitLedgerEntry, WebtoonCutManifest, WebtoonCutSplitMode, WorkerEvent } from "./types";
 
 export type WebtoonCutUnitStatus = "pending" | "processing" | "completed" | "review_required" | "unsupported" | "failed";
 export type WebtoonCutUnitFlag = "ok" | "fullpage" | "continuous_sequence" | "unsupported" | "failed";
@@ -42,6 +42,7 @@ export type WebtoonCutOutput = {
 export type WebtoonCutSnapshot = {
   sessionOwnerId: string;
   jobId: string;
+  splitMode: WebtoonCutSplitMode;
   inputName: string;
   /** 화면 표시용 입력 라벨: 폴더명 또는 첫 파일명(확장자 포함) + "외 n개" */
   inputLabel: string;
@@ -116,6 +117,7 @@ function createInitialSnapshot(sessionOwnerId = ""): WebtoonCutSnapshot {
   return {
     sessionOwnerId,
     jobId: "",
+    splitMode: "print",
     inputName: "",
     inputLabel: "",
     currentSourcePath: "",
@@ -334,6 +336,10 @@ export const webtoonCutJobStore = {
   selectReviewOutput(path: string) {
     setSnapshot({ selectedReviewOutputPath: path });
   },
+  setSplitMode(splitMode: WebtoonCutSplitMode) {
+    if (running) return;
+    setSnapshot({ splitMode });
+  },
   async processSelectedInputs() {
     if (!selectedInputs.length || running) return;
     running = true;
@@ -353,6 +359,7 @@ export const webtoonCutJobStore = {
         jobId: snapshot.jobId,
         inputKind: selectedInputs.length === 1 ? selectedInputs[0].sourceItem.kind : "directory",
         inputName: snapshot.inputName || "selected_files",
+        splitMode: snapshot.splitMode,
         inputs: { inputs: selectedInputs.map((input) => input.sourceItem) }
       };
       const manifest = await runJobWithWorkerFallback(request, {
@@ -617,6 +624,7 @@ function buildReadySnapshot({
   releasePreviewUrls(snapshot.units);
   snapshot = {
     ...createInitialSnapshot(snapshot.sessionOwnerId),
+    splitMode: snapshot.splitMode,
     jobId: `CUT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String(Date.now()).slice(-4)}`,
     inputName,
     inputLabel,
@@ -1077,6 +1085,7 @@ async function writeSummaryFiles() {
     completedAt: now,
     options: {
       mode: "auto",
+      splitMode: snapshot.splitMode,
       pdfScale: PDF_RENDER_SCALE,
       outputFormat: "png",
       pagePolicy: PAGE_POLICY,

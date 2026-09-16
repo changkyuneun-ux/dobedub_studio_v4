@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = "webtoon-cut-3";
+export const ENGINE_VERSION = "webtoon-cut-4-dark-bg-mode";
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 

@@ -196,6 +196,11 @@ def create_app() -> FastAPI:
     frontend_assets_dir = settings.project_root / "frontend" / "dist" / "assets"
     if frontend_assets_dir.exists():
         app.mount("/studio/assets", StaticFiles(directory=str(frontend_assets_dir)), name="studio-react-assets")
+    frontend_pdfjs_dir = settings.project_root / "frontend" / "dist" / "pdfjs"
+    if not frontend_pdfjs_dir.exists():
+        frontend_pdfjs_dir = settings.project_root / "frontend" / "public" / "pdfjs"
+    if frontend_pdfjs_dir.exists():
+        app.mount("/studio/pdfjs", StaticFiles(directory=str(frontend_pdfjs_dir)), name="studio-pdfjs-assets")
     app.include_router(web_router)
     return app
 

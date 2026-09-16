@@ -638,6 +638,7 @@ export function Create3aScreen({
           <strong>조회 조건</strong>
           <small>필터를 바꾸면 아래 표와 우측 요약이 함께 갱신됩니다</small>
         </div>
+        <div className="v3-runpod-history-toolbar">
         <div className="v3-runpod-filter-bar v3-runpod-history-filters">
           <label>작업자<input value={runpodWorkerFilter} onChange={(event) => { setRunpodWorkerFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} placeholder="전체 작업자" /></label>
           <label>실행일<input type="date" value={runpodRunDate} onChange={(event) => { setRunpodRunDate(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }} /></label>
@@ -687,6 +688,7 @@ export function Create3aScreen({
           <label>워크플로우<select value={runpodWorkflowFilter} onChange={(event) => { setRunpodWorkflowFilter(event.target.value); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="">전체 워크플로우</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflowLabel(workflow)}</option>)}</select></label>
           <label>결과<select value={runpodResultFilter} onChange={(event) => { setRunpodResultFilter(event.target.value as "all" | "active" | "completed" | "failed" | "cancelled"); setRunpodPage(1); setSelectedRunpodTaskIds([]); }}><option value="all">전체 결과</option><option value="active">진행</option><option value="completed">완료</option><option value="failed">실패</option><option value="cancelled">취소</option></select></label>
         </div>
+        </div>
       </div>
 
       {/* ②선택 작업 바. 개수 바인딩은 각 액션이 실제로 처리하는 집합을 그대로 쓴다(지침 §5 "선택 대상이 필요한 버튼은
@@ -697,7 +699,7 @@ export function Create3aScreen({
         <div className="v3-selection-bar-head">
           <span className="v3-step-badge is-accent">2</span>
           <span className="v3-selection-bar-title">선택 {selectedRunpodTaskIds.length}건에 대한 작업{selectedRunpodTaskIds.length !== selectedRunpodItems.length ? ` (이 페이지 ${selectedRunpodItems.length}건)` : ""}</span>
-          <div className="v3-selection-bar-actions">
+          <div className="v3-selection-bar-actions v3-runpod-history-actions">
             <button
               className="v3-primary-button"
               type="button"

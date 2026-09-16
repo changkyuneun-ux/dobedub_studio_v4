@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { memoryDirectory, validPng } from "./__fixtures__/memoryDirectory";
-import { borderlessInfographic } from "./__fixtures__/synthetic";
+import { blankImage, borderlessInfographic } from "./__fixtures__/synthetic";
+import { ENGINE_VERSION } from "./constants";
 import { outputFileName, runWebtoonCutJob } from "./runner";
-import type { WebtoonCutManifest } from "./types";
+import type { PixelRegion, WebtoonCutManifest } from "./types";
 import type { SourceInputCollection, SourceInputItem } from "./inputSources";
 
 describe("webtoon cut runner", () => {
@@ -20,6 +21,18 @@ describe("webtoon cut runner", () => {
     expect(result.ledger[0].flags).toEqual(["fullpage"]);
     expect(result.ledger[0].outputs[0].flags).toEqual(["fullpage"]);
     expect(result.totals.reviewRequiredUnitCount).toBe(0);
+  });
+
+  it("uses the dark webtoon split mode when requested and records it in the manifest", async () => {
+    const result = await runWebtoonCutJob(singleDarkWebtoonImageJob(), { output: memoryDirectory({}) }, neverAborted());
+
+    expect(result.options.splitMode).toBe("dark-webtoon");
+    expect(result.ledger[0].outputs).toHaveLength(2);
+    expect(result.ledger[0].outputs.map((output) => output.mode)).toEqual(["dark_bg", "dark_bg"]);
+    expect(result.ledger[0].outputs.map((output) => [output.x0, output.y0, output.x1, output.y1])).toEqual([
+      [20, 30, 220, 180],
+      [30, 250, 210, 400]
+    ]);
   });
 
   it("places a root image source under its filename directory", async () => {
@@ -161,6 +174,52 @@ function singleBorderlessImageJob() {
   };
 }
 
+function singleDarkWebtoonImageJob() {
+  return {
+    jobId: "job-dark-webtoon",
+    inputKind: "image" as const,
+    inputName: "dark-strip.png",
+    splitMode: "dark-webtoon" as const,
+    inputs: {
+      inputs: [
+        {
+          kind: "image",
+          relativePath: "dark-strip.png",
+          fileName: "dark-strip.png",
+          extension: "png",
+          testImage: darkWebtoonImage()
+        } satisfies SourceInputItem
+      ]
+    } satisfies SourceInputCollection
+  };
+}
+
+function darkWebtoonImage() {
+  const image = blankImage(240, 460, [0, 0, 0]);
+  drawPanel(image, { x0: 20, y0: 30, x1: 220, y1: 180 });
+  drawPanel(image, { x0: 30, y0: 250, x1: 210, y1: 400 });
+  return image;
+}
+
+function drawPanel(image: ImageData, region: PixelRegion) {
+  fillRect(image, region, [255, 255, 255]);
+  fillRect(image, { x0: region.x0 + 70, y0: region.y0 + 60, x1: region.x0 + 100, y1: region.y0 + 90 }, [240, 170, 120]);
+  fillRect(image, { x0: region.x0 + 40, y0: region.y0 + 40, x1: region.x0 + 60, y1: region.y0 + 60 }, [0, 0, 0]);
+}
+
+function fillRect(image: ImageData, region: PixelRegion, color: [number, number, number]) {
+  const [r, g, b] = color;
+  for (let y = Math.max(0, region.y0); y < Math.min(image.height, region.y1); y += 1) {
+    for (let x = Math.max(0, region.x0); x < Math.min(image.width, region.x1); x += 1) {
+      const offset = (y * image.width + x) * 4;
+      image.data[offset] = r;
+      image.data[offset + 1] = g;
+      image.data[offset + 2] = b;
+      image.data[offset + 3] = 255;
+    }
+  }
+}
+
 function nestedImageJob() {
   return {
     jobId: "job-nested",
@@ -209,7 +268,7 @@ function twoImageJob() {
 function completedOneOfTwoManifest(): WebtoonCutManifest {
   return {
     schemaVersion: 1,
-    engineVersion: "webtoon-cut-3",
+    engineVersion: ENGINE_VERSION,
     jobId: "job-two-images",
     status: "running",
     inputKind: "directory",
