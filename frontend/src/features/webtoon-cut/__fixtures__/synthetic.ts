@@ -37,7 +37,15 @@ export function fourPanelPage(width: number, height: number): ImageData {
     { x0: 80, y0: 380, x1: 360, y1: 600 },
     { x0: 440, y0: 380, x1: 720, y1: 600 }
   ];
-  panels.forEach((panel) => drawBorder(image.data, width, panel, [20, 20, 20], 4));
+  panels.forEach((panel) => {
+    drawBorder(image.data, width, panel, [20, 20, 20], 4);
+    fillRect(image.data, width, {
+      x0: panel.x0 + 48,
+      y0: panel.y0 + 48,
+      x1: panel.x0 + 108,
+      y1: panel.y0 + 108
+    }, [20, 20, 20]);
+  });
   return image;
 }
 

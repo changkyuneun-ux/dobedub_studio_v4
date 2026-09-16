@@ -82,6 +82,14 @@ export function looksLikePanel(
   minEdgeScore = 0.5,
   minSides = 3
 ): boolean {
+  const pageWidth = pageMargin.x1 - pageMargin.x0;
+  const pageHeight = pageMargin.y1 - pageMargin.y0;
+  const regionWidth = region.x1 - region.x0;
+  const regionHeight = region.y1 - region.y0;
+  const fullWidthBand = region.x0 <= pageMargin.x0 + 2 && region.x1 >= pageMargin.x1 - 2 && regionHeight <= pageHeight * 0.2;
+  const fullHeightBand = region.y0 <= pageMargin.y0 + 2 && region.y1 >= pageMargin.y1 - 2 && regionWidth <= pageWidth * 0.2;
+  if ((fullWidthBand || fullHeightBand) && innerInkRatio(image, region) < 0.0005) return false;
+
   const edges = regionBorderScore(image, region);
   const atMargin = [
     region.y0 <= pageMargin.y0 + 2,
@@ -94,4 +102,27 @@ export function looksLikePanel(
   const passed = checked.filter((score) => score >= minEdgeScore).length;
   const need = Math.min(minSides, checked.length);
   return passed >= need;
+}
+
+function innerInkRatio(image: ImageData, region: PixelRegion): number {
+  const { width, data } = image;
+  const regionWidth = region.x1 - region.x0;
+  const regionHeight = region.y1 - region.y0;
+  const inset = Math.max(8, Math.floor(Math.min(regionWidth, regionHeight) * 0.08));
+  const x0 = Math.max(0, Math.floor(region.x0 + inset));
+  const y0 = Math.max(0, Math.floor(region.y0 + inset));
+  const x1 = Math.min(image.width, Math.ceil(region.x1 - inset));
+  const y1 = Math.min(image.height, Math.ceil(region.y1 - inset));
+  if (x1 <= x0 || y1 <= y0) return 0;
+
+  let ink = 0;
+  let total = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const offset = pixelOffset(width, x, y);
+      if (grayValue(data[offset], data[offset + 1], data[offset + 2]) < 100 && chroma(data[offset], data[offset + 1], data[offset + 2]) < 20) ink += 1;
+      total += 1;
+    }
+  }
+  return total > 0 ? ink / total : 0;
 }

@@ -94,6 +94,25 @@ describe("darkBgSplitEngine", () => {
       })
     ]);
   });
+
+  it("orders mixed dark webtoon layout top-to-bottom and left-to-right within each row", () => {
+    const image = blankImage(900, 960, [20, 20, 20]);
+    drawPanel(image, { x0: 500, y0: 470, x1: 850, y1: 900 });
+    drawPanel(image, { x0: 80, y0: 40, x1: 420, y1: 180 });
+    drawPanel(image, { x0: 460, y0: 40, x1: 800, y1: 180 });
+    drawPanel(image, { x0: 70, y0: 220, x1: 820, y1: 380 });
+    drawPanel(image, { x0: 70, y0: 470, x1: 420, y1: 900 });
+
+    const cuts = detectCuts(image, "auto", "image", "dark-webtoon");
+
+    expect(cuts.map(({ index, x0, y0, x1, y1 }) => [index, x0, y0, x1, y1])).toEqual([
+      [1, 80, 40, 420, 180],
+      [2, 460, 40, 800, 180],
+      [3, 70, 220, 820, 380],
+      [4, 70, 470, 420, 900],
+      [5, 500, 470, 850, 900]
+    ]);
+  });
 });
 
 function drawPanel(image: ImageData, region: PixelRegion) {

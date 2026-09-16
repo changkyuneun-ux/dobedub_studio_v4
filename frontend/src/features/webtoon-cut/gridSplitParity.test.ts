@@ -41,16 +41,11 @@ describe("grid_split.py parity — decorative artwork rejection (_looks_like_pan
 
     const cuts = detectGridCuts(image);
 
-    // 이 합성 이미지는 두 가지가 겹친 극단적인 케이스다: (1) fourPanelPage의 두 행이 y좌표까지
-    // 완전히 일치해 그 사이 거터가 별도 leaf로 분리되고, (2) 장식 다이아몬드 blob이 재귀 분할에서
-    // 자기 자신을 관통하는 세로 분할선을 만들어 2조각으로 쪼개진다. 애초에 "장식은 컷으로
-    // 오인식되지 않는다"는 것을 이 한 픽셀 구성으로 완벽히 검증하는 fixture가 아니라는 뜻이다
-    // (그 검증은 아래 "does not mistake a borderless decorative blob" 테스트와, 실사 페이지
-    // page_016 검증에서 이미 이뤄짐). vendored grid_split.py 원본을 이 픽셀과 동일한 구조의
-    // 합성 이미지에 직접 실행해 확인한 결과 Python도 동일하게 7개(진짜 4컷 + 거터 밴드 1개 +
-    // 장식 조각 2개)를 반환하므로, 이 테스트는 "TS 포팅이 grid_split.py의 결과와 정확히
-    // 일치하는지"를 검증하는 parity 테스트로 유지한다.
-    expect(cuts).toHaveLength(7);
+    // 이 합성 이미지는 장식 다이아몬드 blob이 재귀 분할에서 자기 자신을 관통하는 세로
+    // 분할선을 만들어 2조각으로 쪼개지는 극단적인 케이스다. 과거에는 두 행 사이 흰 거터도
+    // 별도 leaf로 통과해 7개가 나왔지만, 현재는 내부 잉크가 없는 전체 폭 얇은 거터 밴드를
+    // 컷 후보에서 제거하므로 진짜 4컷 + 장식 조각 2개, 총 6개가 parity 기준이다.
+    expect(cuts).toHaveLength(6);
     expect(cuts.every((cut) => cut.mode === "grid")).toBe(true);
     const real = cuts.filter(({ x0, y0, x1, y1 }) =>
       [

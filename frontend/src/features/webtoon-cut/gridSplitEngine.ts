@@ -1,8 +1,10 @@
 import { PAGE_POLICY } from "./constants";
 import { edgeInkScore, looksLikePanel } from "./panelBorderCheck";
 import { chroma, grayValue, median, pixelOffset } from "./pixels";
+import { orderReadingSequence } from "./readingOrder";
 
 export { grayValue };
+export { orderReadingSequence };
 import type { PixelRegion } from "./types";
 
 /**
@@ -388,6 +390,74 @@ function darkRatio(dark: Uint8Array, width: number, region: PixelRegion): number
   return total > 0 ? count / total : 0;
 }
 
+function overlapLen(a0: number, a1: number, b0: number, b1: number): number {
+  return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+}
+
+function axisGap(a0: number, a1: number, b0: number, b1: number): number {
+  if (a1 < b0) return b0 - a1;
+  if (b1 < a0) return a0 - b1;
+  return 0;
+}
+
+function isNearBorderProtrusion(candidate: PixelRegion, core: PixelRegion, maxGap: number): boolean {
+  const outsideCore = candidate.x0 < core.x0 || candidate.y0 < core.y0 || candidate.x1 > core.x1 || candidate.y1 > core.y1;
+  if (!outsideCore) return false;
+
+  const xOverlap = overlapLen(candidate.x0, candidate.x1, core.x0, core.x1);
+  const yOverlap = overlapLen(candidate.y0, candidate.y1, core.y0, core.y1);
+  const xGap = axisGap(candidate.x0, candidate.x1, core.x0, core.x1);
+  const yGap = axisGap(candidate.y0, candidate.y1, core.y0, core.y1);
+  const cw = candidate.x1 - candidate.x0;
+  const ch = candidate.y1 - candidate.y0;
+  const bw = core.x1 - core.x0;
+  const bh = core.y1 - core.y0;
+  const minXOverlap = Math.max(8, Math.min(cw, bw) * 0.25);
+  const minYOverlap = Math.max(8, Math.min(ch, bh) * 0.25);
+
+  return (yGap <= maxGap && xOverlap >= minXOverlap) || (xGap <= maxGap && yOverlap >= minYOverlap);
+}
+
+function expandToNearbyInk(image: ImageData, region: PixelRegion, searchRegion: PixelRegion, padFrac = 0.06): PixelRegion {
+  const { width: wImg, height: hImg, data } = image;
+  const sw = searchRegion.x1 - searchRegion.x0;
+  const sh = searchRegion.y1 - searchRegion.y0;
+  const padX = Math.floor(sw * padFrac) + 10;
+  const padY = Math.floor(sh * padFrac) + 10;
+  const ex0 = Math.max(0, searchRegion.x0 - padX);
+  const ey0 = Math.max(0, searchRegion.y0 - padY);
+  const ex1 = Math.min(wImg, searchRegion.x1 + padX);
+  const ey1 = Math.min(hImg, searchRegion.y1 + padY);
+  const cropW = ex1 - ex0;
+  const cropH = ey1 - ey0;
+  if (cropW <= 0 || cropH <= 0) return region;
+
+  const mask = new Uint8Array(cropW * cropH);
+  for (let y = 0; y < cropH; y += 1) {
+    for (let x = 0; x < cropW; x += 1) {
+      const o = pixelOffset(wImg, ex0 + x, ey0 + y);
+      if (grayValue(data[o], data[o + 1], data[o + 2]) < 150) mask[y * cropW + x] = 1;
+    }
+  }
+  const core: PixelRegion = { x0: region.x0 - ex0, y0: region.y0 - ey0, x1: region.x1 - ex0, y1: region.y1 - ey0 };
+  let union: PixelRegion = { ...core };
+  const maxGap = Math.min(24, Math.max(10, Math.floor(Math.min(region.x1 - region.x0, region.y1 - region.y0) * 0.03)));
+
+  for (const component of labelComponents(mask, cropW, cropH)) {
+    if (component.area < 24) continue;
+    const candidate: PixelRegion = { x0: component.x0, y0: component.y0, x1: component.x1, y1: component.y1 };
+    if (!isNearBorderProtrusion(candidate, core, maxGap)) continue;
+    union = {
+      x0: Math.min(union.x0, candidate.x0),
+      y0: Math.min(union.y0, candidate.y0),
+      x1: Math.max(union.x1, candidate.x1),
+      y1: Math.max(union.y1, candidate.y1)
+    };
+  }
+
+  return { x0: ex0 + union.x0, y0: ey0 + union.y0, x1: ex0 + union.x1, y1: ey0 + union.y1 };
+}
+
 /**
  * grid_split.py의 _refine_to_border 포팅: 재귀 분할로 얻은 leaf 영역을 실제 인쇄된
  * 테두리 사각형(그 지점 주변에서 가장 큰 어두운 연결 성분의 바운딩박스)에 맞춰 미세 조정한다.
@@ -397,8 +467,9 @@ function darkRatio(dark: Uint8Array, width: number, region: PixelRegion): number
 function refineToBorder(
   image: ImageData,
   leaf: PixelRegion,
-  padFrac = 0.03,
-  minKeepRatio = 0.55
+  padFrac = 0.06,
+  minKeepRatio = 0.55,
+  includeNearbyInk = true
 ): { region: PixelRegion; ok: boolean } {
   const { width: wImg, height: hImg, data } = image;
   const { x0, y0, x1, y1 } = leaf;
@@ -438,7 +509,8 @@ function refineToBorder(
   const newArea = (nx1 - nx0) * (ny1 - ny0);
   if (leafArea === 0 || newArea === 0) return { region: leaf, ok: false };
   if (inter / leafArea < minKeepRatio || newArea / leafArea < minKeepRatio) return { region: leaf, ok: false };
-  return { region: { x0: nx0, y0: ny0, x1: nx1, y1: ny1 }, ok: true };
+  const refined = { x0: nx0, y0: ny0, x1: nx1, y1: ny1 };
+  return { region: includeNearbyInk ? expandToNearbyInk(image, refined, leaf, padFrac) : refined, ok: true };
 }
 
 /**
@@ -483,30 +555,4 @@ export function detectGridRegions(image: ImageData): PixelRegion[] {
   return candidates
     .filter(({ checks }) => checks.some((c) => looksLikePanel(image, c, margin)))
     .map(({ finalRegion }) => finalRegion);
-}
-
-/** grid_split.py의 split_panels 마지막 "읽기 순서 정렬" 블록 포팅: 같은 행끼리 묶은 뒤 좌->우, 행은 상->하. */
-export function orderReadingSequence(regions: PixelRegion[]): PixelRegion[] {
-  const sorted = [...regions].sort((a, b) => a.y0 - b.y0);
-  const rows: PixelRegion[][] = [];
-  for (const r of sorted) {
-    const rh = r.y1 - r.y0;
-    let placed = false;
-    for (const row of rows) {
-      const base = row[0];
-      const bh = base.y1 - base.y0;
-      if (Math.abs((r.y0 + r.y1) / 2 - (base.y0 + base.y1) / 2) < Math.min(rh, bh) * 0.5) {
-        row.push(r);
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) rows.push([r]);
-  }
-  const ordered: PixelRegion[] = [];
-  for (const row of rows) {
-    row.sort((a, b) => a.x0 - b.x0);
-    ordered.push(...row);
-  }
-  return ordered;
 }

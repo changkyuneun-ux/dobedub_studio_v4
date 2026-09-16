@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import {
   apiClient,
   BatchJobResponse,
@@ -32,6 +32,7 @@ import {
   ProtectedVideoThumb,
   ProtectedAssetPreview
 } from "../components/ProtectedAssets";
+import { isEditableKeyboardTarget, nextListSelectionId } from "../helpers/listKeyboardNavigation";
 
 function workflowLabel(workflow: WorkflowItem) {
   return workflow.label || workflow.name || workflow.id;
@@ -372,6 +373,15 @@ export function Create3aScreen({
   ] as const;
   const allTerminalItemsSelected = terminalRunpodItems.length > 0
     && terminalRunpodItems.every((item) => selectedRunpodTaskIds.includes(item.taskId));
+  const handleRunpodHistoryListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (isEditableKeyboardTarget(event.target)) return;
+    const nextTaskId = nextListSelectionId(filteredHistory, selectedTaskId, event.key, (item) => item.taskId);
+    if (nextTaskId === selectedTaskId) return;
+    const nextItem = filteredHistory.find((item) => item.taskId === nextTaskId);
+    if (!nextItem) return;
+    event.preventDefault();
+    onSelect(nextItem);
+  };
   const toggleRunpodSelection = (taskId: string) => {
     setSelectedRunpodTaskIds((current) => current.includes(taskId)
       ? current.filter((candidate) => candidate !== taskId)
@@ -769,7 +779,13 @@ export function Create3aScreen({
           </button>
         </div>
       </div>
-      <div className="v3-card v3-runpod-history-table">
+      <div
+        className="v3-card v3-runpod-history-table"
+        role="listbox"
+        aria-label="RunPod 작업 이력"
+        tabIndex={0}
+        onKeyDown={handleRunpodHistoryListKeyDown}
+      >
         <div className="v3-history-step-head">
           <span className="v3-step-badge">3</span>
           <strong>조회 결과</strong>
@@ -800,6 +816,8 @@ export function Create3aScreen({
           return (
             <div
               key={item.taskId}
+              role="option"
+              aria-selected={isSelected}
               className={`v3-review-table-row v3-history-row ${runpodRowToneClass(resultStatusTone)} ${isSelected ? "is-selected" : ""}`}
               style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID, cursor: "pointer" }}
               onClick={() => onSelect(item)}
@@ -1099,10 +1117,25 @@ function PromptGenerationHistory({
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(total, page * pageSize);
+  const handlePromptHistoryListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (isEditableKeyboardTarget(event.target)) return;
+    const nextDraftId = nextListSelectionId(items, selectedPromptHistoryDraftId, event.key, (item) => item.draftId);
+    if (nextDraftId === selectedPromptHistoryDraftId) return;
+    const nextItem = items.find((item) => item.draftId === nextDraftId);
+    if (!nextItem) return;
+    event.preventDefault();
+    selectPromptHistoryItem(nextItem);
+  };
 
   return (
     <div className="v3-prompt-history-layout">
-      <div className="v3-card v3-prompt-history-card">
+      <div
+        className="v3-card v3-prompt-history-card"
+        role="listbox"
+        aria-label="프롬프트 생성 이력"
+        tabIndex={0}
+        onKeyDown={handlePromptHistoryListKeyDown}
+      >
       <div className="v3-card-header">
         <div className="v3-card-header-title">프롬프트 생성 이력</div>
         <span className="v3-card-header-meta">{total}건 · 10건 / 페이지</span>
@@ -1167,6 +1200,8 @@ function PromptGenerationHistory({
           <div
             className={`v3-prompt-history-row ${selectedPromptHistoryDraftId === item.draftId ? "is-selected" : ""}`}
             key={item.draftId}
+            role="option"
+            aria-selected={selectedPromptHistoryDraftId === item.draftId}
             onClick={() => {
               selectPromptHistoryItem(item);
             }}

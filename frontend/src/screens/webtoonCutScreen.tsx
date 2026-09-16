@@ -9,6 +9,7 @@ import {
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { shellNavigate } from "../helpers/navigation";
+import { isEditableKeyboardTarget, nextListSelectionId } from "../helpers/listKeyboardNavigation";
 import { downloadProtectedAsset } from "../helpers/workflow";
 import { StudioRoute } from "../router";
 import { saveWebtoonCutHandoff } from "../state/durableWorkspace";
@@ -326,6 +327,23 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
     }
   }
 
+  function handleJobListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (isEditableKeyboardTarget(event.target)) return;
+    const nextJobId = nextListSelectionId(jobs, selectedJob?.jobId || selectedJobId, event.key, (job) => job.jobId);
+    if (!nextJobId || nextJobId === selectedJob?.jobId) return;
+    event.preventDefault();
+    setSelectedJobId(nextJobId);
+    void refreshOutputs(nextJobId);
+  }
+
+  function handleOutputListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (isEditableKeyboardTarget(event.target)) return;
+    const nextOutputId = nextListSelectionId(outputs, previewOutputId, event.key, (output) => output.outputId);
+    if (!nextOutputId || nextOutputId === previewOutputId) return;
+    event.preventDefault();
+    setPreviewOutputId(nextOutputId);
+  }
+
   return (
     <AppShell
       user={user}
@@ -451,9 +469,20 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
           </div>
 
           <div className="v3-webtoon-cut-history">
-            <div className="v3-webtoon-cut-job-list">
+            <div
+              className="v3-webtoon-cut-job-list"
+              role="listbox"
+              aria-label="컷 분할 작업 이력"
+              tabIndex={0}
+              onKeyDown={handleJobListKeyDown}
+            >
               {jobs.map((job) => (
-                <div key={job.jobId} className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`}>
+                <div
+                  key={job.jobId}
+                  role="option"
+                  aria-selected={selectedJob?.jobId === job.jobId}
+                  className={`v3-webtoon-cut-job-row${selectedJob?.jobId === job.jobId ? " is-selected" : ""}`}
+                >
                   <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => { setSelectedJobId(job.jobId); void refreshOutputs(job.jobId); }}>
                     <strong>{job.displayName}</strong>
                     <span>{job.status} · {splitModeLabel(job.splitMode)} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
@@ -490,9 +519,22 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
               </div>
 
               <div className={`v3-webtoon-cut-output-layout is-${viewMode}`}>
-                <div className="v3-webtoon-cut-output-list">
+                <div
+                  className="v3-webtoon-cut-output-list"
+                  role="listbox"
+                  aria-label="분리 컷 목록"
+                  tabIndex={0}
+                  onKeyDown={handleOutputListKeyDown}
+                >
                   {outputs.map((output) => (
-                    <button key={output.outputId} className={`v3-webtoon-cut-output-row${previewOutputId === output.outputId ? " is-preview" : ""}${selectedOutputIds.has(output.outputId) ? " is-selected" : ""}`} type="button" onClick={() => setPreviewOutputId(output.outputId)}>
+                    <button
+                      key={output.outputId}
+                      role="option"
+                      aria-selected={previewOutputId === output.outputId}
+                      className={`v3-webtoon-cut-output-row${previewOutputId === output.outputId ? " is-preview" : ""}${selectedOutputIds.has(output.outputId) ? " is-selected" : ""}`}
+                      type="button"
+                      onClick={() => setPreviewOutputId(output.outputId)}
+                    >
                       <input type="checkbox" checked={selectedOutputIds.has(output.outputId)} onChange={() => toggleOutput(output.outputId)} onClick={(event) => event.stopPropagation()} />
                       <RetryingCutThumbnail src={output.viewUrl} alt={output.displayPath} />
                       <span><b>{output.displayPath}</b><small>page {output.pageNumber || "-"} · cut {output.cutIndex} · {output.width || "-"}×{output.height || "-"}</small></span>

@@ -14,6 +14,8 @@ import os
 import cv2
 import numpy as np
 
+from backend.app.services.webtoon_panel_engine.reading_order import order_reading_sequence
+
 EDGE_MARGIN = 3
 BG_UNIFORM_TOL = 10
 BG_UNIFORM_FRAC = 0.998
@@ -119,6 +121,7 @@ def detect_panels(gray):
     min_gap = max(1, round(MIN_GAP_AT_1440 * w / 1440))
     boxes = xy_cut(gray, (EDGE_MARGIN, 0, w - EDGE_MARGIN, h), "h", vmax, min_gap)
     boxes, stats = filter_leaves(gray, boxes, w)
+    boxes = order_reading_sequence(tuple(map(int, box)) for box in boxes)
     stats["vmax"] = vmax
     return boxes, stats
 

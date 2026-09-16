@@ -1,4 +1,5 @@
-import { detectGridRegions, orderReadingSequence, pageMargin } from "./gridSplitEngine";
+import { detectGridRegions, pageMargin } from "./gridSplitEngine";
+import { orderReadingSequence } from "./readingOrder";
 import type { DetectedCut } from "./types";
 
 export function detectGridCuts(image: ImageData): DetectedCut[] {

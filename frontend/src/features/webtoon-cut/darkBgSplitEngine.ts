@@ -1,4 +1,5 @@
 import { grayValue, pixelOffset } from "./pixels";
+import { orderReadingSequence } from "./readingOrder";
 import type { PixelRegion } from "./types";
 
 export const EDGE_MARGIN = 3;
@@ -202,7 +203,7 @@ export function detectPanels(image: ImageData | GrayImage): DarkBgSplitResult {
   );
   const filtered = filterLeaves(gray, boxes, gray.width);
   return {
-    boxes: filtered.boxes,
+    boxes: orderReadingSequence(filtered.boxes),
     stats: {
       ...filtered.stats,
       vmax
