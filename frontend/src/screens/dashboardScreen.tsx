@@ -15,6 +15,7 @@ type Props = { user: User; onGoTo: (route: StudioRoute) => void; area?: "generat
 
 const RANGE_STORAGE_KEY = "dobedub.dashboard.range";
 const REFRESH_INTERVAL_MS = 60_000;
+const DURATION_COST_PAGE_SIZE = 10;
 const RANGE_OPTIONS: Array<{ value: DashboardRange; label: string }> = [
   { value: "today", label: "오늘" },
   { value: "7d", label: "7일" },
@@ -317,11 +318,18 @@ function Kpi({ label, value, sub, tone }: { label: string; value: React.ReactNod
 function DurationCostCard({ summary }: { summary: DashboardSummary }) {
   const breakdown = summary.durationCostBreakdown;
   const days = Object.keys(breakdown.byDay).sort();
+  const [durationCostPage, setDurationCostPage] = useState(1);
   const s = breakdown.summary;
   const ratio =
     s && s.fiveSec.costPerJobUsd && s.tenSec.costPerJobUsd
       ? s.tenSec.costPerJobUsd / s.fiveSec.costPerJobUsd
       : null;
+  const durationCostPageCount = Math.max(1, Math.ceil(days.length / DURATION_COST_PAGE_SIZE));
+  const safeDurationCostPage = Math.min(durationCostPageCount, Math.max(1, durationCostPage));
+  const durationCostPageStartIndex = (safeDurationCostPage - 1) * DURATION_COST_PAGE_SIZE;
+  const paginatedDays = days.slice(durationCostPageStartIndex, durationCostPageStartIndex + DURATION_COST_PAGE_SIZE);
+  const durationCostPageStart = days.length ? durationCostPageStartIndex + 1 : 0;
+  const durationCostPageEnd = Math.min(days.length, durationCostPageStartIndex + paginatedDays.length);
 
   return (
     <div className="v3-card v3-dash-duration">
@@ -376,7 +384,7 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
               </tr>
             </thead>
             <tbody>
-              {days.map((day) => {
+              {paginatedDays.map((day) => {
                 const row = breakdown.byDay[day];
                 return (
                   <tr key={day} className={row.split ? undefined : "is-before"}>
@@ -405,6 +413,14 @@ function DurationCostCard({ summary }: { summary: DashboardSummary }) {
               })}
             </tbody>
           </table>
+          <div className="v3-dash-duration-pagination">
+            <span className="v3-pagination-meta">{durationCostPageStart}–{durationCostPageEnd} / {days.length} · 10건 / 페이지</span>
+            <div className="v3-pagination-controls">
+              <button className="v3-page-button" type="button" disabled={safeDurationCostPage <= 1} onClick={() => setDurationCostPage((value) => Math.max(1, value - 1))}>이전</button>
+              <span className="v3-pagination-meta">{safeDurationCostPage} / {durationCostPageCount}</span>
+              <button className="v3-page-button" type="button" disabled={safeDurationCostPage >= durationCostPageCount} onClick={() => setDurationCostPage((value) => Math.min(durationCostPageCount, value + 1))}>다음</button>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="v3-empty-panel">기간 내 RunPod 서버리스 작업이 없습니다.</div>
@@ -553,4 +569,3 @@ export function formatDuration(seconds?: number | null): string {
   if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
 }
-

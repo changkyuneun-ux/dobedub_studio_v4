@@ -7289,11 +7289,13 @@ button {
 .v3-dash-duration-table th.is-group-5s { color: #2368bd; }
 .v3-dash-duration-table th.is-group-10s { color: #7c4fd1; }
 .v3-dash-duration-table tr.is-before td:not(.is-mono) { color: var(--v3-text-description); }
+.v3-dash-duration-pagination { align-items: center; border-top: 1px solid var(--v3-border-inner); display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; }
 .v3-dash-duration-footnote { padding: 10px 16px 14px; font-size: 11px; color: var(--v3-text-description); border-top: 1px solid var(--v3-border-inner); }
 .v3-dash-duration-footnote b { color: var(--v3-text-secondary); font-weight: 600; }
 @media (max-width: 860px) {
   .v3-dash-duration-strip { grid-template-columns: 1fr; }
   .v3-dash-duration-cell, .v3-dash-duration-ratio { border-right: 0; border-bottom: 1px solid var(--v3-border-inner); }
+  .v3-dash-duration-pagination { align-items: flex-start; flex-direction: column; }
 }
 
 .v3-dash-bars { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; }

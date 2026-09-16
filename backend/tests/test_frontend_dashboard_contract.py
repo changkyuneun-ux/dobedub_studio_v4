@@ -76,3 +76,17 @@ def test_screen_blocks_and_refresh_policy():
     assert "갱신 실패" in SCREEN
     for class_name in (".v3-dash-tiles", ".v3-dash-kpi-grid", ".v3-dash-table", ".v3-dash-alerts", ".v3-dash-bar"):
         assert class_name in STYLES, class_name
+
+
+def test_duration_cost_table_has_ten_row_pagination():
+    # 화면에 30일 범위가 표시될 때 컷 길이별 비용 일자 테이블이 길게 늘어나면
+    # 카드 하단 비교/각주 확인이 어려워진다. 페이지 크기 변경이나 페이지 slice
+    # 누락은 운영 대시보드에서 즉시 회귀이므로 소스 계약으로 보호한다.
+    assert "DURATION_COST_PAGE_SIZE = 10" in SCREEN
+    assert "durationCostPage" in SCREEN
+    assert "durationCostPageCount" in SCREEN
+    assert "paginatedDays" in SCREEN
+    assert "days.slice(durationCostPageStartIndex, durationCostPageStartIndex + DURATION_COST_PAGE_SIZE)" in SCREEN
+    assert "10건 / 페이지" in SCREEN
+    assert "v3-dash-duration-pagination" in SCREEN
+    assert ".v3-dash-duration-pagination" in STYLES
