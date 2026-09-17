@@ -17,7 +17,7 @@ from sqlalchemy import case, distinct, func, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import Settings, get_settings
-from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, timestamp_fields, utc_now
+from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, parse_timestamp, timestamp_fields, utc_now
 from backend.app.db.models import BatchJob, TaskExecutionPolicy, User, WorkflowTask
 from backend.app.services.migration_status_service import migration_status
 from backend.app.services.admin_service import count_active_workflows
@@ -615,13 +615,20 @@ def _execution_seconds(status_json: dict | None) -> float:
         return 0.0
 
 
-def _kst_calendar_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
-    start_kst = datetime(day.year, day.month, day.day, tzinfo=SEOUL_TIMEZONE)
-    end_kst = start_kst + timedelta(days=1)
-    return (
-        start_kst.astimezone(UTC_TIMEZONE).replace(tzinfo=None),
-        end_kst.astimezone(UTC_TIMEZONE).replace(tzinfo=None),
-    )
+def _task_created_at_utc(created_at: datetime, time_context: dict | None) -> datetime:
+    """Return the canonical UTC instant for a legacy KST-naive task row."""
+    application = (time_context or {}).get("application")
+    created_context = application.get("createdAt") if isinstance(application, dict) else None
+    normalized_utc = created_context.get("utc") if isinstance(created_context, dict) else None
+    parsed = parse_timestamp(normalized_utc, naive_timezone=UTC_TIMEZONE)
+    if parsed is not None:
+        return parsed.astimezone(UTC_TIMEZONE)
+    if created_at.tzinfo is not None:
+        return created_at.astimezone(UTC_TIMEZONE)
+    # task_tracking_service historically persists WorkflowTask.created_at as
+    # a timezone-less KST wall clock. time_context_json was added later, so
+    # empty legacy contexts must keep that storage contract.
+    return created_at.replace(tzinfo=SEOUL_TIMEZONE).astimezone(UTC_TIMEZONE)
 
 
 def _cached_serverless_billing(settings: Settings, since_day: date, until_day: date) -> tuple[dict[str, dict], str | None]:
@@ -705,11 +712,15 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
             WorkflowTask.created_at,
             WorkflowTask.status,
             WorkflowTask.runpod_status_json,
+            WorkflowTask.time_context_json,
         ).where(
             _live_tasks(),
             WorkflowTask.execution_mode == "runpod",
-            WorkflowTask.created_at >= since,
-            WorkflowTask.created_at < until,
+            # created_at is historically KST-naive, while newer rows also
+            # carry a canonical UTC instant in time_context_json. Fetch a
+            # one-day guard band, then bucket by the normalized instant below.
+            WorkflowTask.created_at >= since - timedelta(days=1),
+            WorkflowTask.created_at < until + timedelta(days=1),
         )
     ).all()
 
@@ -728,62 +739,38 @@ def _duration_cost_breakdown(session: Session, settings: Settings, since: dateti
         for day in day_keys
     }
 
-    for workflow_id, created_at, status, status_json in rows:
-        if created_at is None:
-            continue
-        day_key = created_at.date().isoformat()
-        entry = per_day.get(day_key)
-        if entry is None:
-            # _utc_day_range는 since/until에서 직접 계산하므로 이 경로는 이론상
-            # 발생하지 않지만, 타임존/경계값 실수를 조용히 흡수하지 않기 위해
-            # 방어적으로 새 버킷을 만든다(요청 구간 밖 UTC일이 섞였다는 신호).
-            entry = per_day.setdefault(day_key, {
-                "submitted": 0, "completed": 0, "failed": 0,
-                "count": {"fiveSec": 0, "tenSec": 0, "unclassified": 0},
-                "execSeconds": {"fiveSec": 0.0, "tenSec": 0.0, "unclassified": 0.0},
-            })
-        entry["submitted"] += 1
-        status_kind = _classify_status(status)
-        if status_kind == "completed":
-            entry["completed"] += 1
-        elif status_kind == "failed":
-            entry["failed"] += 1
-        if created_at.date() >= DURATION_SPLIT_CUTOFF_UTC:
-            bucket = _duration_bucket(workflow_id)
-            entry["count"][bucket] += 1
-            entry["execSeconds"][bucket] += _execution_seconds(status_json)
-
-    # 비용은 RunPod billing API와 정확히 대조하기 위해 UTC 캘린더일 기준을 유지한다.
-    # 반면 운영자가 "오늘 몇 건"을 볼 때는 KST 달력일이 필요하므로, 같은 날짜 라벨
-    # (예: 2026-09-16)에 대해 별도 KST 건수도 함께 내려준다. KST 9/16은 UTC
-    # 9/15 15:00~9/16 15:00이므로, 아래 쿼리는 UTC 집계 범위와 일부러 다르다.
     kst_counts: dict[str, dict[str, int]] = {
         day: {"submitted": 0, "completed": 0, "failed": 0}
         for day in day_keys
     }
-    first_kst_start, _ = _kst_calendar_day_bounds_utc(date.fromisoformat(day_keys[0]))
-    _, last_kst_end = _kst_calendar_day_bounds_utc(date.fromisoformat(day_keys[-1]))
-    kst_rows = session.execute(
-        select(WorkflowTask.created_at, WorkflowTask.status).where(
-            _live_tasks(),
-            WorkflowTask.execution_mode == "runpod",
-            WorkflowTask.created_at >= first_kst_start,
-            WorkflowTask.created_at < last_kst_end,
-        )
-    ).all()
-    for created_at, status in kst_rows:
+
+    for workflow_id, created_at, status, status_json, time_context in rows:
         if created_at is None:
             continue
-        day_key = created_at.replace(tzinfo=UTC_TIMEZONE).astimezone(SEOUL_TIMEZONE).date().isoformat()
-        entry = kst_counts.get(day_key)
+        created_at_utc = _task_created_at_utc(created_at, time_context)
+        status_kind = _classify_status(status)
+        kst_day_key = created_at_utc.astimezone(SEOUL_TIMEZONE).date().isoformat()
+        kst_entry = kst_counts.get(kst_day_key)
+        if kst_entry is not None:
+            kst_entry["submitted"] += 1
+            if status_kind == "completed":
+                kst_entry["completed"] += 1
+            elif status_kind == "failed":
+                kst_entry["failed"] += 1
+
+        day_key = created_at_utc.date().isoformat()
+        entry = per_day.get(day_key)
         if entry is None:
             continue
         entry["submitted"] += 1
-        status_kind = _classify_status(status)
         if status_kind == "completed":
             entry["completed"] += 1
         elif status_kind == "failed":
             entry["failed"] += 1
+        if created_at_utc.date() >= DURATION_SPLIT_CUTOFF_UTC:
+            bucket = _duration_bucket(workflow_id)
+            entry["count"][bucket] += 1
+            entry["execSeconds"][bucket] += _execution_seconds(status_json)
 
     since_day = date.fromisoformat(day_keys[0])
     until_day = date.fromisoformat(day_keys[-1])

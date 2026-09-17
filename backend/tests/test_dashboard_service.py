@@ -245,30 +245,42 @@ def test_filter_options_lists_distinct_users_and_workflows(summary):
 def test_duration_cost_breakdown_separates_utc_and_kst_counts(db_session):
     """RunPod cost rows stay UTC-billed, but job counts expose both UTC and KST days."""
     db_session.add(User(id="duration_user", name="작업자", role="OPERATOR", permissions_json=[], is_active=True))
-    _task(
+    kst_only = _task(
         db_session,
         "kst_only",
         status="COMPLETED",
-        created=datetime(2026, 9, 15, 16, 0, 0),  # KST 2026-09-16, UTC 2026-09-15
+        created=datetime(2026, 9, 16, 1, 0, 0),
         workflow="1-images_10s_chain_81.json",
         user_id="duration_user",
-    ).runpod_status_json = {"executionTime": 10_000}
-    _task(
+    )
+    kst_only.time_context_json = {"application": {"createdAt": {
+        "utc": "2026-09-15T16:00:00Z", "kst": "2026-09-16 01:00:00 KST",
+    }}}
+    kst_only.runpod_status_json = {"executionTime": 10_000}
+    utc_and_kst = _task(
         db_session,
         "utc_and_kst",
         status="COMPLETED",
-        created=datetime(2026, 9, 16, 1, 0, 0),  # KST 2026-09-16
+        created=datetime(2026, 9, 16, 10, 0, 0),
         workflow="1-images_10s_chain_81.json",
         user_id="duration_user",
-    ).runpod_status_json = {"executionTime": 10_000}
-    _task(
+    )
+    utc_and_kst.time_context_json = {"application": {"createdAt": {
+        "utc": "2026-09-16T01:00:00Z", "kst": "2026-09-16 10:00:00 KST",
+    }}}
+    utc_and_kst.runpod_status_json = {"executionTime": 10_000}
+    utc_only = _task(
         db_session,
         "utc_only",
         status="FAILED",
-        created=datetime(2026, 9, 16, 16, 0, 0),  # KST 2026-09-17
+        created=datetime(2026, 9, 17, 1, 0, 0),
         workflow="wan22_default_81.json",
         user_id="duration_user",
-    ).runpod_status_json = {"executionTime": 5_000}
+    )
+    utc_only.time_context_json = {"application": {"createdAt": {
+        "utc": "2026-09-16T16:00:00Z", "kst": "2026-09-17 01:00:00 KST",
+    }}}
+    utc_only.runpod_status_json = {"executionTime": 5_000}
     db_session.flush()
 
     with patch(
@@ -290,6 +302,46 @@ def test_duration_cost_breakdown_separates_utc_and_kst_counts(db_session):
     assert row["totalCostUsd"] == 12.0
     assert row["split"]["tenSec"]["count"] == 1
     assert row["split"]["fiveSec"]["count"] == 1
+
+
+def test_duration_cost_breakdown_uses_stored_time_context_without_double_kst_conversion(db_session):
+    """Production stores task.created_at as KST-naive; do not add nine hours again."""
+    db_session.add(User(id="timezone_user", name="작업자", role="OPERATOR", permissions_json=[], is_active=True))
+    task = _task(
+        db_session,
+        "task_20260916_163046_regression",
+        status="COMPLETED",
+        created=datetime(2026, 9, 16, 16, 30, 47),
+        workflow="1-images_10s_chain_81.json",
+        user_id="timezone_user",
+    )
+    task.time_context_json = {
+        "application": {
+            "createdAt": {
+                "utc": "2026-09-16T07:30:47Z",
+                "kst": "2026-09-16 16:30:47 KST",
+                "sourceTimezone": "UTC",
+                "source": "ecs-application",
+            }
+        }
+    }
+    task.runpod_status_json = {"executionTime": 10_000}
+    db_session.flush()
+
+    with patch(
+        "backend.app.services.dashboard_service._cached_serverless_billing",
+        return_value=({}, None),
+    ):
+        result = _duration_cost_breakdown(
+            db_session,
+            get_settings(),
+            datetime(2026, 9, 16, 0, 0, 0),
+            datetime(2026, 9, 18, 0, 0, 0),
+        )
+
+    assert result["byDay"]["2026-09-16"]["submitted"] == 1
+    assert result["byDay"]["2026-09-16"]["kst"]["submitted"] == 1
+    assert result["byDay"]["2026-09-17"]["kst"]["submitted"] == 0
 
 
 def test_alert_rules():
