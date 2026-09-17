@@ -57,22 +57,15 @@ function statusLabel(status: string) {
 }
 
 function batchResultLabel(job: BatchJobResponse) {
-  if (String(job.status || "").toUpperCase() !== "COMPLETE") return statusLabel(job.status);
-  if (job.failedCount <= 0 && job.cancelledCount > 0) {
-    const successCount = job.videoCompletedCount || 0;
-    return successCount > 0 ? "부분 취소" : "취소됨";
-  }
-  if (job.failedCount <= 0) return "완료";
-  const successCount = (job.promptCompletedCount || 0) + (job.videoCompletedCount || 0);
-  return successCount > 0 ? "부분 실패" : "실패";
+  const normalized = String(job.status || "").toUpperCase();
+  if (normalized === "CANCELLED" || (job.cancelledCount || 0) > 0) return "취소";
+  return normalized === "COMPLETE" ? "완료" : "진행 중";
 }
 
 function batchResultTone(job: BatchJobResponse) {
-  if (String(job.status || "").toUpperCase() !== "COMPLETE") return String(job.status || "").toLowerCase();
-  if (job.failedCount <= 0 && job.cancelledCount > 0) return "cancelled";
-  if (job.failedCount <= 0) return "complete";
-  const successCount = job.videoCompletedCount || 0;
-  return successCount > 0 ? "partial-failed" : "failed";
+  const normalized = String(job.status || "").toUpperCase();
+  if (normalized === "CANCELLED" || (job.cancelledCount || 0) > 0) return "cancelled";
+  return normalized === "COMPLETE" ? "complete" : "incomplete";
 }
 
 function metricPill(value: number, tone: "gray" | "blue" | "green" | "yellow" | "red" = "gray") {
@@ -569,7 +562,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 <th>작업자</th>
                 <th>상태</th>
                 <th>영상길이</th>
-                <th>이미지 완료</th>
+                <th>프롬프트 완료</th>
                 <th>영상 완료</th>
                 <th>zip 파일명</th>
                 <th>다운로드</th>
@@ -586,7 +579,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <td><span className={`v3-batch-status-chip is-${batchResultTone(job)}`}>{batchResultLabel(job)}</span></td>
                   <td>{formatFrameDuration(job.requestedFrames, job.workflowId)}</td>
                   <td>{job.promptCompletedCount} / {job.totalImages}</td>
-                  <td>{job.videoCompletedCount} / {job.totalImages}</td>
+                  <td>{job.videoCompletedCount} / {job.promptCompletedCount}</td>
                   <td>{job.sourceZipFileName || job.sourceDirName || "-"}</td>
                   <td><button className="v3-secondary-button" type="button" onClick={() => downloadBatch(job.id)}>ZIP 다운로드</button></td>
                   <td>

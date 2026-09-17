@@ -96,6 +96,31 @@ def test_batch_management_preserves_zip_and_cut_targets_when_workflow_changes() 
     assert "setWebtoonCutInput(null)" not in workflow_select
 
 
+def test_batch_history_labels_prompt_completion_and_uses_prompt_success_as_video_denominator() -> None:
+    source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    history_table = source.split("v3-batch-history-table", 1)[1].split("v3-batch-history-pagination", 1)[0]
+
+    assert "<th>프롬프트 완료</th>" in history_table
+    assert "<th>이미지 완료</th>" not in history_table
+    assert "{job.promptCompletedCount} / {job.totalImages}" in history_table
+    assert "{job.videoCompletedCount} / {job.promptCompletedCount}" in history_table
+    assert "{job.videoCompletedCount} / {job.totalImages}" not in history_table
+
+
+def test_batch_history_status_ignores_failures_and_uses_only_lifecycle_states() -> None:
+    source = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+    result_label = source.split("function batchResultLabel", 1)[1].split("function batchResultTone", 1)[0]
+    result_tone = source.split("function batchResultTone", 1)[1].split("function metricPill", 1)[0]
+
+    assert "failedCount" not in result_label
+    assert "부분 실패" not in result_label
+    assert "(job.cancelledCount || 0) > 0" in result_label
+    assert 'return "취소";' in result_label
+    assert 'return normalized === "COMPLETE" ? "완료" : "진행 중";' in result_label
+    assert "failedCount" not in result_tone
+    assert 'return normalized === "COMPLETE" ? "complete" : "incomplete";' in result_tone
+
+
 def test_prompt_management_submits_canonical_selected_workflow_id() -> None:
     source = Path("frontend/src/screens/promptManagementScreen.tsx").read_text(encoding="utf-8")
     generate_all = source.split("async function generateAll()", 1)[1].split("function updateVisibleDraft", 1)[0]
