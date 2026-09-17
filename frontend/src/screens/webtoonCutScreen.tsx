@@ -5,7 +5,8 @@ import {
   WebtoonCutHandoffSummary,
   WebtoonCutJobResponse,
   WebtoonCutOutputItem,
-  WebtoonCutSplitMode
+  WebtoonCutSplitMode,
+  WebtoonCutWorkerOption
 } from "../api/client";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
@@ -54,6 +55,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [usedState, setUsedState] = useState("");
   const [flagFilter, setFlagFilter] = useState("");
   const [workerFilter, setWorkerFilter] = useState("");
+  const [workerOptions, setWorkerOptions] = useState<WebtoonCutWorkerOption[]>([]);
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
@@ -76,6 +78,11 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   useEffect(() => {
     void refreshJobs();
   }, []);
+
+  useEffect(() => {
+    if (!isHistoryMode) return;
+    void refreshWorkers();
+  }, [isHistoryMode]);
 
   useEffect(() => {
     if (!isHistoryMode) return;
@@ -139,6 +146,15 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       if (!response.items.length) setSelectedJobId("");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "컷 분할 이력을 불러오지 못했습니다.");
+    }
+  }
+
+  async function refreshWorkers() {
+    try {
+      const response = await apiClient.webtoonCutWorkers();
+      setWorkerOptions(response.items);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "작업자 목록을 불러오지 못했습니다.");
     }
   }
 
@@ -515,7 +531,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
             <label>작업 상태<select value={jobStatusFilter} onChange={(event) => setJobStatusFilter(event.target.value)}><option value="">전체</option><option value="pending">대기</option><option value="running">진행</option><option value="completed">완료</option><option value="cancelled">취소</option><option value="failed">실패</option></select></label>
             <label>사용 여부<select value={usedState} onChange={(event) => setUsedState(event.target.value)}><option value="">전체</option><option value="unused">미사용 컷</option><option value="grok">Grok 사용</option><option value="batch">Batch 사용</option><option value="i2v">I2V 결과 있음</option></select></label>
             <label>플래그<select value={flagFilter} onChange={(event) => setFlagFilter(event.target.value)}><option value="">전체</option><option value="thin">thin</option><option value="many">many</option><option value="review_continuous">review_continuous</option><option value="fullpage">fullpage</option></select></label>
-            <label>작업자<input value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)} placeholder="createdBy" /></label>
+            <label>작업자<select value={workerFilter} onChange={(event) => setWorkerFilter(event.target.value)}><option value="">전체 작업자</option>{workerOptions.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerName}</option>)}</select></label>
             <label>검색<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="파일명 또는 경로" /></label>
             <button className="v3-secondary-button" type="button" onClick={() => void refreshJobs()}>새로고침</button>
           </div>
@@ -538,7 +554,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                 >
                   <button className="v3-webtoon-cut-job-row-main" type="button" onClick={() => selectJobRow(job.jobId)}>
                     <strong>{job.displayName}</strong>
-                    <span>{job.status} · {splitModeLabel(job.splitMode)} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
+                    <span>작업자 {job.createdByName || job.createdBy || "-"} · {job.status} · {splitModeLabel(job.splitMode)} · {job.generatedCutCount}컷 · 검수 {job.reviewRequiredCount}</span>
                   </button>
                   <span className="v3-webtoon-cut-job-actions">
                     <button

@@ -83,8 +83,11 @@ def test_webtoon_cut_history_uses_list_preview_filter_select_all_and_worker_filt
     assert "필터 결과 전체 선택" in source
     assert "검수제외 전체 선택" not in source
     assert "작업자" in source
-    assert "createdBy" in source
+    assert "전체 작업자" in source
+    assert "createdByName" in source
     assert "workerFilter" in source
+    assert "webtoonCutWorkers" in source
+    assert "webtoonCutWorkers" in client
     assert 'params.createdBy' in client
     assert 'query.set("createdBy", params.createdBy)' in client
     assert "deleteWebtoonCutJob" in source

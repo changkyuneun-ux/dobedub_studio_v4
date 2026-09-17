@@ -493,6 +493,37 @@ def test_admin_scope_delete_hides_other_users_terminal_job(db_session):
     assert [item["jobId"] for item in history["items"]] == []
 
 
+def test_cut_history_includes_worker_name_and_lists_worker_filter_options(db_session):
+    from backend.app.services.webtoon_cut_service import list_job_workers, list_jobs
+
+    db_session.add_all([
+        User(id="cut_worker_a", name="김작업", role="OPERATOR", permissions_json=[], is_active=True),
+        User(id="cut_worker_b", name="이작업", role="OPERATOR", permissions_json=[], is_active=True),
+        _asset("asset_source"),
+        WebtoonCutJob(
+            id="wcut_worker_a", status="completed", input_kind="image", source_asset_id="asset_source",
+            display_name="001.png", safe_stem="001", created_by="cut_worker_a",
+        ),
+        WebtoonCutJob(
+            id="wcut_worker_b", status="completed", input_kind="image", source_asset_id="asset_source",
+            display_name="002.png", safe_stem="002", created_by="cut_worker_b",
+        ),
+    ])
+    db_session.commit()
+
+    history = list_jobs(db_session, created_by="cut_worker_a")
+    workers = list_job_workers(db_session, created_by=None)
+
+    assert history["items"][0]["createdBy"] == "cut_worker_a"
+    assert history["items"][0]["createdByName"] == "김작업"
+    assert workers == {
+        "items": [
+            {"workerId": "cut_worker_a", "workerName": "김작업"},
+            {"workerId": "cut_worker_b", "workerName": "이작업"},
+        ]
+    }
+
+
 def test_admin_api_can_delete_job_visible_in_global_history(api_client):
     from backend.app.db.session import SessionLocal
 

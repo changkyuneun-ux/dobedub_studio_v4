@@ -151,6 +151,15 @@ def list_webtoon_cut_jobs(
         )
 
 
+@router.get("/jobs/workers")
+def list_webtoon_cut_workers(
+    current_user: CurrentUser = Depends(require_permission("history:read")),
+):
+    created_by_filter = current_user.id if current_user.role not in ADMIN_ROLES else None
+    with SessionLocal() as session:
+        return webtoon_cut_service.list_job_workers(session, created_by=created_by_filter)
+
+
 @router.get("/jobs/{job_id}")
 def get_webtoon_cut_job(
     job_id: str,

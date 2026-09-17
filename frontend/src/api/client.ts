@@ -562,6 +562,7 @@ export type WebtoonCutJobResponse = {
   currentUnitLabel?: string | null;
   cancelRequestedAt?: string | null;
   createdBy?: string;
+  createdByName?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 };
@@ -606,6 +607,15 @@ export type WebtoonCutJobListResponse = {
   items: WebtoonCutJobResponse[];
   page: number;
   pageSize: number;
+};
+
+export type WebtoonCutWorkerOption = {
+  workerId: string;
+  workerName: string;
+};
+
+export type WebtoonCutWorkerListResponse = {
+  items: WebtoonCutWorkerOption[];
 };
 
 export type WebtoonCutOutputListResponse = {
@@ -1787,6 +1797,7 @@ export const apiClient = {
     query.set("pageSize", String(params.pageSize || 20));
     return requestJson<WebtoonCutJobListResponse>(`/api/webtoon-cuts/jobs?${query.toString()}`);
   },
+  webtoonCutWorkers: () => requestJson<WebtoonCutWorkerListResponse>("/api/webtoon-cuts/jobs/workers"),
   cancelWebtoonCutJob: (jobId: string) =>
     requestJson<WebtoonCutJobResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST"

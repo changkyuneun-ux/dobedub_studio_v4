@@ -13,7 +13,7 @@ from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.timezone_utils import utc_now
-from backend.app.db.models import Asset, WebtoonCutJob, WebtoonCutOutput
+from backend.app.db.models import Asset, User, WebtoonCutJob, WebtoonCutOutput
 from backend.app.services.webtoon_cut_naming import make_source_identity
 from backend.app.services.zip_encoding_service import normalize_zip_path
 
@@ -69,25 +69,25 @@ def create_job(
     db.add(job)
     db.commit()
     db.refresh(job)
-    return _job_payload(job)
+    return _job_payload(db, job)
 
 
 def cancel_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     if job.status in TERMINAL_JOB_STATUSES:
-        return _job_payload(job)
+        return _job_payload(db, job)
     job.status = "cancelled"
     job.cancel_requested_at = _now()
     job.completed_at = _now()
     job.updated_at = _now()
     db.commit()
     db.refresh(job)
-    return _job_payload(job)
+    return _job_payload(db, job)
 
 
 def get_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
-    return _job_payload(job)
+    return _job_payload(db, job)
 
 
 def delete_job(db: Session, job_id: str, *, created_by: str | None) -> dict:
@@ -124,7 +124,28 @@ def list_jobs(
     page = max(1, int(page or 1))
     page_size = min(100, max(1, int(page_size or 20)))
     items = db.scalars(stmt.order_by(desc(WebtoonCutJob.created_at)).offset((page - 1) * page_size).limit(page_size)).all()
-    return {"items": [_job_payload(job) for job in items], "page": page, "pageSize": page_size}
+    return {"items": [_job_payload(db, job) for job in items], "page": page, "pageSize": page_size}
+
+
+def list_job_workers(db: Session, *, created_by: str | None) -> dict:
+    stmt = (
+        select(WebtoonCutJob.created_by)
+        .where(WebtoonCutJob.deleted_at.is_(None))
+        .distinct()
+    )
+    if created_by:
+        stmt = stmt.where(WebtoonCutJob.created_by == created_by)
+    worker_ids = [worker_id for worker_id in db.scalars(stmt).all() if worker_id]
+    users = {
+        user.id: user.name
+        for user in db.scalars(select(User).where(User.id.in_(worker_ids))).all()
+    } if worker_ids else {}
+    items = [
+        {"workerId": worker_id, "workerName": users.get(worker_id) or worker_id}
+        for worker_id in worker_ids
+    ]
+    items.sort(key=lambda item: (item["workerName"], item["workerId"]))
+    return {"items": items}
 
 
 def register_output(
@@ -565,8 +586,9 @@ def _assert_asset_owner(asset: Asset, created_by: str) -> None:
         raise PermissionError("자산 접근 권한이 없습니다.")
 
 
-def _job_payload(job: WebtoonCutJob) -> dict:
+def _job_payload(db: Session, job: WebtoonCutJob) -> dict:
     metadata = job.metadata_json or {}
+    user = db.get(User, job.created_by)
     return {
         "jobId": job.id,
         "status": job.status,
@@ -582,6 +604,7 @@ def _job_payload(job: WebtoonCutJob) -> dict:
         "splitMode": _normalize_split_mode(metadata.get("splitMode")),
         "cancelRequestedAt": job.cancel_requested_at.isoformat() if job.cancel_requested_at else None,
         "createdBy": job.created_by,
+        "createdByName": user.name if user else job.created_by,
         "createdAt": job.created_at.isoformat() if job.created_at else None,
         "updatedAt": job.updated_at.isoformat() if job.updated_at else None,
     }
