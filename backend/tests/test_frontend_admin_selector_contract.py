@@ -28,6 +28,16 @@ def test_workflow_selector_is_above_workflow_detail_in_main_content() -> None:
     assert screen.index("v3-admin-selector-card") < screen.index("워크플로 상세")
 
 
+def test_metadata_type_selector_is_above_metadata_detail_in_main_content() -> None:
+    screen = _function("Create6dScreen", "Create5bScreen")
+
+    assert "sidebarExtra=" not in screen
+    assert 'className="v3-admin-selector-card"' in screen
+    assert 'aria-label="메타데이터 정보 유형"' in screen
+    assert 'className={`v3-admin-selector-button ${activeTab === tab ? "is-active" : ""}`}' in screen
+    assert screen.index("v3-admin-selector-card") < screen.index("renderMetadataTabV3")
+
+
 def test_admin_selector_layout_is_responsive() -> None:
     styles = STYLES.read_text(encoding="utf-8")
 

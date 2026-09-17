@@ -427,23 +427,23 @@ export function Create6dScreen({
           </button>
         </>
       }
-      sidebarExtra={
-        <div className="v3-step-tracker v3-sidebar-context-menu">
-          {/* 2026-08-12: 사용자 요청 - sidebarExtra 표준화, 라벨 없던 화면에 추가 */}
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>METADATA · {METADATA_TABS.length}</div>
+    >
+      <section className="v3-admin-selector-card" aria-label="메타데이터 정보 유형">
+        <div className="v3-admin-selector-label">메타데이터 정보 유형 · {METADATA_TABS.length}</div>
+        <div className="v3-admin-selector-grid">
           {METADATA_TABS.map(([tab, label]) => (
             <button
               key={tab}
               type="button"
-              className={`v3-segment-nav-item ${activeTab === tab ? "is-active" : ""}`}
+              className={`v3-admin-selector-button ${activeTab === tab ? "is-active" : ""}`}
+              aria-pressed={activeTab === tab}
               onClick={() => onTabChange(tab)}
             >
-              <div className="v3-segment-nav-head"><span>{label}</span></div>
+              <strong>{label}</strong>
             </button>
           ))}
         </div>
-      }
-    >
+      </section>
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       {loading && !metadata ? <p className="v3-muted-text">Metadata를 불러오는 중입니다.</p> : renderMetadataTabV3(activeTab, status, metadata, models)}
     </AppShell>
