@@ -224,6 +224,39 @@ def list_outputs(
     return _paged_deduped_outputs(db, stmt, page=page, page_size=page_size)
 
 
+def list_output_selection_ids(
+    db: Session,
+    *,
+    job_id: str,
+    created_by: str | None,
+    used_state: str = "",
+    flags: str = "",
+    query: str = "",
+) -> dict:
+    """Return every deduplicated output ID matching the active filters."""
+    _require_job(db, job_id, created_by=created_by)
+    stmt = select(WebtoonCutOutput).where(WebtoonCutOutput.job_id == job_id)
+    if created_by:
+        stmt = stmt.where(WebtoonCutOutput.created_by == created_by)
+    normalized_used_state = str(used_state or "").strip().lower()
+    if normalized_used_state in {"unused", "미사용"}:
+        stmt = stmt.where(WebtoonCutOutput.used_in_prompt_count == 0).where(WebtoonCutOutput.used_in_batch_count == 0).where(WebtoonCutOutput.i2v_result_count == 0)
+    elif normalized_used_state in {"prompt", "grok"}:
+        stmt = stmt.where(WebtoonCutOutput.used_in_prompt_count > 0)
+    elif normalized_used_state == "batch":
+        stmt = stmt.where(WebtoonCutOutput.used_in_batch_count > 0)
+    elif normalized_used_state in {"i2v", "result"}:
+        stmt = stmt.where(WebtoonCutOutput.i2v_result_count > 0)
+    if query:
+        stmt = stmt.where(WebtoonCutOutput.display_path.contains(query))
+    outputs = _dedupe_outputs_by_display_path(db.scalars(stmt.order_by(*_output_reading_order_columns())).all())
+    wanted_flags = {item.strip() for item in str(flags or "").split(",") if item.strip()}
+    if wanted_flags:
+        outputs = [output for output in outputs if wanted_flags.intersection(set(output.flags_json or []))]
+    output_ids = [output.id for output in outputs]
+    return {"outputIds": output_ids, "count": len(output_ids)}
+
+
 def validate_output_selection(
     outputs: Iterable[dict],
     *,
@@ -246,9 +279,28 @@ def validate_output_selection(
     return valid
 
 
-def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> dict:
+def output_selection_summary(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> dict:
+    outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
+    prompt_used = sum(1 for output in outputs if output.used_in_prompt_count > 0)
+    batch_used = sum(1 for output in outputs if output.used_in_batch_count > 0)
+    duplicate = sum(1 for output in outputs if output.used_in_prompt_count > 0 or output.used_in_batch_count > 0)
+    return {
+        "selectedCount": len(outputs),
+        "usedInPromptCount": prompt_used,
+        "usedInBatchCount": batch_used,
+        "duplicateCount": duplicate,
+    }
+
+
+def _require_reuse_confirmation(outputs: list[WebtoonCutOutput], *, confirm_reuse: bool) -> None:
+    if not confirm_reuse and any(output.used_in_prompt_count > 0 or output.used_in_batch_count > 0 for output in outputs):
+        raise ValueError("기존 Grok 또는 Batch 사용 컷이 포함되어 있습니다. 중복 처리 확인이 필요합니다.")
+
+
+def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None, confirm_reuse: bool = False) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
+    _require_reuse_confirmation(outputs, confirm_reuse=confirm_reuse)
     for output in outputs:
         output.used_in_prompt_count += 1
     db.commit()
@@ -262,9 +314,10 @@ def create_grok_prompt_input_from_outputs(db: Session, *, job_id: str, output_id
     }
 
 
-def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None) -> dict:
+def create_batch_input_from_outputs(db: Session, *, job_id: str, output_ids: list[str], created_by: str | None, confirm_reuse: bool = False) -> dict:
     job = _require_job(db, job_id, created_by=created_by)
     outputs = _load_selected_outputs(db, job_id=job_id, output_ids=output_ids, created_by=created_by)
+    _require_reuse_confirmation(outputs, confirm_reuse=confirm_reuse)
     for output in outputs:
         output.used_in_batch_count += 1
     db.commit()

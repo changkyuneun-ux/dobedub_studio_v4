@@ -2,6 +2,7 @@ import React, { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiClient,
   HealthResponse,
+  WebtoonCutHandoffSummary,
   WebtoonCutJobResponse,
   WebtoonCutOutputItem,
   WebtoonCutSplitMode
@@ -13,9 +14,11 @@ import { isEditableKeyboardTarget, nextListSelectionId } from "../helpers/listKe
 import { downloadProtectedAsset } from "../helpers/workflow";
 import { StudioRoute } from "../router";
 import { saveWebtoonCutHandoff } from "../state/durableWorkspace";
+import { toggleSelection } from "../features/webtoon-cut/selection";
 
 type Props = { user: User; health: HealthResponse | null; onGoTo: (route: StudioRoute) => void; mode: "split" | "history" };
 type ViewMode = "list" | "grid";
+type PendingHandoff = { target: "grok" | "batch"; outputIds: string[]; summary: WebtoonCutHandoffSummary };
 type SelectedFileStructure = {
   inputRelativePath: string;
   sourceCountLabel: string;
@@ -55,6 +58,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [pendingDeleteJob, setPendingDeleteJob] = useState<WebtoonCutJobResponse | null>(null);
+  const [pendingHandoff, setPendingHandoff] = useState<PendingHandoff | null>(null);
   const isHistoryMode = mode === "history";
 
   const selectedJob = useMemo(
@@ -90,6 +94,10 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   useEffect(() => {
     setOutputsPage(1);
   }, [selectedJobId, usedState, flagFilter, query]);
+
+  useEffect(() => {
+    setSelectedOutputIds(new Set());
+  }, [selectedJobId]);
 
   useEffect(() => {
     if (!isRunning || !activeJob?.jobId) return;
@@ -146,7 +154,6 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       const items = response.items;
       setOutputs(items);
       setPreviewOutputId((current) => items.some((item) => item.outputId === current) ? current : items[0]?.outputId || "");
-      setSelectedOutputIds((current) => new Set([...current].filter((id) => items.some((item) => item.outputId === id))));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "컷 목록을 불러오지 못했습니다.");
     }
@@ -274,8 +281,12 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
       const selectedIds = [...selectedOutputIds];
       if (selectedIds.length === 1) {
         const output = outputs.find((item) => item.outputId === selectedIds[0]);
-        if (!output) throw new Error("선택한 컷을 현재 목록에서 찾을 수 없습니다.");
-        await downloadProtectedAsset(output.downloadUrl, output.displayPath.split("/").pop() || "webtoon-cut.png");
+        if (output) {
+          await downloadProtectedAsset(output.downloadUrl, output.displayPath.split("/").pop() || "webtoon-cut.png");
+        } else {
+          const blob = await apiClient.downloadWebtoonCutOutputsZip(selectedJob.jobId, selectedIds);
+          downloadBlob(blob, `${stripExtension(selectedJob.displayName)}_cuts_selected.zip`);
+        }
       } else {
         const blob = await apiClient.downloadWebtoonCutOutputsZip(selectedJob.jobId, selectedIds);
         downloadBlob(blob, `${stripExtension(selectedJob.displayName)}_cuts_selected.zip`);
@@ -298,34 +309,63 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   }
 
   function selectCurrentPage() {
-    const page = previewOutput?.pageNumber;
-    if (!page) return;
-    setSelectedOutputIds(new Set(outputs.filter((item) => item.pageNumber === page).map((item) => item.outputId)));
+    setSelectedOutputIds((current) => toggleSelection(current, outputs.map((item) => item.outputId)));
   }
 
-  function selectFilteredAll() {
-    setSelectedOutputIds(new Set(outputs.map((item) => item.outputId)));
+  async function selectFilteredAll() {
+    if (!selectedJob) return;
+    setLoading(true);
+    try {
+      const result = await apiClient.webtoonCutOutputSelection(selectedJob.jobId, { usedState, flags: flagFilter, query });
+      setSelectedOutputIds((current) => toggleSelection(current, result.outputIds));
+      setNotice(`필터 결과 ${result.count}개 선택 상태를 전환했습니다.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "필터 결과 전체 선택에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  async function handoff(target: "grok" | "batch") {
+  async function requestHandoff(target: "grok" | "batch") {
     if (!selectedJob || !selectedOutputIds.size) {
       setNotice("후속 작업에 보낼 컷을 선택해주세요.");
       return;
     }
+    setLoading(true);
+    try {
+      const outputIds = [...selectedOutputIds];
+      const summary = await apiClient.webtoonCutHandoffSummary(selectedJob.jobId, outputIds);
+      setPendingHandoff({ target, outputIds, summary });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "선택 컷 사용 이력을 확인하지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmHandoff() {
+    if (!selectedJob || !pendingHandoff) return;
+    const { target, outputIds } = pendingHandoff;
+    const confirmReuse = true;
+    setLoading(true);
     try {
       if (target === "grok") {
-        const handoffPayload = await apiClient.handoffWebtoonCutsToGrok(selectedJob.jobId, [...selectedOutputIds]);
+        const handoffPayload = await apiClient.handoffWebtoonCutsToGrok(selectedJob.jobId, outputIds, confirmReuse);
         saveWebtoonCutHandoff(user.id, { ...handoffPayload, createdAt: new Date().toISOString() });
+        setPendingHandoff(null);
         setNotice("선택 컷을 Grok 프롬프트 화면 입력으로 연결했습니다. 프롬프트 옵션은 해당 화면에서 선택합니다.");
         onGoTo("create.promptManagement");
       } else {
-        const handoffPayload = await apiClient.handoffWebtoonCutsToBatch(selectedJob.jobId, [...selectedOutputIds]);
+        const handoffPayload = await apiClient.handoffWebtoonCutsToBatch(selectedJob.jobId, outputIds, confirmReuse);
         saveWebtoonCutHandoff(user.id, { ...handoffPayload, createdAt: new Date().toISOString() });
+        setPendingHandoff(null);
         setNotice("선택 컷을 Batch 처리 화면 입력으로 연결했습니다. 워크플로우는 Batch 화면에서 선택합니다.");
         onGoTo("create.batchJobs");
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "후속 작업 연결에 실패했습니다.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -527,7 +567,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                   <button className={`v3-secondary-button${viewMode === "list" ? " is-active" : ""}`} type="button" onClick={() => setViewMode("list")}>리스트</button>
                   <button className={`v3-secondary-button${viewMode === "grid" ? " is-active" : ""}`} type="button" onClick={() => setViewMode("grid")}>그리드</button>
                   <button className="v3-secondary-button" type="button" onClick={selectCurrentPage}>현재 페이지 선택</button>
-                  <button className="v3-secondary-button" type="button" onClick={selectFilteredAll}>필터 결과 전체 선택</button>
+                  <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => void selectFilteredAll()}>필터 결과 전체 선택/해제</button>
                 </div>
               </div>
 
@@ -575,8 +615,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
               <div className="v3-webtoon-cut-pipelines">
                 <strong>선택 컷 {selectedOutputIds.size}개</strong>
                 <button className="v3-secondary-button" type="button" disabled={!selectedOutputIds.size || loading} onClick={() => void downloadSelectedOutputs()}>선택 컷 다운로드</button>
-                <button className="v3-primary-button" type="button" onClick={() => void handoff("grok")}>Grok 프롬프트 화면으로 보내기</button>
-                <button className="v3-secondary-button v3-webtoon-cut-batch-button" type="button" onClick={() => void handoff("batch")}>Batch 처리 화면으로 보내기</button>
+                <button className="v3-primary-button" type="button" disabled={!selectedOutputIds.size || loading} onClick={() => void requestHandoff("grok")}>Grok 프롬프트 화면으로 보내기</button>
+                <button className="v3-secondary-button v3-webtoon-cut-batch-button" type="button" disabled={!selectedOutputIds.size || loading} onClick={() => void requestHandoff("batch")}>Batch 처리 화면으로 보내기</button>
               </div>
             </div>
           </div>
@@ -593,6 +633,26 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
             <div className="v3-modal-actions">
               <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => setPendingDeleteJob(null)}>취소</button>
               <button className="v3-danger-button" type="button" disabled={loading} onClick={() => void confirmDeleteHistoryJob()}>삭제</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pendingHandoff ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="v3WebtoonCutHandoffTitle" onClick={() => !loading && setPendingHandoff(null)}>
+          <div className="v3-modal-panel v3-webtoon-cut-handoff-modal" onClick={(event) => event.stopPropagation()}>
+            <h2 id="v3WebtoonCutHandoffTitle" className="v3-modal-title">
+              {pendingHandoff.target === "grok" ? "Grok 프롬프트 입력 확인" : "Batch 처리 입력 확인"}
+            </h2>
+            <div className="v3-modal-body-text">
+              <p>선택한 컷 <strong>{pendingHandoff.summary.selectedCount}개</strong>를 전달합니다.</p>
+              <p>Grok 사용 이력 <strong>{pendingHandoff.summary.usedInPromptCount}개</strong> · Batch 사용 이력 <strong>{pendingHandoff.summary.usedInBatchCount}개</strong></p>
+              {pendingHandoff.summary.duplicateCount > 0 ? (
+                <p className="v3-webtoon-cut-reuse-warning">기존 사용 컷 {pendingHandoff.summary.duplicateCount}개가 포함되어 중복 처리됩니다. 계속하시겠습니까?</p>
+              ) : <p>기존 Grok/Batch 사용 이력이 없습니다. 계속하시겠습니까?</p>}
+            </div>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => setPendingHandoff(null)}>취소</button>
+              <button className="v3-primary-button" type="button" disabled={loading} onClick={() => void confirmHandoff()}>확인 후 처리</button>
             </div>
           </div>
         </div>

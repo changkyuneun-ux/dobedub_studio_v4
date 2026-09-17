@@ -614,6 +614,14 @@ export type WebtoonCutOutputListResponse = {
   pageSize: number;
 };
 
+export type WebtoonCutOutputSelectionResponse = { outputIds: string[]; count: number };
+export type WebtoonCutHandoffSummary = {
+  selectedCount: number;
+  usedInPromptCount: number;
+  usedInBatchCount: number;
+  duplicateCount: number;
+};
+
 export type GrokImagePromptDraftResponse = {
   draftId: string;
   assetId: string;
@@ -1796,15 +1804,27 @@ export const apiClient = {
     query.set("pageSize", String(params.pageSize || 50));
     return requestJson<WebtoonCutOutputListResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/outputs?${query.toString()}`);
   },
-  handoffWebtoonCutsToGrok: (jobId: string, outputIds: string[]) =>
-    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/grok`, {
+  webtoonCutOutputSelection: (jobId: string, params: { usedState?: string; flags?: string; query?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.usedState) query.set("usedState", params.usedState);
+    if (params.flags) query.set("flags", params.flags);
+    if (params.query) query.set("query", params.query);
+    return requestJson<WebtoonCutOutputSelectionResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/outputs/selection?${query.toString()}`);
+  },
+  webtoonCutHandoffSummary: (jobId: string, outputIds: string[]) =>
+    requestJson<WebtoonCutHandoffSummary>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/summary`, {
       method: "POST",
       body: JSON.stringify({ outputIds })
     }),
-  handoffWebtoonCutsToBatch: (jobId: string, outputIds: string[]) =>
+  handoffWebtoonCutsToGrok: (jobId: string, outputIds: string[], confirmReuse = false) =>
+    requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/grok`, {
+      method: "POST",
+      body: JSON.stringify({ outputIds, confirmReuse })
+    }),
+  handoffWebtoonCutsToBatch: (jobId: string, outputIds: string[], confirmReuse = false) =>
     requestJson<WebtoonCutHandoffResponse>(`/api/webtoon-cuts/jobs/${encodeURIComponent(jobId)}/handoff/batch`, {
       method: "POST",
-      body: JSON.stringify({ outputIds })
+      body: JSON.stringify({ outputIds, confirmReuse })
     }),
   downloadWebtoonCutOutputsZip: (jobId: string, outputIds: string[]) => {
     const query = new URLSearchParams();

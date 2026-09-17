@@ -224,6 +224,43 @@ def list_webtoon_cut_outputs(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+@router.get("/jobs/{job_id}/outputs/selection")
+def list_webtoon_cut_output_selection(
+    job_id: str,
+    usedState: str = Query("", alias="usedState"),
+    flags: str = "",
+    query: str = "",
+    current_user: CurrentUser = Depends(require_permission("history:read")),
+):
+    try:
+        with SessionLocal() as session:
+            return webtoon_cut_service.list_output_selection_ids(
+                session, job_id=job_id, created_by=_scope(current_user),
+                used_state=usedState, flags=flags, query=query,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="컷 분할 작업을 찾을 수 없습니다.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/handoff/summary")
+def summarize_webtoon_cut_handoff(
+    job_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+):
+    try:
+        with SessionLocal() as session:
+            return webtoon_cut_service.output_selection_summary(
+                session, job_id=job_id, output_ids=list(payload.get("outputIds") or []), created_by=_scope(current_user),
+            )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.post("/jobs/{job_id}/handoff/grok")
 def handoff_to_grok_prompt(
     job_id: str,
@@ -237,6 +274,7 @@ def handoff_to_grok_prompt(
                 job_id=job_id,
                 output_ids=list(payload.get("outputIds") or []),
                 created_by=_scope(current_user),
+                confirm_reuse=bool(payload.get("confirmReuse")),
             )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -257,6 +295,7 @@ def handoff_to_batch(
                 job_id=job_id,
                 output_ids=list(payload.get("outputIds") or []),
                 created_by=_scope(current_user),
+                confirm_reuse=bool(payload.get("confirmReuse")),
             )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -118,3 +118,21 @@ def test_webtoon_cut_handoff_persists_selection_for_prompt_and_batch_screens() -
     assert "createBatchJob({" in batch_screen
     assert "sourceKind: \"webtoon_cut\"" in batch_screen
     assert "WebtoonCutHandoffSnapshot" in workspace
+
+
+def test_webtoon_cut_history_persists_selection_and_confirms_reuse() -> None:
+    source = Path("frontend/src/screens/webtoonCutScreen.tsx").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "toggleSelection" in source
+    assert "setSelectedOutputIds((current) => new Set([...current].filter" not in source
+    assert "webtoonCutOutputSelection" in source
+    assert "webtoonCutHandoffSummary" in source
+    assert "pendingHandoff" in source
+    assert "선택한 컷" in source
+    assert "Grok 사용 이력" in source
+    assert "Batch 사용 이력" in source
+    assert "중복 처리" in source
+    assert "confirmReuse" in source
+    assert "/outputs/selection" in client
+    assert "/handoff/summary" in client

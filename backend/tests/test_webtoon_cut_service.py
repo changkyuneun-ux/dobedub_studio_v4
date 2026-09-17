@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+import pytest
 from sqlalchemy import event
 
 from backend.app.core.security import create_access_token
@@ -372,6 +373,66 @@ def test_handoff_marks_selected_outputs_as_used(db_session):
     assert batch["inputAssetIds"] == ["asset_cut_2"]
     assert [item["assetId"] for item in prompt_used["items"]] == ["asset_cut_1"]
     assert [item["assetId"] for item in batch_used["items"]] == ["asset_cut_2"]
+
+
+def test_filtered_selection_ids_are_not_limited_to_output_page_size(db_session):
+    from backend.app.services.webtoon_cut_service import list_output_selection_ids
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(WebtoonCutJob(
+        id="wcut_select_all", status="completed", input_kind="pdf",
+        source_asset_id="asset_source", display_name="source", safe_stem="source", created_by="user_1",
+    ))
+    for index in range(125):
+        asset_id = f"asset_select_{index:03d}"
+        db_session.add(_asset(asset_id, file_name=f"{index:03d}.png", asset_type="webtoon_cut_image"))
+        db_session.add(WebtoonCutOutput(
+            id=f"output_select_{index:03d}", job_id="wcut_select_all", asset_id=asset_id,
+            status="ready", display_path=f"source/{index:03d}.png", page_number=index + 1,
+            cut_index=1, flags_json=["thin"] if index % 2 == 0 else [], metadata_json={}, created_by="user_1",
+        ))
+    db_session.commit()
+
+    result = list_output_selection_ids(
+        db_session, job_id="wcut_select_all", created_by="user_1", flags="thin"
+    )
+
+    assert result["count"] == 63
+    assert len(result["outputIds"]) == 63
+
+
+def test_handoff_requires_confirmation_when_any_selected_cut_was_already_used(db_session):
+    from backend.app.services.webtoon_cut_service import (
+        create_grok_prompt_input_from_outputs,
+        create_job,
+        output_selection_summary,
+        register_output,
+    )
+
+    db_session.add(_asset("asset_source"))
+    db_session.add(_asset("asset_cut_reused", file_name="001.png", asset_type="webtoon_cut_image"))
+    db_session.commit()
+    job = create_job(db_session, source_asset_id="asset_source", input_kind="pdf", created_by="user_1")
+    output = register_output(
+        db_session, job_id=job["jobId"], asset_id="asset_cut_reused", display_path="source/001.png",
+        page_number=1, cut_index=1, created_by="user_1", used_in_batch_count=2,
+    )
+
+    summary = output_selection_summary(
+        db_session, job_id=job["jobId"], output_ids=[output["outputId"]], created_by="user_1"
+    )
+    assert summary == {
+        "selectedCount": 1, "usedInPromptCount": 0, "usedInBatchCount": 1, "duplicateCount": 1,
+    }
+    with pytest.raises(ValueError, match="중복 처리 확인"):
+        create_grok_prompt_input_from_outputs(
+            db_session, job_id=job["jobId"], output_ids=[output["outputId"]], created_by="user_1"
+        )
+
+    payload = create_grok_prompt_input_from_outputs(
+        db_session, job_id=job["jobId"], output_ids=[output["outputId"]], created_by="user_1", confirm_reuse=True
+    )
+    assert payload["inputAssetIds"] == ["asset_cut_reused"]
 
 
 def test_delete_job_soft_hides_terminal_jobs_from_history(db_session):
