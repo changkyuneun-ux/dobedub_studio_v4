@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1800" viewBox="0 0 1800 1800">
+  <defs>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",Arial,sans-serif;fill:#161b1d}
+      .small{font-size:13px;fill:#7b8582}.label{font-size:12px;font-weight:700;letter-spacing:1.5px;fill:#84908c}
+      .nav{font-size:15px}.title{font-size:24px;font-weight:800}.section{font-size:17px;font-weight:800}
+      .button{font-size:14px;font-weight:700}.meta{font-size:12px;fill:#60706a}.value{font-size:15px;font-weight:700}
+    </style>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#18332a" flood-opacity=".08"/></filter>
+  </defs>
+  <rect width="1800" height="1800" fill="#e9eeec"/>
+  <text x="50" y="44" class="label">DOBEDUB STUDIO · ADMIN UI LAYOUT MOCKUP</text>
+  <text x="50" y="76" font-size="19" font-weight="700">사이드바 목록을 본문 상단 선택 버튼 그룹으로 이동</text>
+
+  <!-- Roles screen -->
+  <g transform="translate(40 110)">
+    <rect width="840" height="960" rx="12" fill="#f5f7f6" stroke="#cfd8d4" filter="url(#shadow)"/>
+    <rect width="190" height="960" rx="12" fill="#fff"/><line x1="190" y1="0" x2="190" y2="960" stroke="#dbe2df"/>
+    <text x="20" y="38" font-size="16" font-weight="800">DOBEDUB</text>
+    <text x="20" y="82" class="label">HOME</text><text x="20" y="112" class="nav">⌂  대시보드</text>
+    <text x="20" y="158" class="label">ADMIN</text>
+    <text x="20" y="194" class="nav">◇  Sandbox Pod</text><text x="20" y="232" class="nav">⌘  워크플로 정의</text>
+    <text x="20" y="270" class="nav">▣  프롬프트 지시 관리</text><text x="20" y="308" class="nav">▤  프롬프트 카탈로그</text>
+    <text x="20" y="346" class="nav">♙  사용자</text>
+    <rect x="8" y="362" width="174" height="40" rx="8" fill="#fff3e4"/><rect x="8" y="362" width="3" height="40" fill="#dd8500"/>
+    <text x="20" y="388" class="nav" font-weight="700" fill="#a96300">♢  역할 &amp; 권한</text>
+    <text x="20" y="434" class="nav">⚙  Runpod Worker 설정</text><text x="20" y="472" class="nav">▧  감사 로그</text>
+    <text x="20" y="915" class="small">SUPER_ADMIN</text>
+
+    <rect x="190" width="650" height="76" fill="#fff"/><line x1="190" y1="76" x2="840" y2="76" stroke="#dbe2df"/>
+    <text x="218" y="25" class="label">ADMIN / 역할 &amp; 권한</text><text x="218" y="55" class="title">역할×권한 매트릭스</text>
+
+    <rect x="218" y="98" width="594" height="128" rx="10" fill="#fff" stroke="#d6dfdb"/>
+    <text x="236" y="125" class="label">역할 목록 · 4</text>
+    <rect x="236" y="144" width="130" height="56" rx="8" fill="#e6f6ef" stroke="#12a66f" stroke-width="2"/>
+    <text x="250" y="166" class="button" fill="#087d55">SUPER_ADMIN</text><circle cx="253" cy="185" r="3" fill="#12a66f"/><text x="263" y="189" class="small">ACTIVE</text>
+    <rect x="376" y="144" width="118" height="56" rx="8" fill="#fafbfa" stroke="#cfd9d5"/><text x="391" y="176" class="button">ADMIN</text>
+    <rect x="504" y="144" width="130" height="56" rx="8" fill="#fafbfa" stroke="#cfd9d5"/><text x="519" y="176" class="button">OPERATOR</text>
+    <rect x="644" y="144" width="118" height="56" rx="8" fill="#fafbfa" stroke="#cfd9d5"/><text x="659" y="176" class="button">VIEWER</text>
+
+    <rect x="218" y="246" width="594" height="610" rx="10" fill="#fff" stroke="#d6dfdb"/>
+    <text x="238" y="282" class="section">SUPER_ADMIN</text><text x="650" y="282" class="meta">18 permissions · Editable</text>
+    <line x1="218" y1="302" x2="812" y2="302" stroke="#e1e7e4"/>
+    <text x="238" y="337" class="small">시스템 전체 관리 권한</text>
+    <g class="button">
+      <rect x="238" y="362" width="96" height="36" rx="18" fill="#e6f6ef" stroke="#13a672"/><text x="258" y="385" fill="#087c55">admin:*</text>
+      <rect x="344" y="362" width="116" height="36" rx="18" fill="#edf8f3"/><text x="360" y="385" fill="#087c55">users:read</text>
+      <rect x="470" y="362" width="126" height="36" rx="18" fill="#edf8f3"/><text x="486" y="385" fill="#087c55">users:write</text>
+      <rect x="606" y="362" width="148" height="36" rx="18" fill="#edf8f3"/><text x="622" y="385" fill="#087c55">workflows:read</text>
+    </g>
+    <rect x="238" y="780" width="190" height="44" rx="8" fill="#0e9f6e"/><text x="258" y="808" class="button" fill="#fff">Save Role Permissions</text>
+    <text x="218" y="900" class="small">역할 목록은 더 이상 좌측 사이드바를 차지하지 않음</text>
+  </g>
+
+  <!-- Workflows screen -->
+  <g transform="translate(920 110)">
+    <rect width="840" height="960" rx="12" fill="#f5f7f6" stroke="#cfd8d4" filter="url(#shadow)"/>
+    <rect width="190" height="960" rx="12" fill="#fff"/><line x1="190" y1="0" x2="190" y2="960" stroke="#dbe2df"/>
+    <text x="20" y="38" font-size="16" font-weight="800">DOBEDUB</text>
+    <text x="20" y="82" class="label">HOME</text><text x="20" y="112" class="nav">⌂  대시보드</text>
+    <text x="20" y="158" class="label">ADMIN</text>
+    <text x="20" y="194" class="nav">◇  Sandbox Pod</text>
+    <rect x="8" y="210" width="174" height="40" rx="8" fill="#fff3e4"/><rect x="8" y="210" width="3" height="40" fill="#dd8500"/>
+    <text x="20" y="236" class="nav" font-weight="700" fill="#a96300">⌘  워크플로 정의</text>
+    <text x="20" y="282" class="nav">▣  프롬프트 지시 관리</text><text x="20" y="320" class="nav">▤  프롬프트 카탈로그</text>
+    <text x="20" y="358" class="nav">♙  사용자</text><text x="20" y="396" class="nav">♢  역할 &amp; 권한</text>
+    <text x="20" y="434" class="nav">⚙  Runpod Worker 설정</text><text x="20" y="472" class="nav">▧  감사 로그</text>
+    <text x="20" y="915" class="small">SUPER_ADMIN</text>
+
+    <rect x="190" width="650" height="76" fill="#fff"/><line x1="190" y1="76" x2="840" y2="76" stroke="#dbe2df"/>
+    <text x="218" y="25" class="label">ADMIN / 워크플로 정의</text><text x="218" y="55" class="title">워크플로 4개</text>
+    <rect x="685" y="18" width="127" height="40" rx="8" fill="#0e9f6e"/><text x="705" y="43" class="button" fill="#fff">New Workflow</text>
+
+    <rect x="218" y="98" width="594" height="170" rx="10" fill="#fff" stroke="#d6dfdb"/>
+    <text x="236" y="125" class="label">워크플로우 목록 · 4</text>
+    <rect x="236" y="144" width="266" height="48" rx="8" fill="#e6f6ef" stroke="#12a66f" stroke-width="2"/>
+    <text x="250" y="165" class="button" fill="#087d55">1-images_81</text><circle cx="253" cy="181" r="3" fill="#12a66f"/><text x="263" y="185" class="small">ACTIVE</text>
+    <rect x="512" y="144" width="282" height="48" rx="8" fill="#fafbfa" stroke="#cfd9d5"/>
+    <text x="526" y="165" class="button">1-images_10s_chain_81</text><circle cx="529" cy="181" r="3" fill="#98a7a1"/><text x="539" y="185" class="small">ACTIVE</text>
+    <rect x="236" y="202" width="266" height="48" rx="8" fill="#fafbfa" stroke="#cfd9d5"/><text x="250" y="231" class="button">wan22_10s_chain</text>
+    <rect x="512" y="202" width="282" height="48" rx="8" fill="#fafbfa" stroke="#cfd9d5"/><text x="526" y="231" class="button">wan22_default_81</text>
+
+    <rect x="218" y="288" width="594" height="568" rx="10" fill="#fff" stroke="#d6dfdb"/>
+    <text x="238" y="324" class="section">워크플로 상세</text><rect x="704" y="307" width="82" height="26" rx="13" fill="#e2f4ec"/><circle cx="719" cy="320" r="3" fill="#11a36e"/><text x="729" y="324" class="small">ACTIVE</text>
+    <line x1="218" y1="344" x2="812" y2="344" stroke="#e1e7e4"/>
+    <g>
+      <text x="238" y="383" class="meta">Workflow ID</text><text x="510" y="383" class="value">1-images_81</text>
+      <line x1="238" y1="400" x2="792" y2="400" stroke="#edf1ef"/>
+      <text x="238" y="433" class="meta">Name</text><text x="510" y="433" class="value">1-images_81</text>
+      <line x1="238" y1="450" x2="792" y2="450" stroke="#edf1ef"/>
+      <text x="238" y="483" class="meta">Mode</text><text x="510" y="483" class="value">I2V</text>
+      <line x1="238" y1="500" x2="792" y2="500" stroke="#edf1ef"/>
+      <text x="238" y="533" class="meta">Input Images</text><text x="510" y="533" class="value">1</text>
+      <line x1="238" y1="550" x2="792" y2="550" stroke="#edf1ef"/>
+      <text x="238" y="583" class="meta">Workflow File</text><text x="510" y="583" class="value" fill="#087d55">EXISTS</text>
+    </g>
+    <rect x="238" y="780" width="100" height="44" rx="8" fill="#0e9f6e"/><text x="260" y="808" class="button" fill="#fff">Activate</text>
+    <rect x="348" y="780" width="110" height="44" rx="8" fill="#fff" stroke="#cbd5d1"/><text x="365" y="808" class="button">Deactivate</text>
+    <text x="218" y="900" class="small">워크플로우 목록은 화면명 바로 아래에서 즉시 선택</text>
+  </g>
+</svg>

@@ -1347,25 +1347,27 @@ export function Create3bScreen({ user, onGoTo }: { user: User; onGoTo: (route: S
       headerActions={
         <button className="v3-secondary-button" type="button" onClick={() => onGoTo("admin.resourceMap")}>기능 리소스 매핑 보기</button>
       }
-      sidebarExtra={
-        <div className="v3-step-tracker">
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>ROLES · {roles.length}</div>
+    >
+      <section className="v3-admin-selector-card" aria-label="역할 목록">
+        <div className="v3-admin-selector-label">역할 목록 · {roles.length}</div>
+        <div className="v3-admin-selector-grid">
           {roles.map((role) => (
             <button
               key={role.code}
               type="button"
-              className={`v3-segment-nav-item ${selectedRole?.code === role.code ? "is-active" : ""}`}
+              className={`v3-admin-selector-button ${selectedRole?.code === role.code ? "is-active" : ""}`}
+              aria-pressed={selectedRole?.code === role.code}
               onClick={() => {
                 setSelectedRoleCode(role.code);
                 setRolePermissionDraft([...(role.permissionCodes || [])]);
               }}
             >
-              <div className="v3-segment-nav-head"><span>{role.code}</span><span className={`v3-status-badge ${role.isActive ? "is-ready" : "is-pending"}`}>{role.isActive ? "ACTIVE" : "INACTIVE"}</span></div>
+              <strong>{role.code}</strong>
+              <span className={`v3-status-badge ${role.isActive ? "is-ready" : "is-pending"}`}>{role.isActive ? "ACTIVE" : "INACTIVE"}</span>
             </button>
           ))}
         </div>
-      }
-    >
+      </section>
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       {loading && !governance ? (
         <p className="v3-muted-text">역할·권한 정보를 불러오는 중입니다.</p>
@@ -1740,23 +1742,24 @@ export function Create4aScreen({
       headerEyebrow="ADMIN · 워크플로 정의"
       headerTitle={`워크플로 ${items.length}개`}
       headerActions={canWrite ? <button className="v3-primary-button" type="button" onClick={onNewWorkflow}>New Workflow</button> : undefined}
-      sidebarExtra={
-        <div className="v3-step-tracker">
-          {/* 2026-08-12: 사용자 요청 - sidebarExtra 표준화, 라벨 없던 화면에 추가 */}
-          <div className="v3-label" style={{ padding: "0 10px 4px" }}>WORKFLOWS · {items.length}</div>
+    >
+      <section className="v3-admin-selector-card is-workflows" aria-label="워크플로우 목록">
+        <div className="v3-admin-selector-label">워크플로우 목록 · {items.length}</div>
+        <div className="v3-admin-selector-grid">
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`v3-segment-nav-item ${selectedWorkflowId === item.id ? "is-active" : ""}`}
+              className={`v3-admin-selector-button ${selectedWorkflowId === item.id ? "is-active" : ""}`}
+              aria-pressed={selectedWorkflowId === item.id}
               onClick={() => onSelect(item.id)}
             >
-              <div className="v3-segment-nav-head"><span>{item.label || item.name || item.id}</span><span className={`v3-status-badge ${item.active ? "is-ready" : "is-pending"}`}>{item.active ? "ACTIVE" : "INACTIVE"}</span></div>
+              <strong>{item.label || item.name || item.id}</strong>
+              <span className={`v3-status-badge ${item.active ? "is-ready" : "is-pending"}`}>{item.active ? "ACTIVE" : "INACTIVE"}</span>
             </button>
           ))}
         </div>
-      }
-    >
+      </section>
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
       {selected ? (
         <div className="v3-card">
