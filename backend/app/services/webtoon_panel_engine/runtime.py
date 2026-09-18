@@ -4,7 +4,7 @@ import glob
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -24,6 +24,7 @@ class RenderedUnitResult:
     debug_overlay_path: Path | None
     mode: str
     flags: list[str]
+    split_stats: dict[str, int | str] = field(default_factory=dict)
 
 
 def page_count(pdf_path: Path) -> int:
@@ -60,16 +61,26 @@ def process_image_file(
     output_dir.mkdir(parents=True, exist_ok=True)
     panel_tmp = Path(tempfile.mkdtemp(prefix="webtoon_panels_"))
     try:
+        split_stats: dict[str, int | str] = {}
         if split_mode == "dark-webtoon":
             from backend.app.services.webtoon_panel_engine.dark_bg_split import split_panels
 
             mode = "dark_bg"
+            saved = [
+                Path(path)
+                for path in split_panels(
+                    str(image_path),
+                    str(panel_tmp),
+                    debug=True,
+                    stats_out=split_stats,
+                )
+            ]
         else:
             from backend.app.services.webtoon_panel_engine.batch_split import split_panels
 
             mode = "grid"
+            saved = [Path(path) for path in split_panels(str(image_path), str(panel_tmp), debug=True)]
 
-        saved = [Path(path) for path in split_panels(str(image_path), str(panel_tmp), debug=True)]
         flags: list[str] = []
         cuts: list[CutResult] = []
         debug_overlay = panel_tmp / "_debug_overlay.png"
@@ -79,7 +90,14 @@ def process_image_file(
             _fullpage_crop(image_path, target)
             width, height = _image_size(target)
             cuts.append(CutResult(path=target, cut_index=1, width=width, height=height, flags=["fullpage"]))
-            return RenderedUnitResult(page_number=page_number, cuts=cuts, debug_overlay_path=None, mode="fullpage", flags=flags)
+            return RenderedUnitResult(
+                page_number=page_number,
+                cuts=cuts,
+                debug_overlay_path=None,
+                mode="fullpage",
+                flags=flags,
+                split_stats=split_stats,
+            )
 
         page_width, page_height = _image_size(image_path)
         for index, source in enumerate(saved, start=1):
@@ -104,6 +122,7 @@ def process_image_file(
             debug_overlay_path=debug_target,
             mode=mode,
             flags=flags,
+            split_stats=split_stats,
         )
     finally:
         shutil.rmtree(panel_tmp, ignore_errors=True)

@@ -89,6 +89,42 @@ def test_store_result_registers_cut_asset_without_nested_db_session(db_session, 
     assert job.generated_cut_count == 1
 
 
+def test_store_result_aggregates_detected_background_modes_in_job_metadata(db_session):
+    from backend.app.services import webtoon_cut_worker
+
+    db_session.add(_source_asset())
+    db_session.add(_running_job("wcut_bg_mode_test"))
+    db_session.commit()
+
+    light_result = RenderedUnitResult(
+        page_number=None,
+        cuts=[],
+        debug_overlay_path=None,
+        mode="dark_bg",
+        flags=[],
+        split_stats={"bg_mode": "light", "small": 1},
+    )
+    dark_result = RenderedUnitResult(
+        page_number=None,
+        cuts=[],
+        debug_overlay_path=None,
+        mode="dark_bg",
+        flags=[],
+        split_stats={"bg_mode": "dark", "small": 0},
+    )
+
+    webtoon_cut_worker._store_result("wcut_bg_mode_test", light_result)
+    job = db_session.get(WebtoonCutJob, "wcut_bg_mode_test")
+    db_session.refresh(job)
+    assert job.metadata_json["bgMode"] == "light"
+    assert job.metadata_json["bgModes"] == ["light"]
+
+    webtoon_cut_worker._store_result("wcut_bg_mode_test", dark_result)
+    db_session.refresh(job)
+    assert job.metadata_json["bgMode"] == "mixed"
+    assert job.metadata_json["bgModes"] == ["light", "dark"]
+
+
 def test_process_job_marks_job_failed_when_worker_step_raises(db_session, tmp_path, monkeypatch):
     from backend.app.services import webtoon_cut_worker
 

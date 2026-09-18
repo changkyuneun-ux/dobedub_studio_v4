@@ -225,6 +225,19 @@ def _store_result(
         job = session.get(WebtoonCutJob, job_id)
         if job is None:
             return
+        bg_mode = str((getattr(result, "split_stats", {}) or {}).get("bg_mode") or "").strip()
+        if bg_mode in {"light", "dark"}:
+            metadata = dict(job.metadata_json or {})
+            bg_modes = [
+                str(value)
+                for value in list(metadata.get("bgModes") or [])
+                if str(value) in {"light", "dark"}
+            ]
+            if bg_mode not in bg_modes:
+                bg_modes.append(bg_mode)
+            metadata["bgModes"] = bg_modes
+            metadata["bgMode"] = bg_modes[0] if len(bg_modes) == 1 else "mixed"
+            job.metadata_json = metadata
         resolved_source_stem = source_stem or str((job.metadata_json or {}).get("displayStem") or Path(job.display_name).stem)
         for cut in result.cuts:
             rel_path = output_relative_path(

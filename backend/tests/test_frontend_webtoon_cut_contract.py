@@ -42,7 +42,8 @@ def test_webtoon_cut_screen_uses_s3_server_pipeline_and_cancelable_jobs() -> Non
     assert "처리 구조" not in source
     assert "splitMode" in source
     assert "인쇄 만화 · grid 방식" in source
-    assert "어두운 배경 웹툰" in source
+    assert "웹툰 (테두리 없음)" in source
+    assert "어두운 배경 웹툰" not in source
     assert "v3-webtoon-cut-mode-choice" in source
     assert "splitModeLabel(activeJob.splitMode)" in source
     assert "splitModeLabel(job.splitMode)" in source

@@ -475,8 +475,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
                       disabled={loading || isRunning}
                       onClick={() => setSplitMode("dark-webtoon")}
                     >
-                      <strong>어두운 배경 웹툰</strong>
-                      <small>검정/진회색 배경 여백 기준</small>
+                      <strong>웹툰 (테두리 없음)</strong>
+                      <small>밝은/어두운 배경 여백 자동 판별</small>
                     </button>
                   </div>
                 </div>
@@ -732,7 +732,7 @@ function progressPercent(job: WebtoonCutJobResponse | null): number {
 }
 
 function splitModeLabel(splitMode?: WebtoonCutSplitMode): string {
-  return splitMode === "dark-webtoon" ? "어두운 배경 웹툰" : "인쇄 만화 · grid 방식";
+  return splitMode === "dark-webtoon" ? "웹툰 (테두리 없음)" : "인쇄 만화 · grid 방식";
 }
 
 function usageLabel(output: WebtoonCutOutputItem): string {

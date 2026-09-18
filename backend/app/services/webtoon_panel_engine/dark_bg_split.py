@@ -31,6 +31,9 @@ BLANK_FRAC = 0.995
 INK_MARGIN = 0.03
 INK_DARK = 128
 INK_MIN = 0.0002
+LIGHT_BG_MIN = 200
+SMALL_SIDE_RATIO = 0.12
+SMALL_AREA_RATIO = 0.02
 
 
 def estimate_bg_max(gray):
@@ -42,23 +45,36 @@ def estimate_bg_max(gray):
     return (max(common) if common else 0) + BG_MARGIN
 
 
-def is_gutter_line(line, vmax, frac=GUTTER_FRAC):
+def estimate_background(gray):
+    a = gray[:, EDGE_MARGIN:-EDGE_MARGIN].astype(np.int16)
+    ref = np.median(a, axis=1, keepdims=True)
+    flat = (np.abs(a - ref) <= BG_UNIFORM_TOL).mean(axis=1) >= BG_UNIFORM_FRAC
+    counts = collections.Counter(int(v) for v in ref[:, 0][flat].tolist())
+    if counts:
+        value = counts.most_common(1)[0][0]
+        if value >= LIGHT_BG_MIN:
+            return "light", value - BG_MARGIN
+    return "dark", estimate_bg_max(gray)
+
+
+def is_gutter_line(line, vmax, frac=GUTTER_FRAC, mode="dark"):
     if len(line) == 0:
         return False
-    return bool(float((line <= vmax).mean()) >= frac)
+    like_bg = (line <= vmax) if mode == "dark" else (line >= vmax)
+    return bool(float(like_bg.mean()) >= frac)
 
 
-def _gutter_profile(sub, axis, vmax):
-    dark = sub <= vmax
-    return dark.mean(axis=1 if axis == "h" else 0) >= GUTTER_FRAC
+def _gutter_profile(sub, axis, vmax, mode="dark"):
+    like_bg = (sub <= vmax) if mode == "dark" else (sub >= vmax)
+    return like_bg.mean(axis=1 if axis == "h" else 0) >= GUTTER_FRAC
 
 
-def content_runs(gray, region, axis, vmax, min_gap):
+def content_runs(gray, region, axis, vmax, min_gap, mode="dark"):
     x0, y0, x1, y1 = region
     sub = gray[y0:y1, x0:x1]
     if sub.size == 0:
         return []
-    content = ~_gutter_profile(sub, axis, vmax)
+    content = ~_gutter_profile(sub, axis, vmax, mode)
     d = np.diff(np.concatenate([[0], content.astype(np.int8), [0]]))
     runs = []
     for a, b in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
@@ -70,8 +86,8 @@ def content_runs(gray, region, axis, vmax, min_gap):
     return [(base + a, base + b) for a, b in runs if b - a >= MIN_RUN]
 
 
-def xy_cut(gray, region, axis, vmax, min_gap, tried=False):
-    runs = content_runs(gray, region, axis, vmax, min_gap)
+def xy_cut(gray, region, axis, vmax, min_gap, tried=False, mode="dark"):
+    runs = content_runs(gray, region, axis, vmax, min_gap, mode)
     if not runs:
         return []
     x0, y0, x1, y1 = region
@@ -84,17 +100,17 @@ def xy_cut(gray, region, axis, vmax, min_gap, tried=False):
         region2 = narrowed(*runs[0])
         if tried:
             return [region2]
-        return xy_cut(gray, region2, nxt, vmax, min_gap, True)
+        return xy_cut(gray, region2, nxt, vmax, min_gap, True, mode)
 
     out = []
     for a, b in runs:
-        out.extend(xy_cut(gray, narrowed(a, b), nxt, vmax, min_gap, False))
+        out.extend(xy_cut(gray, narrowed(a, b), nxt, vmax, min_gap, False, mode))
     return out
 
 
 def filter_leaves(gray, boxes, width):
     kept = []
-    stats = {"noise": 0, "blank": 0}
+    stats = {"noise": 0, "blank": 0, "small": 0}
     min_area = NOISE_AREA_RATIO * width * width
     for box in boxes:
         x0, y0, x1, y1 = box
@@ -111,27 +127,50 @@ def filter_leaves(gray, boxes, width):
         if inner.size and float((inner < INK_DARK).mean()) < INK_MIN:
             stats["blank"] += 1
             continue
+        if (
+            min(x1 - x0, y1 - y0) < SMALL_SIDE_RATIO * width
+            and (x1 - x0) * (y1 - y0) < SMALL_AREA_RATIO * width * width
+        ):
+            stats["small"] += 1
+            continue
         kept.append(box)
     return kept, stats
 
 
 def detect_panels(gray):
     h, w = gray.shape
-    vmax = estimate_bg_max(gray)
+    mode, threshold = estimate_background(gray)
     min_gap = max(1, round(MIN_GAP_AT_1440 * w / 1440))
-    boxes = xy_cut(gray, (EDGE_MARGIN, 0, w - EDGE_MARGIN, h), "h", vmax, min_gap)
+    boxes = xy_cut(
+        gray,
+        (EDGE_MARGIN, 0, w - EDGE_MARGIN, h),
+        "h",
+        threshold,
+        min_gap,
+        mode=mode,
+    )
     boxes, stats = filter_leaves(gray, boxes, w)
     boxes = order_reading_sequence(tuple(map(int, box)) for box in boxes)
-    stats["vmax"] = vmax
+    stats["vmax"] = threshold
+    stats["bg_mode"] = mode
     return boxes, stats
 
 
-def split_panels(image_path, out_dir, debug=False, resize_to=None, resize_scale=None):
+def split_panels(
+    image_path,
+    out_dir,
+    debug=False,
+    resize_to=None,
+    resize_scale=None,
+    stats_out=None,
+):
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"이미지를 읽을 수 없습니다: {image_path}")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    boxes, _ = detect_panels(gray)
+    boxes, stats = detect_panels(gray)
+    if stats_out is not None:
+        stats_out.update(stats)
 
     os.makedirs(out_dir, exist_ok=True)
     saved = []

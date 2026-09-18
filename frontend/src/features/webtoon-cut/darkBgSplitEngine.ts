@@ -17,8 +17,12 @@ export const BLANK_FRAC = 0.995;
 export const INK_MARGIN = 0.03;
 export const INK_DARK = 128;
 export const INK_MIN = 0.0002;
+export const LIGHT_BG_MIN = 200;
+export const SMALL_SIDE_RATIO = 0.12;
+export const SMALL_AREA_RATIO = 0.02;
 
 type Axis = "h" | "v";
+type BackgroundMode = "dark" | "light";
 
 type GrayImage = {
   width: number;
@@ -29,7 +33,9 @@ type GrayImage = {
 export type DarkBgSplitStats = {
   noise: number;
   blank: number;
+  small: number;
   vmax: number;
+  bgMode: BackgroundMode;
 };
 
 export type DarkBgSplitResult = {
@@ -64,13 +70,54 @@ export function estimateBgMax(image: ImageData | GrayImage): number {
   return commonMax + BG_MARGIN;
 }
 
-export function isGutterLine(line: ArrayLike<number>, vmax: number, frac = GUTTER_FRAC): boolean {
-  if (line.length === 0) return false;
-  let dark = 0;
-  for (let index = 0; index < line.length; index += 1) {
-    if (line[index] <= vmax) dark += 1;
+export function estimateBackground(
+  image: ImageData | GrayImage
+): { mode: BackgroundMode; threshold: number } {
+  const gray = toGrayImage(image);
+  const x0 = Math.min(EDGE_MARGIN, gray.width);
+  const x1 = Math.max(x0, gray.width - EDGE_MARGIN);
+  const counts = new Map<number, number>();
+
+  for (let y = 0; y < gray.height; y += 1) {
+    const values = rowValues(gray, y, x0, x1);
+    if (!values.length) continue;
+    const ref = median(values);
+    let same = 0;
+    for (const value of values) {
+      if (Math.abs(value - ref) <= BG_UNIFORM_TOL) same += 1;
+    }
+    if (same / values.length >= BG_UNIFORM_FRAC) {
+      const key = Math.floor(ref);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
   }
-  return dark / line.length >= frac;
+
+  let representative = 0;
+  let representativeCount = 0;
+  for (const [value, count] of counts) {
+    if (count > representativeCount) {
+      representative = value;
+      representativeCount = count;
+    }
+  }
+  if (representativeCount > 0 && representative >= LIGHT_BG_MIN) {
+    return { mode: "light", threshold: representative - BG_MARGIN };
+  }
+  return { mode: "dark", threshold: estimateBgMax(gray) };
+}
+
+export function isGutterLine(
+  line: ArrayLike<number>,
+  vmax: number,
+  frac = GUTTER_FRAC,
+  mode: BackgroundMode = "dark"
+): boolean {
+  if (line.length === 0) return false;
+  let likeBackground = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    if (mode === "dark" ? line[index] <= vmax : line[index] >= vmax) likeBackground += 1;
+  }
+  return likeBackground / line.length >= frac;
 }
 
 export function contentRuns(
@@ -78,12 +125,13 @@ export function contentRuns(
   region: PixelRegion,
   axis: Axis,
   vmax: number,
-  minGap: number
+  minGap: number,
+  mode: BackgroundMode = "dark"
 ): Array<[number, number]> {
   const gray = toGrayImage(image);
   const clipped = clipRegion(region, gray.width, gray.height);
   if (clipped.x1 <= clipped.x0 || clipped.y1 <= clipped.y0) return [];
-  const content = gutterProfile(gray, clipped, axis, vmax).map((isGutter) => !isGutter);
+  const content = gutterProfile(gray, clipped, axis, vmax, mode).map((isGutter) => !isGutter);
   const runs: Array<[number, number]> = [];
   let start = -1;
   for (let index = 0; index <= content.length; index += 1) {
@@ -111,10 +159,11 @@ export function xyCut(
   axis: Axis,
   vmax: number,
   minGap: number,
-  tried = false
+  tried = false,
+  mode: BackgroundMode = "dark"
 ): PixelRegion[] {
   const gray = toGrayImage(image);
-  const runs = contentRuns(gray, region, axis, vmax, minGap);
+  const runs = contentRuns(gray, region, axis, vmax, minGap, mode);
   if (!runs.length) return [];
   const clipped = clipRegion(region, gray.width, gray.height);
   const nextAxis: Axis = axis === "h" ? "v" : "h";
@@ -127,20 +176,20 @@ export function xyCut(
   if (runs.length === 1) {
     const narrowed = narrow(runs[0]);
     if (tried) return [narrowed];
-    return xyCut(gray, narrowed, nextAxis, vmax, minGap, true);
+    return xyCut(gray, narrowed, nextAxis, vmax, minGap, true, mode);
   }
 
-  return runs.flatMap((run) => xyCut(gray, narrow(run), nextAxis, vmax, minGap, false));
+  return runs.flatMap((run) => xyCut(gray, narrow(run), nextAxis, vmax, minGap, false, mode));
 }
 
 export function filterLeaves(
   image: ImageData | GrayImage,
   boxes: PixelRegion[],
   width: number
-): { boxes: PixelRegion[]; stats: Omit<DarkBgSplitStats, "vmax"> } {
+): { boxes: PixelRegion[]; stats: Pick<DarkBgSplitStats, "noise" | "blank" | "small"> } {
   const gray = toGrayImage(image);
   const minArea = NOISE_AREA_RATIO * width * width;
-  const stats = { noise: 0, blank: 0 };
+  const stats = { noise: 0, blank: 0, small: 0 };
   const kept: PixelRegion[] = [];
 
   for (const raw of boxes) {
@@ -184,6 +233,14 @@ export function filterLeaves(
       }
     }
 
+    if (
+      Math.min(boxWidth, boxHeight) < SMALL_SIDE_RATIO * width
+      && boxWidth * boxHeight < SMALL_AREA_RATIO * width * width
+    ) {
+      stats.small += 1;
+      continue;
+    }
+
     kept.push(box);
   }
 
@@ -192,21 +249,24 @@ export function filterLeaves(
 
 export function detectPanels(image: ImageData | GrayImage): DarkBgSplitResult {
   const gray = toGrayImage(image);
-  const vmax = estimateBgMax(gray);
+  const { mode, threshold } = estimateBackground(gray);
   const minGap = Math.max(1, Math.round(MIN_GAP_AT_1440 * gray.width / 1440));
   const boxes = xyCut(
     gray,
     { x0: Math.min(EDGE_MARGIN, gray.width), y0: 0, x1: Math.max(0, gray.width - EDGE_MARGIN), y1: gray.height },
     "h",
-    vmax,
-    minGap
+    threshold,
+    minGap,
+    false,
+    mode
   );
   const filtered = filterLeaves(gray, boxes, gray.width);
   return {
     boxes: orderReadingSequence(filtered.boxes),
     stats: {
       ...filtered.stats,
-      vmax
+      vmax: threshold,
+      bgMode: mode
     }
   };
 }
@@ -224,7 +284,13 @@ function toGrayImage(image: ImageData | GrayImage): GrayImage {
   return { width: source.width, height: source.height, data };
 }
 
-function gutterProfile(gray: GrayImage, region: PixelRegion, axis: Axis, vmax: number): boolean[] {
+function gutterProfile(
+  gray: GrayImage,
+  region: PixelRegion,
+  axis: Axis,
+  vmax: number,
+  mode: BackgroundMode = "dark"
+): boolean[] {
   const profile: boolean[] = [];
   if (axis === "h") {
     const line = new Uint8Array(region.x1 - region.x0);
@@ -232,7 +298,7 @@ function gutterProfile(gray: GrayImage, region: PixelRegion, axis: Axis, vmax: n
       for (let x = region.x0; x < region.x1; x += 1) {
         line[x - region.x0] = gray.data[y * gray.width + x];
       }
-      profile.push(isGutterLine(line, vmax));
+      profile.push(isGutterLine(line, vmax, GUTTER_FRAC, mode));
     }
     return profile;
   }
@@ -242,7 +308,7 @@ function gutterProfile(gray: GrayImage, region: PixelRegion, axis: Axis, vmax: n
     for (let y = region.y0; y < region.y1; y += 1) {
       line[y - region.y0] = gray.data[y * gray.width + x];
     }
-    profile.push(isGutterLine(line, vmax));
+    profile.push(isGutterLine(line, vmax, GUTTER_FRAC, mode));
   }
   return profile;
 }

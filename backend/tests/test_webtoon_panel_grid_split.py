@@ -105,8 +105,9 @@ def test_runtime_routes_dark_background_mode_through_dark_split_entrypoint(tmp_p
     cv2.imwrite(str(source), image)
     called = []
 
-    def fake_split_panels(image_path: str, out_dir: str, debug: bool = False):
+    def fake_split_panels(image_path: str, out_dir: str, debug: bool = False, stats_out=None):
         called.append((Path(image_path).name, debug))
+        stats_out.update({"bg_mode": "dark", "small": 0})
         panel = Path(out_dir) / "panel_01.png"
         cv2.imwrite(str(panel), np.full((36, 72, 3), 180, dtype=np.uint8))
         return [str(panel)]
@@ -117,6 +118,7 @@ def test_runtime_routes_dark_background_mode_through_dark_split_entrypoint(tmp_p
 
     assert called == [("source.png", True)]
     assert result.mode == "dark_bg"
+    assert result.split_stats == {"bg_mode": "dark", "small": 0}
     assert [(cut.cut_index, cut.width, cut.height) for cut in result.cuts] == [(1, 72, 36)]
 
 

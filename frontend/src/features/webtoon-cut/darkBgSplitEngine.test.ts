@@ -9,6 +9,40 @@ import { detectCuts } from "./detector";
 import type { PixelRegion } from "./types";
 
 describe("darkBgSplitEngine", () => {
+  it("detects three panels on a light background", () => {
+    const image = blankImage(720, 3000, [255, 255, 255]);
+    const panels = lightPanelBoxes();
+    panels.forEach((box) => drawSyntheticPanel(image, box, [140, 140, 140], [0, 0, 0]));
+
+    const { boxes, stats } = detectPanels(image);
+
+    expect(boxes).toEqual(panels);
+    expect(stats.bgMode).toBe("light");
+  });
+
+  it("reports dark mode while preserving the existing dark-background result", () => {
+    const image = blankImage(720, 3000, [0, 0, 0]);
+    const panels = lightPanelBoxes();
+    panels.forEach((box) => drawSyntheticPanel(image, box, [235, 235, 235], [0, 0, 0]));
+
+    const { boxes, stats } = detectPanels(image);
+
+    expect(boxes).toEqual(panels);
+    expect(stats.bgMode).toBe("dark");
+  });
+
+  it("filters an 82 by 43 fragment without removing light-background panels", () => {
+    const image = blankImage(720, 3000, [255, 255, 255]);
+    const panels = lightPanelBoxes();
+    panels.forEach((box) => drawSyntheticPanel(image, box, [140, 140, 140], [0, 0, 0]));
+    drawSyntheticPanel(image, { x0: 20, y0: 2850, x1: 102, y1: 2893 }, [140, 140, 140], [0, 0, 0]);
+
+    const { boxes, stats } = detectPanels(image);
+
+    expect(boxes).toEqual(panels);
+    expect(stats.small).toBe(1);
+  });
+
   it("detects three vertically stacked panels on a black webtoon background", () => {
     const image = blankImage(240, 720, [0, 0, 0]);
     drawPanel(image, { x0: 20, y0: 30, x1: 220, y1: 180 });
@@ -39,6 +73,7 @@ describe("darkBgSplitEngine", () => {
   it("clips panels touching the left and right image edges inward by the edge margin", () => {
     const image = blankImage(200, 180, [0, 0, 0]);
     drawPanel(image, { x0: 0, y0: 30, x1: 200, y1: 150 });
+    fillRect(image, { x0: 60, y0: 30, x1: 64, y1: 150 }, [0, 0, 0]);
 
     const { boxes } = detectPanels(image);
 
@@ -114,6 +149,35 @@ describe("darkBgSplitEngine", () => {
     ]);
   });
 });
+
+function lightPanelBoxes(): PixelRegion[] {
+  return [
+    { x0: 40, y0: 100, x1: 680, y1: 700 },
+    { x0: 50, y0: 1050, x1: 670, y1: 1650 },
+    { x0: 45, y0: 2050, x1: 675, y1: 2750 }
+  ];
+}
+
+function drawSyntheticPanel(
+  image: ImageData,
+  region: PixelRegion,
+  fill: [number, number, number],
+  ink: [number, number, number]
+) {
+  fillRect(image, region, fill);
+  const width = region.x1 - region.x0;
+  const height = region.y1 - region.y0;
+  const insetX = Math.max(2, Math.min(60, Math.floor(width / 4)));
+  const insetY = Math.max(2, Math.min(60, Math.floor(height / 4)));
+  const inkWidth = Math.max(2, Math.min(60, Math.floor(width / 3)));
+  const inkHeight = Math.max(2, Math.min(60, Math.floor(height / 3)));
+  fillRect(image, {
+    x0: region.x0 + insetX,
+    y0: region.y0 + insetY,
+    x1: Math.min(region.x1, region.x0 + insetX + inkWidth),
+    y1: Math.min(region.y1, region.y0 + insetY + inkHeight)
+  }, ink);
+}
 
 function drawPanel(image: ImageData, region: PixelRegion) {
   fillRect(image, region, [255, 255, 255]);
