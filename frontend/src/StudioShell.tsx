@@ -138,9 +138,7 @@ export const ROUTE_REQUIRED_PERMISSION: Partial<Record<StudioRoute, string>> = {
   "access.manual": "manual:read"
 };
 
-export const ROUTE_REQUIRED_PERMISSIONS: Partial<Record<StudioRoute, string[]>> = {
-  "create.batchJobs": ["prompts:build", "jobs:run"]
-};
+export const ROUTE_REQUIRED_PERMISSIONS: Partial<Record<StudioRoute, string[]>> = {};
 
 type ConfirmationRequest = {
   title: string;

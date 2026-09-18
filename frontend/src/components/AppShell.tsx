@@ -52,7 +52,7 @@ type NavItem = {
 // GENERATE 영역: design_handoff "2 Create.dc.html" / "3 Review.dc.html" 사이드바 공통 상단.
 const GENERATE_NAV_ITEMS: NavItem[] = [
   { key: "taskHistory", label: "작업 이력", permission: "history:read" },
-  { key: "batchJobs", label: "Batch 처리", permissions: ["prompts:build", "jobs:run"] },
+  { key: "batchJobs", label: "Batch 처리" },
   { key: "promptManagement", label: "Grok 프롬프트 생성", permission: "prompts:build" },
   { key: "runpodRequests", label: "Runpod ComfyUI 요청", permission: "jobs:run" },
   // 2026-08-11: 사용자 요청으로 Assets(5a)·Collections(5c)를 "컬렉션 관리" 한

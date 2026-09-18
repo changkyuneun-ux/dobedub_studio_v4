@@ -1,6 +1,6 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from "react";
 import { apiClient, BatchJobDetailItemResponse, BatchJobDetailResponse, BatchJobResponse, HealthResponse, ResolutionTier, WorkflowItem } from "../api/client";
-import { User } from "../auth";
+import { User, canUse } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
 import { shellNavigate } from "../helpers/navigation";
@@ -93,6 +93,8 @@ function isRecoveryErrorItem(item: BatchJobDetailItemResponse) {
 }
 
 export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Props) {
+  const canOperateBatch = canUse(user, "prompts:build") && canUse(user, "jobs:run");
+  const canManageAllBatches = canUse(user, "jobs:manage");
   const [workflowId, setWorkflowId] = useState(workflows[0]?.id || "");
   const [requestedFrames, setRequestedFrames] = useState(DEFAULT_REQUESTED_FRAMES);
   const [resolutionTier, setResolutionTier] = useState<ResolutionTier>("sd");
@@ -128,7 +130,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   }, [workflowId, workflows]);
 
   useEffect(() => {
-    if (!workflowId) {
+    if (!canOperateBatch || !workflowId) {
       setWorkflowDefaultNegativePrompt("");
       setBatchNegativePrompt("");
       setInstructionStatus(null);
@@ -153,13 +155,13 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     return () => {
       cancelled = true;
     };
-  }, [workflowId]);
+  }, [canOperateBatch, workflowId]);
 
   useEffect(() => {
     void refreshActive();
     void loadHistory(1);
-    const handoff = loadWebtoonCutHandoff(user.id, "batch");
-    if (handoff?.items.length) {
+    const handoff = canOperateBatch ? loadWebtoonCutHandoff(user.id, "batch") : null;
+    if (canOperateBatch && handoff?.items.length) {
       setWebtoonCutInput(handoff);
       clearWebtoonCutHandoff(user.id);
       setNotice(`컷 분할 이력에서 ${handoff.items.length}개 컷을 Batch 입력으로 연결했습니다. 워크플로우 선택 후 작업 요청하세요.`);
@@ -402,8 +404,12 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
       : [...current, batchId]);
   }
 
+  function canOperateBatchJob(job: BatchJobResponse) {
+    return canOperateBatch && (canManageAllBatches || job.createdBy === user.id);
+  }
+
   function toggleCurrentPageBatchSelection() {
-    const pageIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE").map((job) => job.id);
+    const pageIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE" && canOperateBatchJob(job)).map((job) => job.id);
     const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedBatchIds.includes(id));
     setSelectedBatchIds((current) => allSelected
       ? current.filter((id) => !pageIds.includes(id))
@@ -458,7 +464,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const recoveryFirstItemIndex = recoveryErrorItems.length ? (recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE + 1 : 0;
   const recoveryLastItemIndex = recoveryErrorItems.length ? Math.min(recoveryErrorItems.length, recoveryCurrentPage * RECOVERY_PAGE_SIZE) : 0;
   const paginatedRecoveryItems = recoveryErrorItems.slice((recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE, recoveryCurrentPage * RECOVERY_PAGE_SIZE);
-  const selectablePageBatchIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE").map((job) => job.id);
+  const selectablePageBatchIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE" && canOperateBatchJob(job)).map((job) => job.id);
   const allSelectablePageBatchesSelected = selectablePageBatchIds.length > 0 && selectablePageBatchIds.every((id) => selectedBatchIds.includes(id));
 
   return (
@@ -470,8 +476,9 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         onNavigate={(key) => shellNavigate(key, onGoTo)}
         headerEyebrow="GENERATE · BATCH JOB MANAGEMENT"
         headerTitle="Batch 처리"
-        headerActions={<span className={`v3-status-chip ${instructionConfigured ? "is-ok" : "is-warning"}`}>{instructionConfigured ? "GROK CONFIGURED" : "GROK INSTRUCTION REQUIRED"}</span>}
+        headerActions={<span className={`v3-status-chip ${canOperateBatch && instructionConfigured ? "is-ok" : "is-warning"}`}>{canOperateBatch ? (instructionConfigured ? "GROK CONFIGURED" : "GROK INSTRUCTION REQUIRED") : "READ ONLY"}</span>}
       >
+        {canOperateBatch ? (
         <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>1</span><strong>Batch 생성</strong></div>
         <div className="v3-batch-layout-grid">
@@ -540,6 +547,11 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         </div>
         {notice ? <p className="v3-inline-notice">{notice}</p> : null}
         </section>
+        ) : (
+          <section className="v3-screen-section v3-batch-management-section">
+            <p className="v3-inline-notice">Batch 생성 권한이 없어 조회 전용으로 표시됩니다.</p>
+          </section>
+        )}
 
         <section className="v3-screen-section v3-batch-management-section">
         <div className="v3-batch-section-title"><span>2</span><strong>진행 중 Batch</strong></div>
@@ -594,13 +606,13 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <option value="CANCELLED">취소</option>
           </select></label>
           <button className="v3-secondary-button" type="button" disabled={busy} onClick={() => loadHistory(1)}>조회</button>
-          <button className="v3-danger-outline-button" type="button" disabled={busy || !selectedBatchIds.length} onClick={() => setConfirmingCancellation(true)}>선택 작업 취소 ({selectedBatchIds.length})</button>
+          {canOperateBatch ? <button className="v3-danger-outline-button" type="button" disabled={busy || !selectedBatchIds.length} onClick={() => setConfirmingCancellation(true)}>선택 작업 취소 ({selectedBatchIds.length})</button> : null}
         </div>
         <div className="v3-table-scroll">
           <table className="v3-table v3-batch-history-table">
             <thead>
               <tr>
-                <th><input type="checkbox" aria-label="현재 페이지 진행 중 Batch 전체 선택" checked={allSelectablePageBatchesSelected} disabled={!selectablePageBatchIds.length} onChange={toggleCurrentPageBatchSelection} /></th>
+                {canOperateBatch ? <th><input type="checkbox" aria-label="현재 페이지 진행 중 Batch 전체 선택" checked={allSelectablePageBatchesSelected} disabled={!selectablePageBatchIds.length} onChange={toggleCurrentPageBatchSelection} /></th> : null}
                 <th>Batch ID</th>
                 <th>Date</th>
                 <th>작업자</th>
@@ -617,7 +629,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <tbody>
               {history.map((job) => (
                 <tr key={job.id}>
-                  <td><input type="checkbox" aria-label={`${job.id} 선택`} checked={selectedBatchIds.includes(job.id)} disabled={String(job.status).toUpperCase() !== "INCOMPLETE"} onChange={() => toggleBatchSelection(job.id)} /></td>
+                  {canOperateBatch ? <td><input type="checkbox" aria-label={`${job.id} 선택`} checked={selectedBatchIds.includes(job.id)} disabled={String(job.status).toUpperCase() !== "INCOMPLETE" || !canOperateBatchJob(job)} onChange={() => toggleBatchSelection(job.id)} /></td> : null}
                   <td>{job.id}</td>
                   <td>{formatKstTimestamp(job.createdAtKst || job.createdAt, job.createdAtUtc)}</td>
                   <td>{job.createdByName || job.createdBy || "-"}</td>
@@ -626,7 +638,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <td>{job.promptCompletedCount} / {job.totalImages}</td>
                   <td>{job.videoCompletedCount} / {job.promptCompletedCount}</td>
                   <td>{job.sourceZipFileName || job.sourceDirName || "-"}</td>
-                  <td><button className="v3-secondary-button" type="button" onClick={() => downloadBatch(job.id)}>ZIP 다운로드</button></td>
+                  <td>{canOperateBatchJob(job) ? <button className="v3-secondary-button" type="button" onClick={() => downloadBatch(job.id)}>ZIP 다운로드</button> : "-"}</td>
                   <td>
                     {job.failedCount > 0 ? (
                       <button className="v3-batch-failure-trigger" type="button" disabled={busy} onClick={() => openRecoveryModal(job)}>
@@ -655,7 +667,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         </div>
         </section>
       </AppShell>
-      {confirmingCancellation ? (
+      {canOperateBatch && confirmingCancellation ? (
         <div className="v3-modal-overlay" role="presentation">
           <div className="v3-modal-panel" role="dialog" aria-modal="true" aria-labelledby="batch-cancel-title">
             <div className="v3-modal-header"><h2 id="batch-cancel-title">Batch 작업 취소</h2></div>
@@ -688,8 +700,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               </div>
               <div className="v3-batch-recovery-actions">
                 <button className="v3-secondary-button" type="button" disabled={recoveryBusy} onClick={refreshRecoveryDetail}>상태 새로고침</button>
-                <button className="v3-danger-outline-button" type="button" disabled={recoveryBusy || !selectedRecoveryKeys.length} onClick={retrySelectedRecoveryItems}>선택 항목 재처리</button>
-                <button className="v3-primary-button" type="button" disabled={recoveryBusy || recoveryRetryableCount === 0} onClick={retryAllFailedRecoveryItems}>전체 실패 재처리</button>
+                {canOperateBatchJob(recoveryDetail.batch) ? <button className="v3-danger-outline-button" type="button" disabled={recoveryBusy || !selectedRecoveryKeys.length} onClick={retrySelectedRecoveryItems}>선택 항목 재처리</button> : null}
+                {canOperateBatchJob(recoveryDetail.batch) ? <button className="v3-primary-button" type="button" disabled={recoveryBusy || recoveryRetryableCount === 0} onClick={retryAllFailedRecoveryItems}>전체 실패 재처리</button> : null}
               </div>
             </div>
             <div className="v3-batch-recovery-metrics">
@@ -719,7 +731,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                 const selected = selectedRecoveryKeys.includes(key);
                 return (
                   <div className="v3-batch-recovery-row" key={key}>
-                    <input type="checkbox" checked={selected} disabled={!item.selectable || recoveryBusy} onChange={() => toggleRecoveryItem(item)} />
+                    <input type="checkbox" checked={selected} disabled={!canOperateBatchJob(recoveryDetail.batch) || !item.selectable || recoveryBusy} onChange={() => toggleRecoveryItem(item)} />
                     <div className="v3-batch-recovery-file">
                       {item.assetId ? (
                         <button
@@ -740,7 +752,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                     <span className="v3-batch-recovery-error">{item.error || "-"}</span>
                     <span className="v3-batch-metric-pill is-yellow">{item.retryCount}회</span>
                     <span className="v3-batch-recovery-next">{item.nextRetryAt ? formatKstTimestamp(item.nextRetryAtKst || item.nextRetryAt, item.nextRetryAtUtc) : "-"}</span>
-                    <button className="v3-text-button" type="button" disabled={!item.selectable || recoveryBusy} onClick={() => void retrySingleRecoveryItem(item)}>{item.actionLabel}</button>
+                    {canOperateBatchJob(recoveryDetail.batch) ? <button className="v3-text-button" type="button" disabled={!item.selectable || recoveryBusy} onClick={() => void retrySingleRecoveryItem(item)}>{item.actionLabel}</button> : <span>-</span>}
                   </div>
                 );
               })}
@@ -767,7 +779,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
           </div>
         </div>
       ) : null}
-      {confirmingBatch ? (
+      {canOperateBatch && confirmingBatch ? (
         <div className="v3-modal-overlay" role="presentation">
           <div className="v3-modal-panel v3-batch-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="batch-confirm-title">
             <h2 className="v3-modal-title" id="batch-confirm-title">작업 요청 내역 확인</h2>

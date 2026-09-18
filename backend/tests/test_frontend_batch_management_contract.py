@@ -645,6 +645,19 @@ def test_batch_job_screen_follows_the_approved_management_mockup() -> None:
     assert "Incomplete Dashboard" not in screen
 
 
+def test_batch_history_is_visible_to_every_authenticated_user_but_mutations_stay_gated() -> None:
+    shell = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
+    studio_shell = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
+    screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
+
+    batch_nav = shell.split('key: "batchJobs"', 1)[1].split("}", 1)[0]
+    assert "permission" not in batch_nav
+    assert '"create.batchJobs": ["prompts:build", "jobs:run"]' not in studio_shell
+    assert 'const canOperateBatch = canUse(user, "prompts:build") && canUse(user, "jobs:run");' in screen
+    assert "{canOperateBatch ? (" in screen
+    assert "Batch 생성 권한이 없어 조회 전용으로 표시됩니다." in screen
+
+
 def test_batch_job_screen_labels_81_frame_chain_workflows_as_ten_seconds() -> None:
     screen = Path("frontend/src/screens/batchJobScreen.tsx").read_text(encoding="utf-8")
 

@@ -882,6 +882,91 @@ def test_batch_job_history_uses_five_row_pages(db_session):
     assert len(second["items"]) == 2
 
 
+def test_batch_job_read_endpoints_show_all_workers_to_authenticated_viewer(api_client):
+    session = SessionLocal()
+    try:
+        session.add_all([
+            User(id="batch_viewer", name="Batch Viewer", role="VIEWER", permissions_json=[], is_active=True),
+            User(id="batch_owner_a", name="Owner A", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True),
+            User(id="batch_owner_b", name="Owner B", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True),
+            BatchJob(
+                id="batch_shared_a",
+                workflow_id="1-images_81.json",
+                status="INCOMPLETE",
+                total_images=2,
+                created_by="batch_owner_a",
+            ),
+            BatchJob(
+                id="batch_shared_b",
+                workflow_id="1-images_81.json",
+                status="INCOMPLETE",
+                total_images=3,
+                created_by="batch_owner_b",
+            ),
+            _asset("batch_shared_asset_a"),
+            _asset("batch_shared_asset_b"),
+            ImagePromptDraft(
+                id="batch_shared_draft_a",
+                asset_id="batch_shared_asset_a",
+                workflow_id="1-images_81.json",
+                slot_index=1,
+                status="GENERATING",
+                model="grok",
+                created_by="batch_owner_a",
+                batch_job_id="batch_shared_a",
+            ),
+            ImagePromptDraft(
+                id="batch_shared_draft_b",
+                asset_id="batch_shared_asset_b",
+                workflow_id="1-images_81.json",
+                slot_index=1,
+                status="GENERATING",
+                model="grok",
+                created_by="batch_owner_b",
+                batch_job_id="batch_shared_b",
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    headers = _headers("batch_viewer", name="Batch Viewer", role="VIEWER")
+
+    history = api_client.get("/api/batch-jobs", headers=headers)
+    active = api_client.get("/api/batch-jobs/active", headers=headers)
+    detail = api_client.get("/api/batch-jobs/batch_shared_b", headers=headers)
+
+    assert history.status_code == 200
+    assert {item["id"] for item in history.json()["items"]} == {"batch_shared_a", "batch_shared_b"}
+    assert {item["id"] for item in active.json()["items"]} == {"batch_shared_a", "batch_shared_b"}
+    assert detail.status_code == 200
+    assert detail.json()["batch"]["id"] == "batch_shared_b"
+
+
+def test_batch_job_viewer_cannot_create_or_cancel_batch(api_client):
+    session = SessionLocal()
+    try:
+        session.add(User(id="batch_read_only", name="Read Only", role="VIEWER", permissions_json=[], is_active=True))
+        session.add(BatchJob(
+            id="batch_protected_mutation",
+            workflow_id="1-images_81.json",
+            status="INCOMPLETE",
+            total_images=1,
+            created_by="another_operator",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    headers = _headers("batch_read_only", name="Read Only", role="VIEWER")
+
+    create = api_client.post("/api/batch-jobs", headers=headers, json={})
+    cancel = api_client.post("/api/batch-jobs/batch_protected_mutation/cancel", headers=headers)
+
+    assert create.status_code == 403
+    assert cancel.status_code == 403
+
+
 # --- promote_ready_batch_drafts -------------------------------------------
 #
 # 폴더 기반 Batch 작업은 Prompt 생성관리/RunPod 요청관리 큐를 거치지 않는다.

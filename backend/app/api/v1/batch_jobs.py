@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from backend.app.core.security import CurrentUser, has_permission, require_permission
+from backend.app.core.security import CurrentUser, current_user_from_headers, has_permission, require_permission
 from backend.app.db.models import BatchJob
 from backend.app.db.session import get_db
 from backend.app.services import batch_job_service, batch_zip_import_service, batch_zip_service
@@ -80,11 +80,10 @@ async def create_batch_job_from_zip(
 
 @router.get("/active")
 def active_batch_jobs(
-    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    _: CurrentUser = Depends(current_user_from_headers),
     db: Session = Depends(get_db),
 ):
-    _require_batch_access(current_user)
-    return batch_job_service.list_active_batch_jobs(db, created_by=_scope(current_user))
+    return batch_job_service.list_active_batch_jobs(db, created_by=None)
 
 
 @router.get("/search")
@@ -109,13 +108,12 @@ def batch_job_history(
     dateTo: str | None = None,
     workerId: str | None = None,
     status: str | None = None,
-    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    _: CurrentUser = Depends(current_user_from_headers),
     db: Session = Depends(get_db),
 ):
-    _require_batch_access(current_user)
     return batch_job_service.list_batch_jobs(
         db,
-        created_by=_scope(current_user),
+        created_by=None,
         page=page,
         date_from=dateFrom,
         date_to=dateTo,
@@ -127,16 +125,12 @@ def batch_job_history(
 @router.get("/{batch_job_id}")
 def batch_job_detail(
     batch_job_id: str,
-    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    _: CurrentUser = Depends(current_user_from_headers),
     db: Session = Depends(get_db),
 ):
-    _require_batch_access(current_user)
     batch_row = db.get(BatchJob, batch_job_id)
     if batch_row is None:
         raise HTTPException(status_code=404, detail="배치 작업을 찾을 수 없습니다.")
-    scoped_user = _scope(current_user)
-    if scoped_user and batch_row.created_by != scoped_user:
-        raise HTTPException(status_code=403, detail="다른 작업자의 배치는 조회할 수 없습니다.")
     try:
         detail = batch_job_service.batch_job_detail(db, batch_job_id)
     except ValueError as exc:
