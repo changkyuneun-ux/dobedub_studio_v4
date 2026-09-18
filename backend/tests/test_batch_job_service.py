@@ -125,6 +125,140 @@ def test_batch_history_date_filter_uses_kst_calendar_boundaries(db_session):
     }
 
 
+def test_cancel_batch_stops_only_not_started_prompt_and_video_work(db_session):
+    owner = _user("cancel-owner")
+    db_session.add(owner)
+    for index in range(1, 4):
+        db_session.add(_asset(f"cancel_asset_{index}"))
+    batch = BatchJob(
+        id="batch_cancel_scope",
+        workflow_id="1-images_81.json",
+        status="INCOMPLETE",
+        created_by=owner.id,
+        total_images=3,
+    )
+    pending_draft = ImagePromptDraft(
+        id="cancel_draft_pending",
+        asset_id="cancel_asset_1",
+        workflow_id=batch.workflow_id,
+        slot_index=1,
+        status="PENDING",
+        model="grok",
+        created_by=owner.id,
+        batch_job_id=batch.id,
+        promotion_status="PENDING",
+    )
+    generating_draft = ImagePromptDraft(
+        id="cancel_draft_generating",
+        asset_id="cancel_asset_2",
+        workflow_id=batch.workflow_id,
+        slot_index=2,
+        status="GENERATING",
+        model="grok",
+        created_by=owner.id,
+        batch_job_id=batch.id,
+        promotion_status="PENDING",
+    )
+    ready_draft = ImagePromptDraft(
+        id="cancel_draft_ready",
+        asset_id="cancel_asset_3",
+        workflow_id=batch.workflow_id,
+        slot_index=3,
+        status="READY",
+        model="grok",
+        positive_prompt="finished prompt",
+        created_by=owner.id,
+        batch_job_id=batch.id,
+        promotion_status="DISPATCHING",
+        promotion_claimed_at=datetime(2026, 9, 18, 1, 2, 3),
+    )
+    tasks = [
+        WorkflowTask(
+            id=f"cancel_task_{status.lower()}",
+            workflow_id=batch.workflow_id,
+            status=status,
+            batch_job_id=batch.id,
+            user_id=owner.id,
+            prompt_draft_id=ready_draft.id,
+        )
+        for status in ("PENDING_SUBMIT", "DISPATCHING", "QUEUED", "RUNNING", "COMPLETED")
+    ]
+    db_session.add_all([batch, pending_draft, generating_draft, ready_draft, *tasks])
+    db_session.commit()
+
+    result = batch_job_service.cancel_batch_job(
+        db_session,
+        batch.id,
+        actor_id=owner.id,
+        can_manage=False,
+    )
+
+    db_session.refresh(batch)
+    db_session.refresh(pending_draft)
+    db_session.refresh(generating_draft)
+    db_session.refresh(ready_draft)
+    task_statuses = {task.id: db_session.get(WorkflowTask, task.id).status for task in tasks}
+    assert result["cancelledPromptCount"] == 1
+    assert result["cancelledPendingSubmitCount"] == 1
+    assert batch.status == "CANCELLED"
+    assert pending_draft.status == "CANCELLED"
+    assert generating_draft.status == "GENERATING"
+    assert ready_draft.status == "READY"
+    assert ready_draft.positive_prompt == "finished prompt"
+    assert ready_draft.promotion_status == "CANCELLED"
+    assert ready_draft.promotion_claimed_at is None
+    assert task_statuses == {
+        "cancel_task_pending_submit": "CANCELLED",
+        "cancel_task_dispatching": "DISPATCHING",
+        "cancel_task_queued": "QUEUED",
+        "cancel_task_running": "RUNNING",
+        "cancel_task_completed": "COMPLETED",
+    }
+
+
+def test_batch_cancel_api_allows_owner_and_rejects_other_operator(api_client):
+    session = SessionLocal()
+    try:
+        session.add_all([
+            User(id="cancel-api-owner", name="Cancel Owner", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True),
+            User(id="cancel-api-other", name="Other Operator", role="OPERATOR", permissions_json=["prompts:build", "jobs:run"], is_active=True),
+            _asset("cancel_api_asset"),
+            BatchJob(
+                id="batch_cancel_api",
+                workflow_id="1-images_81.json",
+                status="INCOMPLETE",
+                created_by="cancel-api-owner",
+            ),
+            ImagePromptDraft(
+                id="cancel_api_draft",
+                asset_id="cancel_api_asset",
+                workflow_id="1-images_81.json",
+                slot_index=1,
+                status="PENDING",
+                model="grok",
+                created_by="cancel-api-owner",
+                batch_job_id="batch_cancel_api",
+                promotion_status="PENDING",
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    forbidden = api_client.post(
+        "/api/batch-jobs/batch_cancel_api/cancel",
+        headers=_headers("cancel-api-other", name="Other Operator"),
+    )
+    assert forbidden.status_code == 403
+
+    response = api_client.post(
+        "/api/batch-jobs/batch_cancel_api/cancel",
+        headers=_headers("cancel-api-owner", name="Cancel Owner"),
+    )
+    assert response.status_code == 200
+    assert response.json()["batch"]["status"] == "CANCELLED"
+
+
 @pytest.mark.parametrize(
     "table, model",
     [

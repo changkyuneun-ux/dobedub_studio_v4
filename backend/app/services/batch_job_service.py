@@ -39,7 +39,7 @@ PROMOTION_LIMIT_PER_CYCLE = 20
 STALE_PROMOTION_CLAIM_SECONDS = 300
 PROMOTION_RETRY_DELAY_SECONDS = 30
 PAGE_SIZE = 5
-TERMINAL_DRAFT_STATES = frozenset({"READY", "FAILED", "MANUAL_REQUIRED"})
+TERMINAL_DRAFT_STATES = frozenset({"READY", "FAILED", "MANUAL_REQUIRED", "CANCELLED"})
 FAILED_DRAFT_STATES = frozenset({"FAILED", "MANUAL_REQUIRED"})
 TERMINAL_TASK_STATES = frozenset({"COMPLETED", "SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"})
 SUCCESS_TASK_STATES = frozenset({"COMPLETED", "SUCCESS"})
@@ -50,6 +50,8 @@ PROMOTION_PENDING = "PENDING"
 PROMOTION_DISPATCHING = "DISPATCHING"
 PROMOTION_TASK_CREATED = "TASK_CREATED"
 PROMOTION_FAILED = "FAILED"
+PROMOTION_CANCELLED = "CANCELLED"
+BATCH_JOB_CANCELLED = "CANCELLED"
 INVALID_PROMPT_TASK_FAILURE_MESSAGE = "프롬프트 생성 실패로 RunPod 요청을 취소했습니다."
 
 # Kept as a short-lived monitor diagnostic for existing callers. The durable
@@ -318,7 +320,8 @@ def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
     batch = db.get(BatchJob, batch_job_id)
     if batch is None:
         raise ValueError("배치 작업을 찾을 수 없습니다.")
-    batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
+    if batch.status != BATCH_JOB_CANCELLED:
+        batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
     drafts = db.scalars(
         select(ImagePromptDraft)
         .where(ImagePromptDraft.batch_job_id == batch.id)
@@ -392,7 +395,8 @@ def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
         for draft in drafts
     ]
     items.extend(_orphan_task_detail_item(task) for task in orphan_tasks)
-    batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
+    if batch.status != BATCH_JOB_CANCELLED:
+        batch.status = BATCH_JOB_COMPLETE if _refresh_batch_row(db, batch) else BATCH_JOB_INCOMPLETE
     return {"batch": _batch_payload(db, batch), "items": items, "warnings": warnings}
 
 
@@ -415,6 +419,7 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "totalImages": batch.total_images,
         "promptCompletedCount": batch.prompt_completed_count,
         "promptFailedCount": batch.prompt_failed_count,
+        "promptCancelledCount": _counts_for(db, batch.id)["promptCancelled"],
         "videoRequestedCount": batch.video_requested_count,
         "videoCompletedCount": batch.video_completed_count,
         "videoFailedCount": video_failed_count,
@@ -1062,6 +1067,7 @@ def _counts_for(db: Session, batch_job_id: str) -> dict[str, int]:
         "promptGenerating": drafts.get("GENERATING", 0),
         "promptReady": valid_ready,
         "promptFailed": sum(drafts.get(state, 0) for state in FAILED_DRAFT_STATES) + blank_ready,
+        "promptCancelled": drafts.get("CANCELLED", 0),
         "promptTerminal": sum(drafts.get(state, 0) for state in TERMINAL_DRAFT_STATES),
         "videoRequested": sum(tasks.values()),
         "videoPendingSubmit": tasks.get("PENDING_SUBMIT", 0) + tasks.get("DISPATCHING", 0),
@@ -1174,6 +1180,100 @@ def mark_batch_downloaded(db: Session, batch_job_id: str) -> None:
     db.commit()
 
 
+def cancel_batch_job(
+    db: Session,
+    batch_job_id: str,
+    *,
+    actor_id: str,
+    can_manage: bool,
+) -> dict[str, Any]:
+    batch = db.get(BatchJob, batch_job_id)
+    if batch is None:
+        raise ValueError("배치 작업을 찾을 수 없습니다.")
+    if not can_manage and str(batch.created_by or "") != str(actor_id or ""):
+        raise PermissionError("다른 작업자의 배치는 취소할 수 없습니다.")
+    if str(batch.status or "").upper() != BATCH_JOB_INCOMPLETE:
+        raise ValueError("진행 중인 배치 작업만 취소할 수 있습니다.")
+
+    now_utc_naive = utc_now().replace(tzinfo=None)
+    now_kst_naive = now_seoul_naive()
+    pending_drafts = db.scalars(
+        select(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status == "PENDING",
+        )
+    ).all()
+    for draft in pending_drafts:
+        draft.status = "CANCELLED"
+        draft.failure_message = None
+        draft.promotion_status = PROMOTION_CANCELLED
+        draft.promotion_claimed_at = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_last_error = None
+        draft.promotion_updated_at = now_utc_naive
+        draft.updated_at = now_utc_naive
+
+    promotion_drafts = db.scalars(
+        select(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status == "READY",
+            ImagePromptDraft.promotion_status != PROMOTION_TASK_CREATED,
+        )
+    ).all()
+    for draft in promotion_drafts:
+        draft.promotion_status = PROMOTION_CANCELLED
+        draft.promotion_claimed_at = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_last_error = None
+        draft.promotion_updated_at = now_utc_naive
+        draft.updated_at = now_utc_naive
+
+    pending_submit_tasks = db.scalars(
+        select(WorkflowTask).where(
+            WorkflowTask.batch_job_id == batch.id,
+            WorkflowTask.deleted_at.is_(None),
+            WorkflowTask.status == "PENDING_SUBMIT",
+        )
+    ).all()
+    for task in pending_submit_tasks:
+        task.status = "CANCELLED"
+        task.completed_at = now_kst_naive
+        task.dispatch_claimed_at = None
+        task.next_dispatch_at = None
+        task.last_dispatch_error = None
+        task.updated_at = now_kst_naive
+
+    prompt_batch_ids = {
+        str(value)
+        for value in db.scalars(
+            select(ImagePromptDraft.prompt_batch_id).where(
+                ImagePromptDraft.batch_job_id == batch.id,
+                ImagePromptDraft.prompt_batch_id.is_not(None),
+            )
+        )
+        if value
+    }
+    if prompt_batch_ids:
+        for prompt_batch in db.scalars(
+            select(PromptGenerationBatch).where(PromptGenerationBatch.id.in_(prompt_batch_ids))
+        ).all():
+            prompt_batch.status = "CANCELLED"
+            prompt_batch.updated_at = now_utc_naive
+
+    db.flush()
+    _refresh_batch_row(db, batch)
+    batch.status = BATCH_JOB_CANCELLED
+    batch.updated_at = now_utc_naive
+    db.commit()
+    return {
+        "batchJobId": batch.id,
+        "cancelledPromptCount": len(pending_drafts),
+        "cancelledPromotionCount": len(promotion_drafts),
+        "cancelledPendingSubmitCount": len(pending_submit_tasks),
+        "batch": _batch_payload(db, batch),
+    }
+
+
 def retry_failed_batch_items(
     db: Session,
     batch_job_id: str,
@@ -1189,6 +1289,8 @@ def retry_failed_batch_items(
         raise ValueError("배치 작업을 찾을 수 없습니다.")
     if not can_manage and str(batch.created_by or "") != str(actor_id or ""):
         raise PermissionError("다른 작업자의 배치는 재처리할 수 없습니다.")
+    if str(batch.status or "").upper() == BATCH_JOB_CANCELLED:
+        raise ValueError("취소된 배치 작업은 재처리할 수 없습니다.")
     normalized_stage = str(stage or "all").strip().lower()
     if normalized_stage not in {"all", "prompt", "runpod"}:
         raise ValueError("재처리 stage 값이 올바르지 않습니다.")
@@ -1431,5 +1533,6 @@ __all__ = [
     "refresh_batch_job_counters",
     "list_active_batch_jobs",
     "list_batch_jobs",
+    "cancel_batch_job",
     "mark_batch_downloaded",
 ]

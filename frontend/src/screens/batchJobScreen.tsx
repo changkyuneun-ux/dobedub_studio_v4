@@ -112,6 +112,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirmingBatch, setConfirmingBatch] = useState(false);
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
+  const [confirmingCancellation, setConfirmingCancellation] = useState(false);
   const [recoveryDetail, setRecoveryDetail] = useState<BatchJobDetailResponse | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [selectedRecoveryKeys, setSelectedRecoveryKeys] = useState<string[]>([]);
@@ -394,6 +396,47 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     }
   }
 
+  function toggleBatchSelection(batchId: string) {
+    setSelectedBatchIds((current) => current.includes(batchId)
+      ? current.filter((value) => value !== batchId)
+      : [...current, batchId]);
+  }
+
+  function toggleCurrentPageBatchSelection() {
+    const pageIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE").map((job) => job.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedBatchIds.includes(id));
+    setSelectedBatchIds((current) => allSelected
+      ? current.filter((id) => !pageIds.includes(id))
+      : [...new Set([...current, ...pageIds])]);
+  }
+
+  async function cancelSelectedBatches() {
+    if (!selectedBatchIds.length) return;
+    setBusy(true);
+    setNotice("");
+    const succeeded: string[] = [];
+    let cancelledPrompts = 0;
+    let cancelledPendingSubmits = 0;
+    const failures: string[] = [];
+    for (const batchId of selectedBatchIds) {
+      try {
+        const result = await apiClient.cancelBatchJob(batchId);
+        succeeded.push(batchId);
+        cancelledPrompts += result.cancelledPromptCount;
+        cancelledPendingSubmits += result.cancelledPendingSubmitCount;
+      } catch (error) {
+        failures.push(`${batchId}: ${error instanceof Error ? error.message : "취소 실패"}`);
+      }
+    }
+    setSelectedBatchIds((current) => current.filter((id) => !succeeded.includes(id)));
+    setConfirmingCancellation(false);
+    await Promise.allSettled([refreshActive(), loadHistory(page)]);
+    setNotice(failures.length
+      ? `${succeeded.length}건 취소 · 실패 ${failures.length}건 (${failures.join(" · ")})`
+      : `${succeeded.length}개 Batch 취소 완료 · 프롬프트 대기 ${cancelledPrompts}건 · 영상 Pending Submit ${cancelledPendingSubmits}건 중단`);
+    setBusy(false);
+  }
+
   const selectedZipSummary = fileSizeLabel(selectedZipFile);
   const batchInputReady = Boolean(selectedZipFile || webtoonCutInput?.items.length);
   const firstItemIndex = history.length ? (page - 1) * PAGE_SIZE + 1 : 0;
@@ -415,6 +458,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const recoveryFirstItemIndex = recoveryErrorItems.length ? (recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE + 1 : 0;
   const recoveryLastItemIndex = recoveryErrorItems.length ? Math.min(recoveryErrorItems.length, recoveryCurrentPage * RECOVERY_PAGE_SIZE) : 0;
   const paginatedRecoveryItems = recoveryErrorItems.slice((recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE, recoveryCurrentPage * RECOVERY_PAGE_SIZE);
+  const selectablePageBatchIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE").map((job) => job.id);
+  const allSelectablePageBatchesSelected = selectablePageBatchIds.length > 0 && selectablePageBatchIds.every((id) => selectedBatchIds.includes(id));
 
   return (
     <>
@@ -546,13 +591,16 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <option value="">전체 상태</option>
             <option value="INCOMPLETE">진행 중</option>
             <option value="COMPLETE">완료</option>
+            <option value="CANCELLED">취소</option>
           </select></label>
           <button className="v3-secondary-button" type="button" disabled={busy} onClick={() => loadHistory(1)}>조회</button>
+          <button className="v3-danger-outline-button" type="button" disabled={busy || !selectedBatchIds.length} onClick={() => setConfirmingCancellation(true)}>선택 작업 취소 ({selectedBatchIds.length})</button>
         </div>
         <div className="v3-table-scroll">
           <table className="v3-table v3-batch-history-table">
             <thead>
               <tr>
+                <th><input type="checkbox" aria-label="현재 페이지 진행 중 Batch 전체 선택" checked={allSelectablePageBatchesSelected} disabled={!selectablePageBatchIds.length} onChange={toggleCurrentPageBatchSelection} /></th>
                 <th>Batch ID</th>
                 <th>Date</th>
                 <th>작업자</th>
@@ -569,6 +617,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             <tbody>
               {history.map((job) => (
                 <tr key={job.id}>
+                  <td><input type="checkbox" aria-label={`${job.id} 선택`} checked={selectedBatchIds.includes(job.id)} disabled={String(job.status).toUpperCase() !== "INCOMPLETE"} onChange={() => toggleBatchSelection(job.id)} /></td>
                   <td>{job.id}</td>
                   <td>{formatKstTimestamp(job.createdAtKst || job.createdAt, job.createdAtUtc)}</td>
                   <td>{job.createdByName || job.createdBy || "-"}</td>
@@ -606,6 +655,21 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
         </div>
         </section>
       </AppShell>
+      {confirmingCancellation ? (
+        <div className="v3-modal-overlay" role="presentation">
+          <div className="v3-modal-panel" role="dialog" aria-modal="true" aria-labelledby="batch-cancel-title">
+            <div className="v3-modal-header"><h2 id="batch-cancel-title">Batch 작업 취소</h2></div>
+            <p className="v3-modal-body-text">선택한 진행 중 Batch {selectedBatchIds.length}건을 취소합니다.</p>
+            <div className="v3-summary-row"><span>보존</span><strong>완료된 프롬프트·영상과 현재 생성 중인 작업</strong></div>
+            <div className="v3-summary-row"><span>중단</span><strong>프롬프트 대기 및 영상 Pending Submit</strong></div>
+            <p className="v3-modal-body-text">이미 RunPod 제출 중이거나 큐·실행 중인 영상은 강제 종료하지 않고 완료까지 처리합니다.</p>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={busy} onClick={() => setConfirmingCancellation(false)}>닫기</button>
+              <button className="v3-danger-outline-button" type="button" disabled={busy} onClick={() => void cancelSelectedBatches()}>취소 요청</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {recoveryDetail ? (
         <div className="v3-modal-overlay" role="presentation">
           <div className="v3-modal-panel v3-batch-recovery-modal" role="dialog" aria-modal="true" aria-labelledby="batch-recovery-title">

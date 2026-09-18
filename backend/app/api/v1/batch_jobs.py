@@ -145,6 +145,27 @@ def batch_job_detail(
     return detail
 
 
+@router.post("/{batch_job_id}/cancel")
+def cancel_batch_job(
+    batch_job_id: str,
+    current_user: CurrentUser = Depends(require_permission("jobs:run")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return batch_job_service.cancel_batch_job(
+            db,
+            batch_job_id,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+        )
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/{batch_job_id}/retry-failed")
 def retry_failed_batch_items(
     batch_job_id: str,

@@ -7,11 +7,11 @@ import time
 import uuid
 from typing import Any, NamedTuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
-from backend.app.db.models import Asset, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
+from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services import studio_api_service, workflow_service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokPromptInputError, generate_image_prompt
@@ -24,6 +24,7 @@ BATCH_COMPLETED = "COMPLETED"
 BATCH_COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
 DRAFT_PENDING = "PENDING"
 DRAFT_GENERATING = "GENERATING"
+DRAFT_CANCELLED = "CANCELLED"
 DRAFT_READY = "READY"
 DRAFT_FAILED = "FAILED"
 DRAFT_MANUAL_REQUIRED = "MANUAL_REQUIRED"
@@ -530,11 +531,29 @@ def _draft_source_metadata(draft: ImagePromptDraft) -> dict[str, str]:
 
 
 def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
+    claim_time = _utc_naive_now()
+    claim = db.execute(
+        update(ImagePromptDraft)
+        .where(ImagePromptDraft.id == draft.id, ImagePromptDraft.status == DRAFT_PENDING)
+        .values(status=DRAFT_GENERATING, failure_message=None, updated_at=claim_time)
+    )
+    if not claim.rowcount:
+        db.refresh(draft)
+        return _draft_payload(db, draft)
+    db.refresh(draft)
+    if draft.batch_job_id:
+        parent_batch = db.get(BatchJob, draft.batch_job_id)
+        if parent_batch is not None and str(parent_batch.status or "").upper() == "CANCELLED":
+            draft.status = DRAFT_CANCELLED
+            draft.promotion_status = "CANCELLED"
+            draft.promotion_claimed_at = None
+            draft.promotion_next_attempt_at = None
+            draft.updated_at = _utc_naive_now()
+            db.commit()
+            return _draft_payload(db, draft)
     batch = db.get(PromptGenerationBatch, draft.prompt_batch_id) if draft.prompt_batch_id else None
     if batch is not None:
         batch.status = BATCH_GENERATING
-    draft.status = DRAFT_GENERATING
-    draft.failure_message = None
     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
     attempt = PromptGenerationAttempt(
         id=f"grok_attempt_{uuid.uuid4().hex[:16]}",
@@ -662,10 +681,11 @@ def _apply_batch_counts(batch: PromptGenerationBatch, draft_statuses: list[str])
     total = len(draft_statuses) if draft_statuses else int(batch.total_count or 0)
     batch.completed_count = sum(status == DRAFT_READY for status in draft_statuses)
     batch.failed_count = sum(status in PROMPT_FAILURE_STATES for status in draft_statuses)
+    cancelled_count = sum(status == DRAFT_CANCELLED for status in draft_statuses)
     if total <= 0:
         batch.status = BATCH_COMPLETED
-    elif batch.completed_count + batch.failed_count >= total:
-        batch.status = BATCH_COMPLETED_WITH_ERRORS if batch.failed_count else BATCH_COMPLETED
+    elif batch.completed_count + batch.failed_count + cancelled_count >= total:
+        batch.status = DRAFT_CANCELLED if cancelled_count else (BATCH_COMPLETED_WITH_ERRORS if batch.failed_count else BATCH_COMPLETED)
     elif any(status == DRAFT_GENERATING for status in draft_statuses):
         batch.status = BATCH_GENERATING
     else:
@@ -676,9 +696,10 @@ def _batch_counts_from_drafts(batch: PromptGenerationBatch, drafts: list[ImagePr
     total = len(drafts) if drafts else int(batch.total_count or 0)
     completed = sum(draft.status == DRAFT_READY for draft in drafts)
     failed = sum(draft.status in PROMPT_FAILURE_STATES for draft in drafts)
+    cancelled = sum(draft.status == DRAFT_CANCELLED for draft in drafts)
     pending = sum(draft.status == DRAFT_PENDING for draft in drafts)
-    if completed + failed >= total and total:
-        status = BATCH_COMPLETED_WITH_ERRORS if failed else BATCH_COMPLETED
+    if completed + failed + cancelled >= total and total:
+        status = DRAFT_CANCELLED if cancelled else (BATCH_COMPLETED_WITH_ERRORS if failed else BATCH_COMPLETED)
     elif any(draft.status == DRAFT_GENERATING for draft in drafts) or completed or failed:
         status = BATCH_GENERATING
     else:

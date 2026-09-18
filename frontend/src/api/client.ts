@@ -696,6 +696,7 @@ export type BatchJobResponse = {
   totalImages: number;
   promptCompletedCount: number;
   promptFailedCount: number;
+  promptCancelledCount?: number;
   videoRequestedCount: number;
   videoCompletedCount: number;
   videoFailedCount: number;
@@ -763,6 +764,14 @@ export type BatchJobRetryResponse = {
   promotionRetried: number;
   runpodReworked: number;
   skipped: Array<{ id: string; reason: string }>;
+  batch: BatchJobResponse;
+};
+
+export type BatchJobCancelResponse = {
+  batchJobId: string;
+  cancelledPromptCount: number;
+  cancelledPromotionCount: number;
+  cancelledPendingSubmitCount: number;
   batch: BatchJobResponse;
 };
 
@@ -1874,6 +1883,10 @@ export const apiClient = {
     requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/items/retry`, {
       method: "POST",
       body: JSON.stringify({ stage: "all", draftIds: payload.draftIds || [], taskIds: payload.taskIds || [] })
+    }),
+  cancelBatchJob: (batchJobId: string) =>
+    requestJson<BatchJobCancelResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/cancel`, {
+      method: "POST"
     }),
   batchJobCandidates: (params: { query: string; limit?: number }) => {
     const query = new URLSearchParams();
