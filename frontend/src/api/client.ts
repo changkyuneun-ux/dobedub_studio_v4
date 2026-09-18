@@ -712,7 +712,11 @@ export type BatchJobResponse = {
   createdBy?: string | null;
   createdByName?: string | null;
   createdAt?: string | null;
+  createdAtUtc?: string | null;
+  createdAtKst?: string | null;
   updatedAt?: string | null;
+  updatedAtUtc?: string | null;
+  updatedAtKst?: string | null;
 };
 
 export type BatchJobListResponse = {
@@ -740,6 +744,8 @@ export type BatchJobDetailItemResponse = {
   actionLabel: string;
   retryCount: number;
   nextRetryAt?: string | null;
+  nextRetryAtUtc?: string | null;
+  nextRetryAtKst?: string | null;
   promotionStatus?: string | null;
   promotionAttempts?: number;
   promotionLastError?: string | null;

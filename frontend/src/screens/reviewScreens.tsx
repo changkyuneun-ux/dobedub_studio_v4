@@ -17,6 +17,7 @@ import { StudioRoute } from "../router";
 import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import {
+  formatKstTimestamp,
   formatTimestamp,
   isSuccessStatus,
   isTerminalHistoryStatus
@@ -109,21 +110,7 @@ function formatRunpodHistoryTime(totalSeconds?: number | string | null) {
 }
 
 function formatRunpodHistoryDate(value?: string | null) {
-  if (!value) return "-";
-  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
-  const date = new Date(normalized);
-  const parts = Number.isNaN(date.getTime()) ? null : new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(date).reduce<Record<string, string>>((acc, part) => {
-    if (part.type !== "literal") acc[part.type] = part.value;
-    return acc;
-  }, {});
-  if (parts?.year && parts.month && parts.day) return `${parts.year}:${parts.month}:${parts.day}`;
-  const fallback = String(value).match(/(\d{4})[-:/](\d{2})[-:/](\d{2})/);
-  return fallback ? `${fallback[1]}:${fallback[2]}:${fallback[3]}` : String(value).slice(0, 10);
+  return formatKstTimestamp(value);
 }
 
 function batchZipDownloadName(batch: BatchJobResponse) {
@@ -1271,16 +1258,7 @@ function PromptGrokResponseDetail({ item }: { item: GrokImagePromptDraftResponse
 }
 
 function formatKstHistoryDate(value?: string | null) {
-  if (!value) return "-";
-  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
-  return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(date);
+  return formatKstTimestamp(value);
 }
 
 function formatRunpodSeconds(value?: number | string | null) {

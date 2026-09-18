@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, utc_now
+from backend.app.core.timezone_utils import SEOUL_TIMEZONE, UTC_TIMEZONE, now_seoul_naive, timestamp_pair, utc_now
 from backend.app.db.models import (
     Asset,
     BATCH_JOB_COMPLETE,
@@ -401,6 +401,8 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
     video_status_counts = _video_terminal_issue_counts(db, [batch.id]).get(batch.id, {})
     video_failed_count = video_status_counts.get("failed", 0)
     cancelled_count = video_status_counts.get("cancelled", 0)
+    created_at_pair = timestamp_pair(batch.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database")
+    updated_at_pair = timestamp_pair(batch.updated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database")
     return {
         "id": batch.id,
         "workflowId": batch.workflow_id,
@@ -429,7 +431,11 @@ def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
         "createdBy": batch.created_by,
         "createdByName": _user_name(db, batch.created_by),
         "createdAt": batch.created_at.isoformat() if batch.created_at else None,
+        "createdAtUtc": created_at_pair["utc"],
+        "createdAtKst": created_at_pair["kst"],
         "updatedAt": batch.updated_at.isoformat() if batch.updated_at else None,
+        "updatedAtUtc": updated_at_pair["utc"],
+        "updatedAtKst": updated_at_pair["kst"],
     }
 
 
@@ -503,6 +509,12 @@ def _batch_detail_item(
         action_label = "잠김"
         error = _task_error(latest_task)
     metadata = _source_metadata(draft)
+    next_retry_pair = timestamp_pair(
+        latest_task.next_dispatch_at if latest_task else None,
+        naive_timezone=SEOUL_TIMEZONE,
+        source_timezone="Asia/Seoul",
+        source="task-dispatch",
+    )
     return {
         "id": f"{draft.id}:{latest_task.id if latest_task else ''}",
         "assetId": draft.asset_id,
@@ -520,6 +532,8 @@ def _batch_detail_item(
         "actionLabel": action_label,
         "retryCount": int((latest_task.dispatch_attempts if latest_task else 0) or 0),
         "nextRetryAt": latest_task.next_dispatch_at.isoformat() if latest_task and latest_task.next_dispatch_at else None,
+        "nextRetryAtUtc": next_retry_pair["utc"],
+        "nextRetryAtKst": next_retry_pair["kst"],
         "promotionStatus": draft.promotion_status,
         "promotionAttempts": int(draft.promotion_attempts or 0),
         "promotionLastError": draft.promotion_last_error,
@@ -527,6 +541,12 @@ def _batch_detail_item(
 
 
 def _orphan_task_detail_item(task: WorkflowTask) -> dict[str, Any]:
+    next_retry_pair = timestamp_pair(
+        task.next_dispatch_at,
+        naive_timezone=SEOUL_TIMEZONE,
+        source_timezone="Asia/Seoul",
+        source="task-dispatch",
+    )
     return {
         "id": f":{task.id}",
         "assetId": None,
@@ -544,6 +564,8 @@ def _orphan_task_detail_item(task: WorkflowTask) -> dict[str, Any]:
         "actionLabel": "확인",
         "retryCount": int(task.dispatch_attempts or 0),
         "nextRetryAt": task.next_dispatch_at.isoformat() if task.next_dispatch_at else None,
+        "nextRetryAtUtc": next_retry_pair["utc"],
+        "nextRetryAtKst": next_retry_pair["kst"],
         "promotionStatus": None,
         "promotionAttempts": 0,
         "promotionLastError": None,
@@ -1358,10 +1380,15 @@ def _parse_date(value: str | None, *, end_of_day: bool = False) -> datetime | No
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    if end_of_day and len(text) <= 10:
-        return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
     if len(text) <= 10:
-        return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_boundary = parsed.replace(
+            hour=23 if end_of_day else 0,
+            minute=59 if end_of_day else 0,
+            second=59 if end_of_day else 0,
+            microsecond=999999 if end_of_day else 0,
+            tzinfo=SEOUL_TIMEZONE,
+        )
+        return local_boundary.astimezone(UTC_TIMEZONE).replace(tzinfo=None)
     return parsed
 
 

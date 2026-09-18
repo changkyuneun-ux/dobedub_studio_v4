@@ -46,13 +46,37 @@ export function compactText(value: string, maxLength: number) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
-export function formatTimestamp(value?: string | null, utcValue?: string | null) {
-  const kst = String(value || "-");
-  const utc = String(utcValue || "").trim();
-  if (!utc) {
-    return kst.replace(" ", "\n");
+export function formatKstTimestamp(value?: string | null, utcValue?: string | null) {
+  const preferred = String(utcValue || value || "").trim();
+  if (!preferred) return "-";
+
+  const kstLiteral = !utcValue && /\bKST\b/i.test(preferred)
+    ? preferred.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/)
+    : null;
+  if (kstLiteral) {
+    return `${kstLiteral[1]}-${kstLiteral[2]}-${kstLiteral[3]}:${kstLiteral[4]}:${kstLiteral[5]}`;
   }
-  return `${kst.replace(" ", "\n")}\nUTC ${utc.replace("T", " ")}`;
+
+  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(preferred) ? preferred : `${preferred}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return preferred;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date).reduce<Record<string, string>>((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}:${parts.hour}:${parts.minute}`;
+}
+
+export function formatTimestamp(value?: string | null, utcValue?: string | null) {
+  return formatKstTimestamp(value, utcValue);
 }
 
 export function isSuccessStatus(status?: string) {

@@ -3,6 +3,7 @@ import { apiClient, DashboardDailyVolume, DashboardFilterOption, DashboardRange,
 import { User, canUse } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { shellNavigate, shellNavigateAdmin } from "../helpers/navigation";
+import { formatKstTimestamp } from "../helpers/format";
 import { StudioRoute } from "../router";
 
 // 2026-09-13: 로그인 랜딩 대시보드 (spec docs/superpowers/specs/2026-09-13-dashboard-landing-design.md,
@@ -558,7 +559,7 @@ function formatDayLabel(dateIso: string): string {
 }
 
 function formatClock(value: Date): string {
-  return value.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Seoul" });
+  return formatKstTimestamp(value.toISOString());
 }
 
 function formatRangeMeta(summary: DashboardSummary): string {

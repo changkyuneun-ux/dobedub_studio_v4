@@ -4,6 +4,7 @@ import { User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
 import { shellNavigate } from "../helpers/navigation";
+import { formatKstTimestamp } from "../helpers/format";
 import { StudioRoute } from "../router";
 import { clearWebtoonCutHandoff, loadWebtoonCutHandoff, WebtoonCutHandoffSnapshot } from "../state/durableWorkspace";
 
@@ -34,11 +35,6 @@ function formatFrameDuration(frames: number, workflowId = "") {
   }
   if (frames === DEFAULT_REQUESTED_FRAMES) return DEFAULT_FRAME_DURATION_LABEL;
   return `${frames}f · ${frameSeconds(frames)}초`;
-}
-
-function formatDateTime(value?: string | null) {
-  if (!value) return "-";
-  return new Date(value).toLocaleString();
 }
 
 function fileSizeLabel(file: File | null) {
@@ -574,7 +570,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               {history.map((job) => (
                 <tr key={job.id}>
                   <td>{job.id}</td>
-                  <td>{formatDateTime(job.createdAt)}</td>
+                  <td>{formatKstTimestamp(job.createdAtKst || job.createdAt, job.createdAtUtc)}</td>
                   <td>{job.createdByName || job.createdBy || "-"}</td>
                   <td><span className={`v3-batch-status-chip is-${batchResultTone(job)}`}>{batchResultLabel(job)}</span></td>
                   <td>{formatFrameDuration(job.requestedFrames, job.workflowId)}</td>
@@ -679,7 +675,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                     <span className={`v3-status-badge ${retryStatusTone(item.runpodStatus)}`}>{item.runpodStatus || "-"}</span>
                     <span className="v3-batch-recovery-error">{item.error || "-"}</span>
                     <span className="v3-batch-metric-pill is-yellow">{item.retryCount}회</span>
-                    <span className="v3-batch-recovery-next">{item.nextRetryAt ? formatDateTime(item.nextRetryAt) : "-"}</span>
+                    <span className="v3-batch-recovery-next">{item.nextRetryAt ? formatKstTimestamp(item.nextRetryAtKst || item.nextRetryAt, item.nextRetryAtUtc) : "-"}</span>
                     <button className="v3-text-button" type="button" disabled={!item.selectable || recoveryBusy} onClick={() => void retrySingleRecoveryItem(item)}>{item.actionLabel}</button>
                   </div>
                 );

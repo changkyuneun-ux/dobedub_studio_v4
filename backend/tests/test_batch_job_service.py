@@ -62,6 +62,69 @@ def test_batch_job_table_exists(db_session):
     } <= columns
 
 
+def test_batch_payload_exposes_explicit_utc_and_kst_creation_times(db_session):
+    batch = BatchJob(
+        id="batch_timezone_payload",
+        workflow_id="1-images_81.json",
+        status="INCOMPLETE",
+        created_at=datetime(2026, 9, 18, 0, 30, 59),
+        updated_at=datetime(2026, 9, 18, 1, 0, 1),
+    )
+    db_session.add(batch)
+    db_session.commit()
+
+    payload = batch_job_service.list_batch_jobs(db_session, created_by=None)["items"][0]
+
+    assert payload["createdAtUtc"] == "2026-09-18T00:30:59Z"
+    assert payload["createdAtKst"] == "2026-09-18 09:30:59 KST"
+
+
+def test_batch_history_date_filter_uses_kst_calendar_boundaries(db_session):
+    db_session.add_all([
+        BatchJob(
+            id="batch_before_kst_day",
+            workflow_id="1-images_81.json",
+            status="INCOMPLETE",
+            created_at=datetime(2026, 9, 17, 14, 59, 59),
+            updated_at=datetime(2026, 9, 17, 14, 59, 59),
+        ),
+        BatchJob(
+            id="batch_first_minute_kst_day",
+            workflow_id="1-images_81.json",
+            status="INCOMPLETE",
+            created_at=datetime(2026, 9, 17, 15, 0, 0),
+            updated_at=datetime(2026, 9, 17, 15, 0, 0),
+        ),
+        BatchJob(
+            id="batch_last_minute_kst_day",
+            workflow_id="1-images_81.json",
+            status="INCOMPLETE",
+            created_at=datetime(2026, 9, 18, 14, 59, 59),
+            updated_at=datetime(2026, 9, 18, 14, 59, 59),
+        ),
+        BatchJob(
+            id="batch_after_kst_day",
+            workflow_id="1-images_81.json",
+            status="INCOMPLETE",
+            created_at=datetime(2026, 9, 18, 15, 0, 0),
+            updated_at=datetime(2026, 9, 18, 15, 0, 0),
+        ),
+    ])
+    db_session.commit()
+
+    result = batch_job_service.list_batch_jobs(
+        db_session,
+        created_by=None,
+        date_from="2026-09-18",
+        date_to="2026-09-18",
+    )
+
+    assert {item["id"] for item in result["items"]} == {
+        "batch_first_minute_kst_day",
+        "batch_last_minute_kst_day",
+    }
+
+
 @pytest.mark.parametrize(
     "table, model",
     [
