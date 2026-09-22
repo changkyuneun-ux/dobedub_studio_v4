@@ -3,6 +3,7 @@ import { apiClient, HealthResponse, ResolutionTier, RunpodConnectionResponse, Ru
 import { canUse, User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
+import { PositivePromptEditModal } from "../components/PositivePromptEditModal";
 import { shellNavigate } from "../helpers/navigation";
 import { StudioRoute } from "../router";
 import { loadRunpodWorkspace, saveRunpodWorkspace } from "../state/durableWorkspace";
@@ -74,6 +75,9 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
   const [connection, setConnection] = useState<RunpodConnectionResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [editingDraft, setEditingDraft] = useState<RunpodRequestQueueItemResponse | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState("");
+  const [savingPrompt, setSavingPrompt] = useState(false);
 
   async function load(restoreWorkspace = true, page = requestPage) {
     const loadRequestId = ++latestLoadRequestRef.current;
@@ -229,6 +233,26 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
     }
   }
 
+  async function savePromptEdit() {
+    if (!editingDraft?.promptDraftId) return;
+    const normalized = editingPrompt.trim();
+    if (!normalized) {
+      setNotice("Positive Prompt를 입력하세요.");
+      return;
+    }
+    setSavingPrompt(true);
+    setNotice("");
+    try {
+      await apiClient.updateImagePromptDraft(editingDraft.promptDraftId, { positivePrompt: normalized });
+      await load(false, requestPage);
+      setEditingDraft(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "프롬프트 저장에 실패했습니다.");
+    } finally {
+      setSavingPrompt(false);
+    }
+  }
+
   return (
     <AppShell user={user} area="generate" activeItem="runpodRequests" onNavigate={(key) => shellNavigate(key, onGoTo)} headerEyebrow="GENERATE · RUNPOD REQUEST MANAGEMENT" headerTitle="Runpod ComfyUI 요청" headerActions={<><span className="v3-status-chip is-ok">GROK CONFIGURED</span><button className="v3-secondary-button" type="button" onClick={() => void load()}>상태 새로고침</button></>}>
       <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">RunPod Progress Dashboard</div><span className="v3-muted-text">요청 준비부터 완료/실패까지 전체 처리 현황</span></div>
@@ -248,12 +272,25 @@ export function RunpodRequestScreen({ user, health: _health, onGoTo, workflows }
           const editable = draft.canSubmit && Boolean(draftId);
           const hdDisabled = hdDisabledForItem(draft);
           const qualityTitle = hdDisabled ? "원본 픽셀이 409,600 이하라 HD 선택 불가" : undefined;
-          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><span className="v3-runpod-prompt-cell">{draft.positivePrompt}</span><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div>{editable ? <select className="v3-runpod-tier-select" aria-label="Quality" title={qualityTitle} value={resolutionTierForDraft(draft)} onChange={(event) => updateQuality(draft, event.target.value as ResolutionTier)}>{RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value} disabled={tier.value === "hd" && hdDisabled}>{tier.label}</option>)}</select> : <span className="v3-runpod-tier" title={qualityTitle}>{resolutionTierForDraft(draft)}</span>}<div className="v3-runpod-status-cell"><span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span>{draft.failureMessage ? <small className="v3-runpod-failure-message" title={draft.failureMessage}>{draft.failureMessage}</small> : null}</div></article>;
+          return <article className={`v3-runpod-request-row${supported && editable ? "" : " is-disabled"}`} key={draft.id}><input type="checkbox" disabled={!supported || !editable} checked={Boolean(draftId) && selected.includes(draftId)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, draftId] : current.filter((id) => id !== draftId))} /><ProtectedImage src={`/api/files/${draft.assetId}`} alt={draft.asset?.fileName || draft.assetId} /><span className="v3-runpod-file-name">{draft.asset?.fileName || draft.assetId}</span><span className="v3-runpod-worker-name">{draft.workerName || draft.workerId || "-"}</span><span className="v3-runpod-batch-id">{draft.promptBatchId || "-"}</span><span className="v3-runpod-item-no">{draft.sequenceNo}</span><button className={editable ? "v3-runpod-prompt-cell is-editable" : "v3-runpod-prompt-cell"} type="button" disabled={!editable} title={editable ? "Positive Prompt 수정" : draft.positivePrompt} onClick={() => { if (editable) { setEditingDraft(draft); setEditingPrompt(draft.positivePrompt || ""); } }}>{draft.positivePrompt || "-"}</button><select aria-label="워크플로우" disabled={!editable} value={selectedWorkflowId} onChange={(event) => setWorkflowOverrides((current) => ({ ...current, [draftId]: event.target.value }))}>{workflows.filter((item) => (item.keyframeCount || 1) === 1).map((item) => <option key={item.id} value={item.id}>{workflowName(item, item.id)}</option>)}</select><div className="v3-runpod-length-buttons">{[49, 81].map((length) => <button key={length} type="button" disabled={!editable} className={frames === length ? "is-selected" : ""} onClick={() => void updateLength(draft, length)}>{length}</button>)}</div>{editable ? <select className="v3-runpod-tier-select" aria-label="Quality" title={qualityTitle} value={resolutionTierForDraft(draft)} onChange={(event) => updateQuality(draft, event.target.value as ResolutionTier)}>{RESOLUTION_TIERS.map((tier) => <option key={tier.value} value={tier.value} disabled={tier.value === "hd" && hdDisabled}>{tier.label}</option>)}</select> : <span className="v3-runpod-tier" title={qualityTitle}>{resolutionTierForDraft(draft)}</span>}<div className="v3-runpod-status-cell"><span className={`v3-draft-status is-${requestState(draft).replace(/\s+/g, "-").toLowerCase()}`}>{supported ? requestState(draft) : "다중 keyframe 다음 단계"}</span>{draft.failureMessage ? <small className="v3-runpod-failure-message" title={draft.failureMessage}>{draft.failureMessage}</small> : null}</div></article>;
         })}</div>}
         <div className="v3-pagination"><span className="v3-pagination-meta">{queue?.total ? `${(requestPage - 1) * 10 + 1}-${Math.min(requestPage * 10, queue.total)} / ${queue.total}건` : "0건"} · 페이지당 10건</span><div className="v3-pagination-controls"><button className="v3-page-button" type="button" disabled={requestPage <= 1 || busy} onClick={() => { const next = requestPage - 1; setRequestPage(next); void load(false, next); }}>이전</button><span className="v3-pagination-meta">{requestPage} / {Math.max(1, Math.ceil((queue?.total || 0) / 10))}</span><button className="v3-page-button" type="button" disabled={busy || requestPage >= Math.max(1, Math.ceil((queue?.total || 0) / 10))} onClick={() => { const next = requestPage + 1; setRequestPage(next); void load(false, next); }}>다음</button></div></div>
       </section>
       <section className="v3-card"><div className="v3-card-header"><div className="v3-card-header-title">Request Handling</div><span className="v3-muted-text">선택한 미완료 작업의 일괄 처리</span></div><p className="v3-runpod-dashboard-note">선택 항목은 요청 전까지 Length를 변경할 수 있습니다. 등록 후 실행 중인 작업은 Task History에서 상태와 결과를 조회합니다.</p></section>
       {notice ? <p className="v3-inline-notice">{notice}</p> : null}
+      {editingDraft ? (
+        <PositivePromptEditModal
+          description="수정한 Positive Prompt를 저장합니다. RunPod 요청은 이 화면에서 사용자가 직접 실행합니다."
+          workerName={editingDraft.workerName || editingDraft.workerId || "-"}
+          fileName={editingDraft.asset?.fileName || editingDraft.assetId}
+          value={editingPrompt}
+          saving={savingPrompt}
+          permissionLabel={editingDraft.workerId && editingDraft.workerId !== user.id ? "관리자 수정" : undefined}
+          onChange={setEditingPrompt}
+          onClose={() => setEditingDraft(null)}
+          onSave={() => void savePromptEdit()}
+        />
+      ) : null}
     </AppShell>
   );
 }

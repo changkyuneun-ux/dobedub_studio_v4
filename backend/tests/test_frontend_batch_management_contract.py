@@ -443,6 +443,7 @@ def test_prompt_history_supports_failed_prompt_repair_and_image_preview() -> Non
 
 def test_prompt_history_allows_successful_prompt_editing_without_runpod_resubmission() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    modal = Path("frontend/src/components/PositivePromptEditModal.tsx").read_text(encoding="utf-8")
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
     prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
 
@@ -450,8 +451,9 @@ def test_prompt_history_allows_successful_prompt_editing_without_runpod_resubmis
     assert "const canEditPrompt" in prompt_history
     assert "disabled={!canEditPrompt}" in prompt_history
     assert "저장" in prompt_history
-    assert "v3-prompt-edit-modal" in prompt_history
-    assert "v3-prompt-edit-textarea" in prompt_history
+    assert "PositivePromptEditModal" in prompt_history
+    assert "v3-prompt-edit-modal" in modal
+    assert "v3-prompt-edit-textarea" in modal
     assert '<span>Positive Prompt</span><textarea' not in prompt_history
     assert 'const promptTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-success" : ""' in prompt_history
     assert ".v3-prompt-edit-modal" in css
@@ -460,6 +462,19 @@ def test_prompt_history_allows_successful_prompt_editing_without_runpod_resubmis
     assert ".v3-prompt-history-cell-button.is-success" in css
     assert ".v3-prompt-history-cell-button.is-failed" in css
     assert "text-decoration: none" in css
+
+
+def test_runpod_request_positive_prompt_uses_shared_edit_modal_and_refreshes_queue() -> None:
+    runpod_screen = Path("frontend/src/screens/runpodRequestScreen.tsx").read_text(encoding="utf-8")
+    prompt_history = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    shared_modal = Path("frontend/src/components/PositivePromptEditModal.tsx")
+
+    assert shared_modal.exists()
+    assert "PositivePromptEditModal" in runpod_screen
+    assert "PositivePromptEditModal" in prompt_history
+    assert "updateImagePromptDraft(editingDraft.promptDraftId" in runpod_screen
+    assert "await load(false, requestPage)" in runpod_screen
+    assert "v3-runpod-prompt-cell is-editable" in runpod_screen
 
 
 def test_prompt_history_requeues_edited_prompt_only_after_overwrite_confirmation() -> None:
