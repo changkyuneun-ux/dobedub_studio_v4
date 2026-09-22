@@ -1,15 +1,15 @@
 # v2 workflow directory
 
-This folder contains the active ComfyUI Export(API) workflows used by DOBEDUB STUDIO.
+This folder is the runtime compatibility view for ComfyUI Export(API)
+workflows used by DOBEDUB STUDIO. Workflow approval is not defined by a
+filename list. Definitions, immutable revisions, and active status are stored
+in the database and managed only from Admin > Workflow Definitions.
 
-The current active set is:
-
-- `1-images.json`
-- `Blowbang1.json`
-- `Pickme_Workflow.json`
-- `video_minimax_h3_r2v.json`
-- `video_wan2_2_14B_flf2v_2-images-1.json`
+Activating a validated revision promotes its workflow and paramconfig files to
+this directory. Deactivation does not delete either the immutable release or
+the compatibility files, so in-flight and historical records remain readable.
 
 Each workflow must have a matching `*.paramconfig.json` file. The paramconfig files map UI controls to the exact node IDs and input fields in the active workflow JSON.
 
-The v2 workflows already include final and segment `SaveVideo` nodes. The server uses those existing nodes and does not add dynamic `SaveVideo` nodes at runtime.
+The server uses the nodes present in each registered workflow and does not add
+dynamic `SaveVideo` nodes at runtime.

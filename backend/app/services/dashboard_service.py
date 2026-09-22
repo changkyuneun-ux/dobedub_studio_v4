@@ -30,7 +30,6 @@ from backend.app.services.task_policy_service import (
 )
 from backend.app.services.workflow_parser import workflow_files
 from backend.app.services.workflow_visibility import (
-    SUPPORTED_WORKFLOW_IDS,
     TEN_SECOND_CHAIN_WORKFLOW_IDS,
     canonical_workflow_id,
 )
@@ -588,12 +587,10 @@ def _empty_sandbox(*, configured: bool) -> dict:
 
 
 def _duration_bucket(workflow_id: str | None) -> str:
-    """workflow_id를 5초/10초/미분류로 분류한다(workflow_visibility가 유일한 판단 기준)."""
+    """역사적 작업을 현재 활성 상태와 무관하게 5초/10초로 분류한다."""
     if not workflow_id:
         return "unclassified"
     canonical = canonical_workflow_id(workflow_id)
-    if canonical not in SUPPORTED_WORKFLOW_IDS:
-        return "unclassified"
     return "tenSec" if canonical in TEN_SECOND_CHAIN_WORKFLOW_IDS else "fiveSec"
 
 

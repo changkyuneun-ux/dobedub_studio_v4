@@ -1731,6 +1731,8 @@ export function Create4aScreen({
   onDeactivate: (workflowId: string) => void;
 }) {
   const selected = items.find((item) => item.id === selectedWorkflowId) || null;
+  const selectedRevision = selected?.currentRevisionMetadata || selected?.latestRevisionMetadata;
+  const shortHash = (value?: string) => value ? `${value.slice(0, 12)}…` : "-";
   const canWrite = canUse(user, "workflows:write");
   const canActivate = canUse(user, "workflows:activate");
   return (
@@ -1755,7 +1757,7 @@ export function Create4aScreen({
               onClick={() => onSelect(item.id)}
             >
               <strong>{item.label || item.name || item.id}</strong>
-              <span className={`v3-status-badge ${item.active ? "is-ready" : "is-pending"}`}>{item.active ? "ACTIVE" : "INACTIVE"}</span>
+              <span className={`v3-status-badge ${item.active ? "is-ready" : "is-pending"}`}>{item.status || (item.active ? "ACTIVE" : "INACTIVE")}</span>
             </button>
           ))}
         </div>
@@ -1765,11 +1767,16 @@ export function Create4aScreen({
         <div className="v3-card">
           <div className="v3-card-header">
             <div className="v3-card-header-title">워크플로 상세</div>
-            <span className={`v3-status-badge ${selected.active ? "is-ready" : "is-pending"}`}>{selected.active ? "ACTIVE" : "INACTIVE"}</span>
+            <span className={`v3-status-badge ${selected.active ? "is-ready" : "is-pending"}`}>{selected.status || (selected.active ? "ACTIVE" : "INACTIVE")}</span>
           </div>
           <div className="v3-summary-card" style={{ padding: 16 }}>
             <div className="v3-summary-row"><span>Workflow ID</span><strong>{selected.id}</strong></div>
             <div className="v3-summary-row"><span>Name</span><strong>{selected.label || selected.name || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Status / Source</span><strong>{selected.status || "INACTIVE"} · {selected.source || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Revision</span><strong>current {selected.currentRevision ?? "-"} · latest {selected.latestRevision ?? "-"}</strong></div>
+            <div className="v3-summary-row"><span>Validation / Integrity</span><strong>{selectedRevision?.validationStatus || "-"} · {selected.integrityStatus || "-"}</strong></div>
+            <div className="v3-summary-row"><span>Workflow SHA-256</span><strong title={selectedRevision?.workflowSha256}>{shortHash(selectedRevision?.workflowSha256)}</strong></div>
+            <div className="v3-summary-row"><span>Param Config SHA-256</span><strong title={selectedRevision?.paramConfigSha256}>{shortHash(selectedRevision?.paramConfigSha256)}</strong></div>
             <div className="v3-summary-row"><span>Mode</span><strong>{selected.mode || "-"}</strong></div>
             <div className="v3-summary-row"><span>Input Images</span><strong>{selected.keyframeCount || 0}</strong></div>
             <div className="v3-summary-row"><span>Subgraphs</span><strong>{selected.segmentCount || 0}</strong></div>
@@ -1777,12 +1784,16 @@ export function Create4aScreen({
             <div className="v3-summary-row"><span>Param Config</span><strong>{selected.paramConfigExists ? "EXISTS" : "MISSING"}</strong></div>
             <div className="v3-summary-row"><span>Param Config Source</span><strong>{selected.paramConfigGenerated ? "AUTO-GENERATED" : selected.paramConfigExists ? "UPLOADED / EXISTING" : "-"}</strong></div>
             <div className="v3-summary-row"><span>Metadata</span><strong>{selected.metadataExists ? `READY · ${selected.metadataNodeCount ?? "-"} nodes · ${selected.metadataSubgraphCount ?? "-"} subgraphs` : "MISSING"}</strong></div>
+            <div className="v3-summary-row"><span>Execution</span><strong>{selected.statistics?.total ?? 0} total · {selected.statistics?.completed ?? 0} completed · {selected.statistics?.failed ?? 0} failed</strong></div>
+            <div className="v3-summary-row"><span>In Progress / Cancelled</span><strong>{selected.statistics?.inProgress ?? 0} / {selected.statistics?.cancelled ?? 0}</strong></div>
+            <div className="v3-summary-row"><span>Average Elapsed</span><strong>{selected.statistics?.averageElapsedSeconds == null ? "-" : `${selected.statistics.averageElapsedSeconds}s`}</strong></div>
+            <div className="v3-summary-row"><span>Latest Execution</span><strong>{formatTimestamp(selected.statistics?.latestCreatedAt).replace(/\n/g, " ")}</strong></div>
             <div className="v3-summary-row"><span>Description</span><strong>{selected.description || "-"}</strong></div>
             <div className="v3-summary-row"><span>Registered At</span><strong>{formatTimestamp(selected.registeredAtKst || selected.registeredAt, selected.registeredAtUtc).replace(/\n/g, " ")}</strong></div>
             <div className="v3-summary-row"><span>Updated At</span><strong>{formatTimestamp(selected.updatedAtKst || selected.updatedAt, selected.updatedAtUtc).replace(/\n/g, " ")}</strong></div>
           </div>
           <div className="v3-inline-actions" style={{ padding: "0 16px 16px" }}>
-            {canActivate ? <button className="v3-primary-button" type="button" disabled={loading || selected.active} onClick={() => onActivate(selected.id)}>Activate</button> : null}
+            {canActivate ? <button className="v3-primary-button" type="button" disabled={loading || selected.active || selected.integrityStatus !== "OK"} onClick={() => onActivate(selected.id)}>Activate</button> : null}
             {canActivate ? <button className="v3-secondary-button" type="button" disabled={loading || !selected.active} onClick={() => onDeactivate(selected.id)}>Deactivate</button> : null}
             {canWrite ? <button className="v3-secondary-button" type="button" onClick={onNewWorkflow}>New Workflow</button> : null}
           </div>

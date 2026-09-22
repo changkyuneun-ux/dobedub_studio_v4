@@ -10,9 +10,11 @@ from backend.app.db.models import Role, User
 from backend.app.db.session import get_db
 from backend.app.services.admin_service import (
     admin_user_payload,
+    archive_admin_workflow,
     deactivate_admin_user,
     list_admin_users,
     list_admin_workflows,
+    list_workflow_revisions,
     list_permission_governance,
     register_admin_workflow,
     reset_admin_user_password,
@@ -325,32 +327,69 @@ def audit_logs(
 
 
 @router.get("/workflows")
-def workflows(_: CurrentUser = Depends(require_permission("workflows:read"))):
+def workflows(_: CurrentUser = Depends(require_permission("workflows:read")), db: Session = Depends(get_db)):
     try:
-        return list_admin_workflows()
+        return list_admin_workflows(db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workflows")
-def register_workflow(payload: dict, _: CurrentUser = Depends(require_permission("workflows:write"))):
+def register_workflow(
+    payload: dict,
+    current_user: CurrentUser = Depends(require_permission("workflows:write")),
+    db: Session = Depends(get_db),
+):
     try:
-        return register_admin_workflow(payload)
+        return register_admin_workflow(db, payload, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workflows/{workflow_id}/activate")
-def activate_workflow(workflow_id: str, _: CurrentUser = Depends(require_permission("workflows:activate"))):
+def activate_workflow(
+    workflow_id: str,
+    revisionId: int | None = None,
+    current_user: CurrentUser = Depends(require_permission("workflows:activate")),
+    db: Session = Depends(get_db),
+):
     try:
-        return set_admin_workflow_active(workflow_id, True)
+        return set_admin_workflow_active(db, workflow_id, True, current_user.id, revisionId)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workflows/{workflow_id}/deactivate")
-def deactivate_workflow(workflow_id: str, _: CurrentUser = Depends(require_permission("workflows:activate"))):
+def deactivate_workflow(
+    workflow_id: str,
+    current_user: CurrentUser = Depends(require_permission("workflows:activate")),
+    db: Session = Depends(get_db),
+):
     try:
-        return set_admin_workflow_active(workflow_id, False)
+        return set_admin_workflow_active(db, workflow_id, False, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/revisions")
+def workflow_revisions(
+    workflow_id: str,
+    _: CurrentUser = Depends(require_permission("workflows:read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return list_workflow_revisions(db, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workflows/{workflow_id}/archive")
+def archive_workflow(
+    workflow_id: str,
+    current_user: CurrentUser = Depends(require_permission("workflows:write")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return archive_admin_workflow(db, workflow_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

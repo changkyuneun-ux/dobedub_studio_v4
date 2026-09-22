@@ -3,16 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 
-# Kept on disk for historical task replay, but only these flat WAN workflows
-# are selectable for new work. The explicit allowlist also prevents an old
-# workflow JSON left on a persistent ECS volume from becoming selectable again.
-SUPPORTED_WORKFLOW_IDS = frozenset({
-    "1-images_81.json",
-    "1-images_10s_chain_81.json",
-    "wan22_10s_chain.json",
-    "wan22_default_81.json",
-})
-
 LEGACY_WORKFLOW_ID_MAP = {
     "1-images.json": "1-images_81.json",
     "1-images_10s_chain.json": "1-images_10s_chain_81.json",
@@ -32,7 +22,16 @@ def canonical_workflow_id(workflow_id: object) -> str:
 
 
 def is_retired_workflow(workflow_id: object) -> bool:
-    return Path(str(workflow_id or "")).name not in SUPPORTED_WORKFLOW_IDS
+    canonical_id = canonical_workflow_id(workflow_id)
+    from backend.app.core.config import get_settings
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.workflow_catalog_service import get_workflow_definition
+
+    with SessionLocal() as db:
+        definition = get_workflow_definition(db, canonical_id)
+        if definition is not None:
+            return definition.status != "ACTIVE" or definition.current_revision_id is None
+    return not (get_settings().workflow_seed_dir / canonical_id).is_file()
 
 
 def is_ten_second_chain_workflow(workflow_id: object) -> bool:
@@ -41,6 +40,18 @@ def is_ten_second_chain_workflow(workflow_id: object) -> bool:
 
 def assert_workflow_selectable(workflow_id: object) -> str:
     canonical_id = canonical_workflow_id(workflow_id)
-    if canonical_id not in SUPPORTED_WORKFLOW_IDS:
-        raise ValueError("This workflow is not approved for new requests")
-    return canonical_id
+    from backend.app.core.config import get_settings
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.workflow_catalog_service import get_workflow_definition
+
+    with SessionLocal() as db:
+        definition = get_workflow_definition(db, canonical_id)
+        if definition is not None:
+            if definition.status != "ACTIVE":
+                raise ValueError("Workflow is not active")
+            if definition.current_revision_id is None:
+                raise ValueError("Workflow has no active revision")
+            return canonical_id
+    if (get_settings().workflow_seed_dir / canonical_id).is_file():
+        return canonical_id
+    raise ValueError("Workflow is not registered")

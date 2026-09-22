@@ -1227,9 +1227,7 @@ export function StudioShell({
           paramConfigJson: JSON.stringify(response.paramConfigJson, null, 2)
         }));
       }
-      setAdminWorkflowsNotice(response.paramConfigGenerated
-        ? "워크플로우를 등록하고 Param Config, 세그먼트 기본값, Metadata를 자동 갱신했습니다."
-        : "워크플로우를 등록하고 세그먼트 기본값과 Metadata를 갱신했습니다. 검토 후 활성화하세요.");
+      setAdminWorkflowsNotice("워크플로우를 비활성 상태로 등록했습니다. 검토 후 활성화하세요.");
       void loadWorkflows();
       onNavigate("admin.workflows");
     } catch (error) {

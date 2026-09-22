@@ -10,9 +10,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.app.services.workflow_visibility import is_retired_workflow
-
-
 MANIFEST_FILE_NAME = "workflow-seed-manifest.json"
 
 
@@ -67,9 +64,7 @@ def bootstrap_workflow_store(seed_dir: Path, runtime_dir: Path, data_dir: Path) 
         "created": [],
         "updated": [],
         "preserved": [],
-        "pruned": [],
     }
-    pruned_workflow_ids = _prune_inactive_runtime_workflows(runtime_dir, data_dir, result)
     if not seed_dir.is_dir() or seed_dir.resolve() == runtime_dir.resolve():
         return result
 
@@ -77,8 +72,6 @@ def bootstrap_workflow_store(seed_dir: Path, runtime_dir: Path, data_dir: Path) 
     manifest = _load_manifest(manifest_path)
     files = manifest["files"]
     for source in sorted(seed_dir.glob("*.json")):
-        if source.name in pruned_workflow_ids:
-            continue
         destination = runtime_dir / source.name
         source_hash = _file_hash(source)
         recorded = files.get(source.name) if isinstance(files.get(source.name), dict) else {}
@@ -105,72 +98,6 @@ def bootstrap_workflow_store(seed_dir: Path, runtime_dir: Path, data_dir: Path) 
     manifest["updatedAt"] = datetime.now(timezone.utc).isoformat()
     _write_manifest(manifest_path, manifest)
     return result
-
-
-def _load_json_object(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _write_json_object(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    temp_path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(path)
-
-
-def _prune_inactive_runtime_workflows(runtime_dir: Path, data_dir: Path, result: dict) -> set[str]:
-    registry_path = data_dir / "workflow-registry.json"
-    registry = _load_json_object(registry_path)
-    items = registry.get("items") if isinstance(registry.get("items"), dict) else {}
-    inactive_ids = sorted(
-        str(workflow_id)
-        for workflow_id, item in items.items()
-        if isinstance(item, dict) and item.get("active") is False
-    )
-    retired_ids = {
-        str(workflow_id)
-        for workflow_id in items
-        if is_retired_workflow(workflow_id)
-    }
-    retired_ids.update(
-        path.name
-        for path in runtime_dir.glob("*.json")
-        if not path.name.endswith(".paramconfig.json") and is_retired_workflow(path.name)
-    )
-    pruned_ids = sorted(set(inactive_ids) | retired_ids)
-    if not pruned_ids:
-        return set()
-
-    for workflow_id in pruned_ids:
-        workflow_path = runtime_dir / Path(workflow_id).name
-        param_path = runtime_dir / f"{workflow_path.stem}.paramconfig.json"
-        removed = False
-        for path in (workflow_path, param_path):
-            if path.exists() and path.is_file():
-                path.unlink(missing_ok=True)
-                removed = True
-        items.pop(workflow_id, None)
-        if removed:
-            result["pruned"].append(workflow_id)
-    registry["items"] = items
-    _write_json_object(registry_path, registry)
-
-    defaults_path = data_dir / "segment-defaults.json"
-    defaults = _load_json_object(defaults_path)
-    changed_defaults = False
-    for workflow_id in pruned_ids:
-        if workflow_id in defaults:
-            defaults.pop(workflow_id, None)
-            changed_defaults = True
-    if changed_defaults:
-        _write_json_object(defaults_path, defaults)
-    return set(pruned_ids)
 
 
 def workflow_store_status(seed_dir: Path, runtime_dir: Path, data_dir: Path) -> dict:
