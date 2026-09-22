@@ -31,7 +31,7 @@ def test_resolve_workflow_instruction_set_returns_only_selected_workflow(tmp_pat
     _write_set(target, {
         "schemaVersion": "2.0",
         "workflowInstructionSets": [
-            {"workflowId": "1-images.json", "version": 1, "documents": [
+            {"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 1, "documents": [
                 {"id": "core", "code": "core", "title": "core", "role": "CORE", "isActive": True, "contentMarkdown": "핵심 규칙"},
                 {"id": "router", "code": "router", "title": "router", "role": "ROUTER", "isActive": True, "contentMarkdown": "분기 규칙"},
             ]},
@@ -68,25 +68,25 @@ def test_multiple_guides_are_allowed():
     svc.validate_instruction_set({"workflowId": "1-images.json", "documents": [{"role": "CORE"}, {"role": "GUIDE"}, {"role": "GUIDE"}]})
 
 
-def test_legacy_v1_file_is_promoted_to_default_workflow(tmp_path, monkeypatch):
+def test_legacy_v1_file_is_promoted_without_linking_another_workflow(tmp_path, monkeypatch):
     target = tmp_path / "grok_instruction_set.json"
     _write_set(target, {"schemaVersion": "1.0", "version": 7, "documents": [
         {"id": "legacy-core", "code": "legacy_core", "title": "legacy", "role": "CORE", "isActive": True, "contentMarkdown": "기존 관리자 편집본"},
     ]})
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    result = svc.resolve_workflow_instruction_set(svc.DEFAULT_WAN_WORKFLOW_ID)
+    with pytest.raises(ValueError, match="활성 프롬프트 지시문이 없습니다"):
+        svc.resolve_workflow_instruction_set(svc.DEFAULT_WAN_WORKFLOW_ID)
 
-    assert result["version"] == 7
-    assert "기존 관리자 편집본" in result["compiledMarkdown"]
     promoted = json.loads(target.read_text(encoding="utf-8"))
     assert promoted["schemaVersion"] == "2.0"
     migrated = {item["workflowId"]: item for item in promoted["workflowInstructionSets"]}
-    assert migrated[svc.DEFAULT_WAN_WORKFLOW_ID]["version"] == 7
-    assert migrated[svc.LEGACY_DEFAULT_WORKFLOW_ID]["documents"] == []
+    assert migrated[svc.LEGACY_DEFAULT_WORKFLOW_ID]["version"] == 7
+    assert migrated[svc.LEGACY_DEFAULT_WORKFLOW_ID]["documents"][0]["contentMarkdown"] == "기존 관리자 편집본"
+    assert svc.DEFAULT_WAN_WORKFLOW_ID not in migrated
 
 
-def test_legacy_default_instruction_is_copied_to_every_approved_workflow(tmp_path, monkeypatch):
+def test_reading_empty_workflows_does_not_copy_legacy_instructions(tmp_path, monkeypatch):
     target = tmp_path / "grok_instruction_set.json"
     _write_set(target, {"schemaVersion": "1.0", "version": 1, "documents": [
         {"id": "legacy-core", "code": "legacy_core", "title": "legacy", "role": "CORE", "isActive": True, "contentMarkdown": "1-images only"},
@@ -94,10 +94,10 @@ def test_legacy_default_instruction_is_copied_to_every_approved_workflow(tmp_pat
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
     for workflow_id in ACTIVE_WORKFLOW_IDS:
-        assert "1-images only" in svc.resolve_workflow_instruction_set(workflow_id)["compiledMarkdown"]
+        with pytest.raises(ValueError, match="활성 프롬프트 지시문이 없습니다"):
+            svc.resolve_workflow_instruction_set(workflow_id)
 
-    with pytest.raises(ValueError, match="활성 프롬프트 지시문이 없습니다"):
-        svc.resolve_workflow_instruction_set(svc.LEGACY_DEFAULT_WORKFLOW_ID)
+    assert "1-images only" in svc.resolve_workflow_instruction_set(svc.LEGACY_DEFAULT_WORKFLOW_ID)["compiledMarkdown"]
 
 
 def test_save_requires_workflow_id(tmp_path, monkeypatch):
@@ -114,7 +114,7 @@ def test_delete_instruction_removes_only_the_selected_workflow_document(tmp_path
     _write_set(target, {
         "schemaVersion": "2.0",
         "workflowInstructionSets": [
-            {"workflowId": "1-images.json", "version": 1, "documents": [
+            {"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 1, "documents": [
                 {"id": "core-1", "code": "core", "title": "Core", "role": "CORE", "isActive": True, "contentMarkdown": "core"},
                 {"id": "guide-1", "code": "guide", "title": "Guide", "role": "GUIDE", "isActive": True, "contentMarkdown": "guide"},
             ]},
@@ -137,7 +137,7 @@ def test_copy_instruction_documents_creates_independent_target_workflow_set(tmp_
     target = tmp_path / "grok_instruction_set.json"
     _write_set(target, {
         "schemaVersion": "2.0",
-        "workflowInstructionSets": [{"workflowId": "1-images.json", "version": 2, "documents": [
+        "workflowInstructionSets": [{"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 2, "documents": [
             {"id": "core-1", "code": "core", "title": "Core", "role": "CORE", "isActive": True, "contentMarkdown": "source core"},
             {"id": "guide-1", "code": "guide", "title": "Guide", "role": "GUIDE", "isActive": True, "contentMarkdown": "source guide"},
         ]}],
@@ -162,7 +162,7 @@ def test_instruction_source_workflows_only_lists_workflows_with_documents(tmp_pa
     _write_set(target, {
         "schemaVersion": "2.0",
         "workflowInstructionSets": [
-            {"workflowId": "1-images.json", "version": 2, "documents": [
+            {"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 2, "documents": [
                 {"id": "core-1", "code": "core", "title": "Core", "role": "CORE", "isActive": True, "contentMarkdown": "core"},
             ]},
             {"workflowId": "empty-workflow.json", "version": 1, "documents": []},
@@ -173,27 +173,29 @@ def test_instruction_source_workflows_only_lists_workflows_with_documents(tmp_pa
     })
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    assert set(svc.list_instruction_source_workflows()) == ACTIVE_WORKFLOW_IDS
+    assert svc.list_instruction_source_workflows() == [svc.DEFAULT_WAN_WORKFLOW_ID]
 
 
-def test_existing_legacy_documents_move_to_flat_wan_without_overwriting_target(tmp_path, monkeypatch):
+def test_deleted_last_instruction_stays_deleted_after_reload(tmp_path, monkeypatch):
     target = tmp_path / "grok_instruction_set.json"
     _write_set(target, {
         "schemaVersion": "2.0",
         "workflowInstructionSets": [
-            {"workflowId": "1-images.json", "version": 4, "documents": [
+            {"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 4, "documents": [
                 {"id": "core-1", "code": "core", "title": "Core", "role": "CORE", "isActive": True, "contentMarkdown": "legacy core"},
             ]},
-            {"workflowId": svc.DEFAULT_WAN_WORKFLOW_ID, "version": 2, "documents": []},
+            {"workflowId": "other-workflow.json", "version": 2, "documents": [
+                {"id": "guide-1", "code": "guide", "title": "Guide", "role": "GUIDE", "isActive": True, "contentMarkdown": "other"},
+            ]},
         ],
     })
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    resolved = svc.resolve_workflow_instruction_set(svc.DEFAULT_WAN_WORKFLOW_ID)
+    result = svc.delete_instruction_document(svc.DEFAULT_WAN_WORKFLOW_ID, "core-1")
 
-    assert "legacy core" in resolved["compiledMarkdown"]
+    assert result["items"] == []
+    assert svc.list_instruction_documents(svc.DEFAULT_WAN_WORKFLOW_ID)["items"] == []
     stored = json.loads(target.read_text(encoding="utf-8"))
     stored_sets = {item["workflowId"]: item for item in stored["workflowInstructionSets"]}
-    assert stored_sets["1-images.json"]["documents"] == []
-    for workflow_id in ACTIVE_WORKFLOW_IDS:
-        assert stored_sets[workflow_id]["documents"]
+    assert stored_sets[svc.DEFAULT_WAN_WORKFLOW_ID]["documents"] == []
+    assert stored_sets["other-workflow.json"]["documents"][0]["contentMarkdown"] == "other"
