@@ -417,12 +417,23 @@ def test_prompt_history_supports_failed_prompt_repair_and_image_preview() -> Non
 
 def test_prompt_history_allows_successful_prompt_editing_without_runpod_resubmission() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
     prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
 
     assert "updateImagePromptDraft(editingItem.draftId" in prompt_history
     assert "const canEditPrompt" in prompt_history
     assert "disabled={!canEditPrompt}" in prompt_history
     assert "저장" in prompt_history
+    assert "v3-prompt-edit-modal" in prompt_history
+    assert "v3-prompt-edit-textarea" in prompt_history
+    assert '<span>Positive Prompt</span><textarea' not in prompt_history
+    assert 'const promptTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-success" : ""' in prompt_history
+    assert ".v3-prompt-edit-modal" in css
+    assert "width: min(960px, calc(100vw - 32px))" in css
+    assert ".v3-prompt-edit-textarea" in css
+    assert ".v3-prompt-history-cell-button.is-success" in css
+    assert ".v3-prompt-history-cell-button.is-failed" in css
+    assert "text-decoration: none" in css
 
 
 def test_studio_workflow_default_reset_preserves_five_second_generation_length() -> None:

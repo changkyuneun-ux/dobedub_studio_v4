@@ -1235,6 +1235,7 @@ function PromptGenerationHistory({
         const normalizedStatus = String(item.status || "").toUpperCase();
         const generationLabel = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
         const generationTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-ready" : "is-pending";
+        const promptTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-success" : "";
         const displayBatchId = item.batchJobId || item.promptBatchId || "";
         const canRetry = Boolean(user?.id && item.createdBy === user.id);
         const canEditPrompt = ["READY", "FAILED", "MANUAL_REQUIRED"].includes(normalizedStatus) && Boolean(user?.id && (item.createdBy === user.id || canUse(user, "jobs:manage")));
@@ -1257,7 +1258,7 @@ function PromptGenerationHistory({
               {item.assetId ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.asset?.fileName || item.assetId} /> : <span>-</span>}
               <small>{item.assetId}</small>
             </button>
-            <button className={`v3-review-prompt v3-prompt-history-cell-button ${canEditPrompt ? "is-editable" : ""}`} type="button" disabled={!canEditPrompt} title={canEditPrompt ? "Positive Prompt 수정" : item.positivePrompt || item.error || ""} onClick={(event) => { event.stopPropagation(); if (canEditPrompt) { setEditingItem(item); setEditingPrompt(item.positivePrompt || ""); } }}>{generated ? item.positivePrompt || "-" : canEditPrompt ? "클릭하여 Positive Prompt 입력" : item.error || "-"}</button>
+            <button className={`v3-review-prompt v3-prompt-history-cell-button ${canEditPrompt ? "is-editable" : ""} ${promptTone}`} type="button" disabled={!canEditPrompt} title={canEditPrompt ? "Positive Prompt 수정" : item.positivePrompt || item.error || ""} onClick={(event) => { event.stopPropagation(); if (canEditPrompt) { setEditingItem(item); setEditingPrompt(item.positivePrompt || ""); } }}>{generated ? item.positivePrompt || "-" : canEditPrompt ? "클릭하여 Positive Prompt 입력" : item.error || "-"}</button>
             <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
@@ -1283,7 +1284,7 @@ function PromptGenerationHistory({
       ) : null}
       {editingItem ? (
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="promptRecoveryTitle">
-          <div className="v3-modal-panel">
+          <div className="v3-modal-panel v3-prompt-edit-modal">
             <div className="v3-panel-title-row"><div id="promptRecoveryTitle" className="v3-panel-title">{["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "실패 프롬프트 수동 입력" : "Positive Prompt 수정"}</div><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>닫기</button></div>
             <p className="v3-muted-text">{["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "저장한 프롬프트는 RunPod ComfyUI 요청 목록에 표시됩니다. 영상 요청은 해당 화면에서 사용자가 직접 처리합니다." : "수정한 Positive Prompt를 저장합니다. 기존 RunPod 작업은 다시 제출하지 않습니다."}</p>
             <div className="v3-summary-card">
@@ -1292,7 +1293,7 @@ function PromptGenerationHistory({
               {["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? <div className="v3-summary-row"><span>실패 사유</span><strong>{editingItem.error || "Positive Prompt 없음"}</strong></div> : null}
               {user?.id !== editingItem.createdBy ? <div className="v3-summary-row"><span>수정 권한</span><strong>관리자 수정</strong></div> : null}
             </div>
-            <label className="v3-field"><span>Positive Prompt</span><textarea rows={10} value={editingPrompt} onChange={(event) => setEditingPrompt(event.target.value)} autoFocus /></label>
+            <textarea className="v3-prompt-edit-textarea" aria-label="Positive Prompt" value={editingPrompt} onChange={(event) => setEditingPrompt(event.target.value)} autoFocus />
             <div className="v3-modal-actions"><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>취소</button><button className="v3-primary-button" type="button" disabled={savingPrompt || !editingPrompt.trim()} onClick={() => void savePromptEdit()}>{savingPrompt ? "저장 중" : "저장"}</button></div>
           </div>
         </div>
