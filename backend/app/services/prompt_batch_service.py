@@ -11,7 +11,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
-from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, User, WorkflowTask
+from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, PromptGenerationBatch, RunpodRequestItem, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services import studio_api_service, workflow_service
 from backend.app.services.grok_image_prompt_service import GrokPromptError, GrokPromptInputError, generate_image_prompt
@@ -48,6 +48,22 @@ _BATCH_BLOCKING_GROK_MESSAGE_MARKERS = (
     "unauthorized",
     "forbidden",
 )
+
+
+class PromptDraftNotFoundError(ValueError):
+    pass
+
+
+class PromptDraftPermissionError(ValueError):
+    pass
+
+
+class PromptDraftValidationError(ValueError):
+    pass
+
+
+class PromptDraftConflictError(ValueError):
+    pass
 
 
 def create_prompt_generation_batch(
@@ -492,6 +508,53 @@ def update_prompt_draft(
     return _draft_payload(db, draft)
 
 
+def repair_failed_prompt_draft(
+    db: Session,
+    draft_id: str,
+    *,
+    actor_id: str,
+    can_manage: bool,
+    positive_prompt: str,
+) -> dict[str, Any]:
+    """Repair a failed draft without changing its original worker ownership."""
+    draft = db.scalar(select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id).with_for_update())
+    if draft is None:
+        raise PromptDraftNotFoundError("프롬프트 초안을 찾을 수 없습니다.")
+    if draft.created_by != actor_id and not can_manage:
+        raise PromptDraftPermissionError("다른 작업자의 프롬프트를 수정할 권한이 없습니다.")
+    normalized_prompt = str(positive_prompt or "").strip()
+    if not normalized_prompt:
+        raise PromptDraftValidationError("Positive Prompt를 입력하세요.")
+    if str(draft.status or "").upper() not in PROMPT_FAILURE_STATES:
+        raise PromptDraftConflictError("실패한 프롬프트만 수동 복구할 수 있습니다.")
+    existing_task = db.scalar(select(WorkflowTask.id).where(
+        WorkflowTask.prompt_draft_id == draft.id,
+        WorkflowTask.deleted_at.is_(None),
+    ).limit(1))
+    existing_item = db.scalar(select(RunpodRequestItem.id).where(
+        RunpodRequestItem.prompt_draft_id == draft.id,
+    ).limit(1))
+    if existing_task or existing_item:
+        raise PromptDraftConflictError("이미 RunPod 요청과 연결된 프롬프트입니다.")
+    draft.positive_prompt = normalized_prompt
+    draft.status = DRAFT_READY
+    draft.failure_message = None
+    draft.warnings_json = [
+        warning for warning in (draft.warnings_json or [])
+        if str(warning) != "manual_input_required"
+    ]
+    if draft.batch_job_id:
+        draft.promotion_status = "PENDING"
+        draft.promotion_last_error = None
+        draft.promotion_next_attempt_at = None
+        draft.promotion_claimed_at = None
+        draft.promotion_updated_at = _utc_naive_now()
+    _refresh_batch_counts(db, draft.prompt_batch_id)
+    db.commit()
+    db.refresh(draft)
+    return _draft_payload(db, draft)
+
+
 def retry_prompt_draft(db: Session, draft_id: str, *, created_by: str) -> dict[str, Any]:
     draft = _owned_draft(db, draft_id, created_by)
     source_metadata = _draft_source_metadata(draft)
@@ -581,11 +644,17 @@ def _process_draft(db: Session, draft: ImagePromptDraft) -> dict[str, Any]:
             image_height=asset.get("imageHeight"),
             instruction_text=instruction_text,
         )
-        draft.status = DRAFT_MANUAL_REQUIRED if not result.positive_prompt else DRAFT_READY
-        draft.positive_prompt = result.positive_prompt
+        draft.positive_prompt = str(result.positive_prompt or "").strip() or None
+        if draft.positive_prompt:
+            draft.status = DRAFT_READY
+            draft.failure_message = None
+        else:
+            draft.status = DRAFT_FAILED
+            draft.failure_message = "Grok 응답에 Positive Prompt가 없어 수동 입력이 필요합니다."
         draft.warnings_json = result.warnings
         draft.raw_json = {**source_metadata, "imageType": result.image_type, "response": result.raw_response}
         attempt.status = draft.status
+        attempt.failure_message = draft.failure_message
         attempt.response_json = result.raw_response
         attempt.input_tokens, attempt.output_tokens = _usage_tokens(result.raw_response)
     except (GrokPromptError, GrokPromptInputError, ValueError, KeyError, FileNotFoundError) as exc:

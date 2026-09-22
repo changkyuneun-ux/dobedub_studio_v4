@@ -14,7 +14,7 @@ import {
   WorkflowItem
 } from "../api/client";
 import { StudioRoute } from "../router";
-import { User } from "../auth";
+import { canUse, User } from "../auth";
 import { AppShell } from "../components/AppShell";
 import {
   formatKstTimestamp,
@@ -1020,6 +1020,10 @@ function PromptGenerationHistory({
   const [promptBatchCandidateOpen, setPromptBatchCandidateOpen] = useState(false);
   const [selectedPromptHistoryDraftId, setSelectedPromptHistoryDraftId] = useState("");
   const [retryingDraftId, setRetryingDraftId] = useState("");
+  const [previewItem, setPreviewItem] = useState<GrokImagePromptDraftResponse | null>(null);
+  const [editingItem, setEditingItem] = useState<GrokImagePromptDraftResponse | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState("");
+  const [savingPrompt, setSavingPrompt] = useState(false);
   const promptHistoryListRef = useRef<HTMLDivElement | null>(null);
   const pageSize = 10;
   const selectedPromptBatchJobId = selectedPromptBatchJob?.id || "";
@@ -1097,6 +1101,17 @@ function PromptGenerationHistory({
     selectPromptHistoryItem(items[0] || null);
   }, [items]);
 
+  useEffect(() => {
+    if (!previewItem && !editingItem) return;
+    const closeModal = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || savingPrompt) return;
+      setPreviewItem(null);
+      setEditingItem(null);
+    };
+    window.addEventListener("keydown", closeModal);
+    return () => window.removeEventListener("keydown", closeModal);
+  }, [previewItem, editingItem, savingPrompt]);
+
   async function retryPromptHistoryItem(item: GrokImagePromptDraftResponse) {
     setRetryingDraftId(item.draftId);
     setNotice("");
@@ -1109,6 +1124,31 @@ function PromptGenerationHistory({
       setNotice(error instanceof Error ? error.message : "프롬프트 재생성 요청에 실패했습니다.");
     } finally {
       setRetryingDraftId("");
+    }
+  }
+
+  async function saveFailedPrompt() {
+    if (!editingItem) return;
+    const normalized = editingPrompt.trim();
+    if (!normalized) {
+      setNotice("Positive Prompt를 입력하세요.");
+      return;
+    }
+    setSavingPrompt(true);
+    setNotice("");
+    try {
+      const response = await apiClient.repairAndSubmitImagePromptDraft(editingItem.draftId, normalized);
+      const updated = { ...response.draft, runpodTaskId: response.runpodTaskId, runpodStatus: response.runpodStatus };
+      setItems((current) => current.map((item) => item.draftId === updated.draftId ? updated : item));
+      selectPromptHistoryItem(updated);
+      setEditingItem(null);
+      if (!response.runpodQueued) {
+        setNotice(`프롬프트는 저장했지만 RunPod 요청 생성에 실패했습니다: ${response.submissionError || "알 수 없는 오류"}`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "프롬프트 저장에 실패했습니다.");
+    } finally {
+      setSavingPrompt(false);
     }
   }
 
@@ -1140,7 +1180,7 @@ function PromptGenerationHistory({
         <span className="v3-card-header-meta">{total}건 · 10건 / 페이지</span>
       </div>
       <div className="v3-runpod-filter-bar">
-        <label>생성 결과<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패/수동 필요</option></select></label>
+        <label>프롬프트 생성<select value={generationFilter} onChange={(event) => { setGenerationFilter(event.target.value); setPage(1); }}><option value="">전체 결과</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option></select></label>
         <label>RunPod<select value={runpodFilter} onChange={(event) => { setRunpodFilter(event.target.value); setPage(1); }}><option value="">전체 상태</option><option value="UNREQUESTED">미요청</option><option value="PENDING">대기/큐</option><option value="IN_PROGRESS">진행</option><option value="SUCCESS">완료</option><option value="FAILED">실패</option><option value="CANCELLED">취소</option></select></label>
         <label className="v3-batch-search-field">Batch ID
           <input
@@ -1183,7 +1223,7 @@ function PromptGenerationHistory({
         </label>
       </div>
       <div className="v3-prompt-history-head">
-        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span><span>Positive Prompt</span><span>생성 결과</span><span>RunPod</span><span>재생성</span>
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span><span>Positive Prompt</span><span>프롬프트 생성</span><span>RunPod</span><span>재생성</span>
       </div>
       {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
@@ -1191,10 +1231,11 @@ function PromptGenerationHistory({
       {!loading && items.map((item, index) => {
         const generated = item.status === "READY";
         const normalizedStatus = String(item.status || "").toUpperCase();
-        const generationLabel = normalizedStatus === "MANUAL_REQUIRED" ? "수동 필요" : normalizedStatus === "FAILED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
+        const generationLabel = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "FAILED" : generated ? "SUCCESS" : item.status || "-";
         const generationTone = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "is-failed" : generated ? "is-ready" : "is-pending";
         const displayBatchId = item.batchJobId || item.promptBatchId || "";
         const canRetry = Boolean(user?.id && item.createdBy === user.id);
+        const canRepair = (normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED") && Boolean(user?.id && (item.createdBy === user.id || canUse(user, "jobs:manage")));
         return (
           <div
             className={`v3-prompt-history-row ${selectedPromptHistoryDraftId === item.draftId ? "is-selected" : ""}`}
@@ -1210,11 +1251,11 @@ function PromptGenerationHistory({
             <span className="v3-prompt-history-date">{formatKstHistoryDate(item.createdAt)}</span>
             <span className="v3-prompt-history-workflow">{item.workflowId || "-"}</span>
             <span className="v3-prompt-history-batch-id" title={displayBatchId}>{displayBatchId || "-"}</span>
-            <div className="v3-prompt-history-image" title={item.assetId}>
+            <button className="v3-prompt-history-image v3-prompt-history-cell-button" type="button" title="이미지 미리보기" onClick={(event) => { event.stopPropagation(); setPreviewItem(item); }}>
               {item.assetId ? <ProtectedImage src={`/api/files/${item.assetId}`} alt={item.asset?.fileName || item.assetId} /> : <span>-</span>}
               <small>{item.assetId}</small>
-            </div>
-            <div className="v3-review-prompt" title={item.positivePrompt || item.error || ""}>{generated ? item.positivePrompt || "-" : item.error || "-"}</div>
+            </button>
+            <button className={`v3-review-prompt v3-prompt-history-cell-button ${canRepair ? "is-editable" : ""}`} type="button" disabled={!canRepair} title={canRepair ? "Positive Prompt 수정" : item.positivePrompt || item.error || ""} onClick={(event) => { event.stopPropagation(); if (canRepair) { setEditingItem(item); setEditingPrompt(item.positivePrompt || ""); } }}>{generated ? item.positivePrompt || "-" : canRepair ? "클릭하여 Positive Prompt 입력" : item.error || "-"}</button>
             <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
             <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
@@ -1230,6 +1271,30 @@ function PromptGenerationHistory({
         </div>
       </div>
       </div>
+      {previewItem ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-label="프롬프트 원본 이미지 미리보기" onClick={() => setPreviewItem(null)}>
+          <div className="v3-modal-panel v3-asset-preview-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="v3-panel-title-row"><div className="v3-panel-title">{previewItem.asset?.fileName || previewItem.assetId}</div><button className="v3-secondary-button" type="button" onClick={() => setPreviewItem(null)}>닫기</button></div>
+            <ProtectedAssetPreview src={`/api/files/${previewItem.assetId}`} isVideo={false} alt={previewItem.asset?.fileName || previewItem.assetId} />
+          </div>
+        </div>
+      ) : null}
+      {editingItem ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="promptRecoveryTitle">
+          <div className="v3-modal-panel">
+            <div className="v3-panel-title-row"><div id="promptRecoveryTitle" className="v3-panel-title">실패 프롬프트 수동 입력</div><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>닫기</button></div>
+            <p className="v3-muted-text">저장하면 즉시 RunPod ComfyUI 제출 대기 작업으로 연결됩니다.</p>
+            <div className="v3-summary-card">
+              <div className="v3-summary-row"><span>작업자</span><strong>{editingItem.createdByName || editingItem.createdBy || "-"}</strong></div>
+              <div className="v3-summary-row"><span>파일</span><strong>{editingItem.asset?.fileName || editingItem.assetId}</strong></div>
+              <div className="v3-summary-row"><span>실패 사유</span><strong>{editingItem.error || "Positive Prompt 없음"}</strong></div>
+              {user?.id !== editingItem.createdBy ? <div className="v3-summary-row"><span>수정 권한</span><strong>관리자 수정</strong></div> : null}
+            </div>
+            <label className="v3-field"><span>Positive Prompt</span><textarea rows={10} value={editingPrompt} onChange={(event) => setEditingPrompt(event.target.value)} autoFocus /></label>
+            <div className="v3-modal-actions"><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>취소</button><button className="v3-primary-button" type="button" disabled={savingPrompt || !editingPrompt.trim()} onClick={() => void saveFailedPrompt()}>{savingPrompt ? "저장 중" : "저장 및 RunPod 요청"}</button></div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

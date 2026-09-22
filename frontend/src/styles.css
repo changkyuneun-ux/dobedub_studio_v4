@@ -7134,6 +7134,9 @@ button {
 .v3-prompt-history-image { align-items: center; display: flex; gap: 6px; min-width: 0; }
 .v3-prompt-history-image img { border-radius: 5px; height: 40px; object-fit: cover; width: 56px; }
 .v3-prompt-history-image small { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 8.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-prompt-history-cell-button { background: transparent; border: 0; color: inherit; font: inherit; margin: 0; padding: 0; text-align: left; }
+.v3-prompt-history-cell-button:not(:disabled) { cursor: pointer; }
+.v3-prompt-history-cell-button.is-editable { color: var(--v3-accent); text-decoration: underline dotted; }
 .v3-prompt-history-layout { align-items: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); min-width: 0; }.v3-prompt-history-layout.is-single { grid-template-columns: minmax(0, 1fr); }.v3-prompt-worker-dashboard { overflow: hidden; }.v3-prompt-worker-dashboard > .v3-muted-text { margin: 0; padding: 14px 16px; }.v3-prompt-worker-stat-list { display: grid; }.v3-prompt-worker-stat-list > div { border-top: 1px solid var(--v3-border-inner); display: grid; gap: 5px; padding: 12px 16px; }.v3-prompt-worker-stat-list b { color: var(--v3-text-heading); font-size: 12px; }.v3-prompt-worker-stat-list span { color: var(--v3-text-secondary); font-size: 10px; line-height: 1.45; }
 @media (max-width: 1120px) { .v3-prompt-history-layout { grid-template-columns: 1fr; }.v3-prompt-worker-dashboard { max-width: none; }.v3-runpod-filter-bar { flex-wrap: wrap; } }
 .v3-prompt-api-meta { display: grid; gap: 2px; min-width: 0; }

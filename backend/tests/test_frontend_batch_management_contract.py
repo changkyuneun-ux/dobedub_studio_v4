@@ -399,6 +399,21 @@ def test_prompt_history_removes_negative_prompt_column() -> None:
     assert "{item.negativePrompt || \"-\"}" not in prompt_history
 
 
+def test_prompt_history_supports_failed_prompt_repair_and_image_preview() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
+
+    assert "repairAndSubmitImagePromptDraft" in client
+    assert "submitImmediately: true" in client
+    assert "setPreviewItem(item)" in prompt_history
+    assert "<ProtectedAssetPreview" in prompt_history
+    assert 'canUse(user, "jobs:manage")' in prompt_history
+    assert "저장 및 RunPod 요청" in prompt_history
+    assert "프롬프트 생성</span>" in prompt_history
+    assert 'generationLabel = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "FAILED"' in prompt_history
+
+
 def test_studio_workflow_default_reset_preserves_five_second_generation_length() -> None:
     source = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
     reset_block = source.split("async function resetSegmentConfigsToDefaults", 1)[1].split("function copyFirstSegmentConfig", 1)[0]

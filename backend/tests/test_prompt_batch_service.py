@@ -192,8 +192,10 @@ def test_empty_grok_prompt_counts_as_failed_not_completed(db_session, monkeypatc
     assert result["status"] == service.BATCH_COMPLETED_WITH_ERRORS
     assert result["completedCount"] == 0
     assert result["failedCount"] == 1
-    assert result["items"][0]["status"] == service.DRAFT_MANUAL_REQUIRED
-    assert attempt.status == service.DRAFT_MANUAL_REQUIRED
+    assert result["items"][0]["status"] == service.DRAFT_FAILED
+    assert "수동 입력" in result["items"][0]["error"]
+    assert attempt.status == service.DRAFT_FAILED
+    assert "수동 입력" in attempt.failure_message
 
 
 def test_batch_uses_workflow_default_negative_prompt_when_request_is_blank(db_session, monkeypatch):
@@ -697,6 +699,59 @@ def test_ready_drafts_can_be_listed_edited_and_retried(db_session, monkeypatch):
     retried = service.retry_prompt_draft(db_session, "grok_draft_edit", created_by="dobedub")
     assert retried["status"] == service.DRAFT_PENDING
     assert retried["positivePrompt"] is None
+
+
+def test_owner_and_manager_can_repair_failed_prompt_without_changing_owner(db_session):
+    db_session.add_all([
+        _asset("asset_repair_owner"),
+        _asset("asset_repair_manager"),
+        User(id="worker-a", name="Worker A", role="OPERATOR", permissions_json=["prompts:build"], is_active=True),
+        User(id="manager-a", name="Manager A", role="ADMIN", permissions_json=["prompts:build", "jobs:manage"], is_active=True),
+    ])
+    for draft_id, asset_id, status in (
+        ("draft_repair_owner", "asset_repair_owner", service.DRAFT_FAILED),
+        ("draft_repair_manager", "asset_repair_manager", service.DRAFT_MANUAL_REQUIRED),
+    ):
+        db_session.add(ImagePromptDraft(
+            id=draft_id, asset_id=asset_id, workflow_id="1-images.json", slot_index=1,
+            status=status, provider="grok", model="grok-test", instruction_version="wf@1",
+            warnings_json=["manual_input_required"], raw_json={}, created_by="worker-a",
+        ))
+    db_session.commit()
+
+    owner = service.repair_failed_prompt_draft(
+        db_session, "draft_repair_owner", actor_id="worker-a", can_manage=False,
+        positive_prompt="Owner repaired prompt.",
+    )
+    manager = service.repair_failed_prompt_draft(
+        db_session, "draft_repair_manager", actor_id="manager-a", can_manage=True,
+        positive_prompt="Manager repaired prompt.",
+    )
+
+    assert owner["status"] == manager["status"] == service.DRAFT_READY
+    assert owner["createdBy"] == manager["createdBy"] == "worker-a"
+    assert db_session.get(ImagePromptDraft, "draft_repair_owner").warnings_json == []
+    assert db_session.get(ImagePromptDraft, "draft_repair_manager").warnings_json == []
+
+
+def test_foreign_worker_cannot_repair_failed_prompt(db_session):
+    db_session.add(_asset("asset_repair_denied"))
+    db_session.add(ImagePromptDraft(
+        id="draft_repair_denied", asset_id="asset_repair_denied", workflow_id="1-images.json", slot_index=1,
+        status=service.DRAFT_FAILED, provider="grok", model="grok-test", instruction_version="wf@1",
+        warnings_json=[], raw_json={}, created_by="worker-a",
+    ))
+    db_session.commit()
+
+    try:
+        service.repair_failed_prompt_draft(
+            db_session, "draft_repair_denied", actor_id="worker-b", can_manage=False,
+            positive_prompt="Not allowed.",
+        )
+    except service.PromptDraftPermissionError:
+        pass
+    else:
+        raise AssertionError("foreign worker repair must be rejected")
 
 
 def test_retry_existing_draft_reopens_the_same_pending_batch(db_session):

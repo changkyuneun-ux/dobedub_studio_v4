@@ -41,6 +41,10 @@ from backend.app.services.grok_image_prompt_service import (
 )
 from backend.app.services.grok_instruction_service import active_instruction_text, list_instruction_documents
 from backend.app.services.prompt_batch_service import (
+    PromptDraftConflictError,
+    PromptDraftNotFoundError,
+    PromptDraftPermissionError,
+    PromptDraftValidationError,
     create_prompt_generation_batch,
     list_active_prompt_generation_batches,
     latest_active_prompt_generation_batch,
@@ -49,6 +53,7 @@ from backend.app.services.prompt_batch_service import (
     retry_prompt_draft,
     update_prompt_draft,
 )
+from backend.app.services.prompt_recovery_service import repair_and_submit_prompt
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -590,6 +595,19 @@ def update_image_prompt_draft(
     db: Session = Depends(get_db),
 ):
     try:
+        if payload.get("submitImmediately"):
+            return repair_and_submit_prompt(
+                db,
+                draft_id,
+                actor={
+                    "id": current_user.id,
+                    "name": current_user.name,
+                    "role": current_user.role,
+                    "permissions": current_user.permissions,
+                },
+                can_manage=has_permission(current_user.permissions, "jobs:manage"),
+                positive_prompt=payload.get("positivePrompt"),
+            )
         return update_prompt_draft(
             db,
             draft_id,
@@ -598,6 +616,14 @@ def update_image_prompt_draft(
             negative_prompt=payload.get("negativePrompt"),
             requested_frames=payload.get("requestedFrames"),
         )
+    except PromptDraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PromptDraftPermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PromptDraftValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PromptDraftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

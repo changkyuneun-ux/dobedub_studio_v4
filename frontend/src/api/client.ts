@@ -673,6 +673,15 @@ export type GrokImagePromptDraftResponse = {
   } | null;
 };
 
+export type PromptRecoveryResponse = {
+  draft: GrokImagePromptDraftResponse;
+  promptSaved: boolean;
+  runpodQueued: boolean;
+  runpodTaskId?: string | null;
+  runpodStatus?: string | null;
+  submissionError?: string | null;
+};
+
 export type PromptGenerationBatchResponse = {
   id: string;
   workflowId: string;
@@ -1704,6 +1713,11 @@ export const apiClient = {
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
+    }),
+  repairAndSubmitImagePromptDraft: (draftId: string, positivePrompt: string) =>
+    requestJson<PromptRecoveryResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ positivePrompt, submitImmediately: true })
     }),
   retryImagePromptDraft: (draftId: string) =>
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),
