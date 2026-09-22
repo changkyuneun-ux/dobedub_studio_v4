@@ -1024,6 +1024,7 @@ function PromptGenerationHistory({
   const [retryingDraftId, setRetryingDraftId] = useState("");
   const [previewItem, setPreviewItem] = useState<GrokImagePromptDraftResponse | null>(null);
   const [editingItem, setEditingItem] = useState<GrokImagePromptDraftResponse | null>(null);
+  const [pendingRequeueItem, setPendingRequeueItem] = useState<GrokImagePromptDraftResponse | null>(null);
   const [editingPrompt, setEditingPrompt] = useState("");
   const [savingPrompt, setSavingPrompt] = useState(false);
   const promptHistoryListRef = useRef<HTMLDivElement | null>(null);
@@ -1104,15 +1105,16 @@ function PromptGenerationHistory({
   }, [items]);
 
   useEffect(() => {
-    if (!previewItem && !editingItem) return;
+    if (!previewItem && !editingItem && !pendingRequeueItem) return;
     const closeModal = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || savingPrompt) return;
       setPreviewItem(null);
       setEditingItem(null);
+      if (!retryingDraftId) setPendingRequeueItem(null);
     };
     window.addEventListener("keydown", closeModal);
     return () => window.removeEventListener("keydown", closeModal);
-  }, [previewItem, editingItem, savingPrompt]);
+  }, [previewItem, editingItem, pendingRequeueItem, savingPrompt, retryingDraftId]);
 
   async function retryPromptHistoryItem(item: GrokImagePromptDraftResponse) {
     setRetryingDraftId(item.draftId);
@@ -1130,13 +1132,13 @@ function PromptGenerationHistory({
   }
 
   async function requeueRunpodForPrompt(item: GrokImagePromptDraftResponse) {
-    if (!window.confirm("기존 영상이 있는 경우 덮어쓰기가 됩니다. 진행하시겠습니까?")) return;
     setRetryingDraftId(item.draftId);
     setNotice("");
     try {
       await apiClient.requeueRunpodForPromptDraft(item.draftId);
       const response = await loadPromptHistory(page);
       selectPromptHistoryItem(response.items.find((candidate) => candidate.draftId === item.draftId) || item);
+      setPendingRequeueItem(null);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "RunPod 재요청에 실패했습니다.");
     } finally {
@@ -1277,7 +1279,7 @@ function PromptGenerationHistory({
             </button>
             <button className={`v3-review-prompt v3-prompt-history-cell-button ${canEditPrompt ? "is-editable" : ""} ${promptTone}`} type="button" disabled={!canEditPrompt} title={canEditPrompt ? "Positive Prompt 수정" : item.positivePrompt || item.error || ""} onClick={(event) => { event.stopPropagation(); if (canEditPrompt) { setEditingItem(item); setEditingPrompt(item.positivePrompt || ""); } }}>{generated ? item.positivePrompt || "-" : canEditPrompt ? "클릭하여 Positive Prompt 입력" : item.error || "-"}</button>
             <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
-            {item.requeueRequired ? <button className="v3-text-link-button" type="button" disabled={retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void requeueRunpodForPrompt(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재요청"}</button> : <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>}
+            {item.requeueRequired ? <button className="v3-text-link-button" type="button" disabled={retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); setPendingRequeueItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재요청"}</button> : <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>}
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
           </div>
         );
@@ -1312,6 +1314,25 @@ function PromptGenerationHistory({
             </div>
             <textarea className="v3-prompt-edit-textarea" aria-label="Positive Prompt" value={editingPrompt} onChange={(event) => setEditingPrompt(event.target.value)} autoFocus />
             <div className="v3-modal-actions"><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>취소</button><button className="v3-primary-button" type="button" disabled={savingPrompt || !editingPrompt.trim()} onClick={() => void savePromptEdit()}>{savingPrompt ? "저장 중" : "저장"}</button></div>
+          </div>
+        </div>
+      ) : null}
+      {pendingRequeueItem ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-label="RunPod 영상 재요청 확인" onClick={() => { if (!retryingDraftId) setPendingRequeueItem(null); }}>
+          <div className="v3-modal-panel v3-batch-confirm-modal v3-runpod-requeue-confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="v3-panel-title-row">
+              <div className="v3-panel-title">RunPod 영상 재요청</div>
+              <button className="v3-secondary-button" type="button" disabled={Boolean(retryingDraftId)} onClick={() => setPendingRequeueItem(null)}>닫기</button>
+            </div>
+            <p className="v3-modal-confirm-message">기존 영상이 있는 경우 덮어쓰기가 됩니다. 진행하시겠습니까?</p>
+            <div className="v3-summary-card">
+              <div className="v3-summary-row"><span>작업자</span><strong>{pendingRequeueItem.createdByName || pendingRequeueItem.createdBy || "-"}</strong></div>
+              <div className="v3-summary-row"><span>파일</span><strong>{pendingRequeueItem.asset?.fileName || pendingRequeueItem.assetId}</strong></div>
+            </div>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={Boolean(retryingDraftId)} onClick={() => setPendingRequeueItem(null)}>취소</button>
+              <button className="v3-primary-button" type="button" disabled={Boolean(retryingDraftId)} onClick={() => void requeueRunpodForPrompt(pendingRequeueItem)}>{retryingDraftId ? "요청 중" : "확인"}</button>
+            </div>
           </div>
         </div>
       ) : null}

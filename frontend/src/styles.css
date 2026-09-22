@@ -7159,6 +7159,9 @@ button {
 .v3-runpod-filter-bar input { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 5px; color: var(--v3-text-body); font: inherit; font-size: 11px; min-height: 32px; min-width: 170px; padding: 6px 8px; }
 .v3-runpod-history-toolbar { align-items: flex-end; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin: 12px 0; }
 .v3-runpod-history-toolbar .v3-runpod-filter-bar { flex: 1 1 740px; padding: 0; }
+.v3-runpod-history-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); min-width: 0; width: 100%; }
+.v3-runpod-history-filters label, .v3-runpod-history-filters input, .v3-runpod-history-filters select { min-width: 0; width: 100%; }
+.v3-runpod-history-filters .v3-batch-candidate-list { max-width: min(420px, calc(100vw - 48px)); min-width: min(360px, calc(100vw - 48px)); width: max-content; }
 .v3-runpod-history-actions { flex: 0 0 auto; justify-content: flex-end; margin: 0; }
 .v3-runpod-history-table { min-width: 0; overflow-x: auto; }
 .v3-runpod-history-table .v3-review-table-head, .v3-runpod-history-table .v3-review-table-row { min-width: 0; }
@@ -7181,6 +7184,8 @@ button {
 .v3-filter-chip span { color: var(--v3-text-muted); font-family: var(--v3-font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .v3-filter-chip strong { color: var(--v3-text-heading); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
 .v3-batch-search-field { position: relative; }
+.v3-runpod-requeue-confirm-modal { display: grid; gap: 14px; }
+.v3-modal-confirm-message { color: var(--v3-text-body); font-size: 13px; line-height: 1.6; margin: 0; }
 .v3-batch-selected-label { color: var(--v3-accent-text); font-family: var(--v3-font-sans); font-size: 10px; font-weight: 700; margin-top: 2px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-batch-candidate-list { background: var(--v3-bg-panel); border: 1px solid var(--v3-border); border-radius: 6px; box-shadow: 0 14px 36px rgba(15, 23, 42, .14); display: grid; left: 0; max-height: 260px; min-width: 360px; overflow-y: auto; padding: 6px; position: absolute; top: calc(100% + 6px); z-index: 30; }
 .v3-batch-candidate-option { background: transparent; border: 0; border-radius: 5px; color: var(--v3-text-body); cursor: pointer; display: grid; gap: 3px; min-height: 44px; padding: 8px 10px; text-align: left; }

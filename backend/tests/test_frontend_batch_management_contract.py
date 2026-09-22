@@ -460,7 +460,21 @@ def test_prompt_history_requeues_edited_prompt_only_after_overwrite_confirmation
     assert "item.requeueRequired" in prompt_history
     assert "재요청" in prompt_history
     assert "기존 영상이 있는 경우 덮어쓰기가 됩니다. 진행하시겠습니까?" in prompt_history
-    assert "window.confirm" in prompt_history
+    assert "window.confirm" not in prompt_history
+    assert "pendingRequeueItem" in prompt_history
+    assert "v3-runpod-requeue-confirm-modal" in prompt_history
+    assert 'aria-label="RunPod 영상 재요청 확인"' in prompt_history
+
+
+def test_task_history_filters_stay_inside_the_content_area() -> None:
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert ".v3-runpod-history-filters" in css
+    assert "grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr))" in css
+    assert ".v3-runpod-history-filters input" in css
+    assert "min-width: 0" in css
+    assert ".v3-runpod-history-filters .v3-batch-candidate-list" in css
+    assert "max-width: min(420px, calc(100vw - 48px))" in css
 
 
 def test_studio_workflow_default_reset_preserves_five_second_generation_length() -> None:
