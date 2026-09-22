@@ -400,6 +400,134 @@ def batch_job_detail(db: Session, batch_job_id: str) -> dict[str, Any]:
     return {"batch": _batch_payload(db, batch), "items": items, "warnings": warnings}
 
 
+def batch_job_failure_detail(
+    db: Session,
+    batch_job_id: str,
+    *,
+    page: int = 1,
+    page_size: int = 10,
+) -> dict[str, Any]:
+    """Return one small page of actionable/diagnostic batch failures.
+
+    This intentionally avoids ``batch_job_detail``: that endpoint materializes
+    every prompt, task and asset in a batch before the browser can display ten
+    rows.  The failure modal only needs failed prompt rows plus unlinked failed
+    tasks, so both sets are counted and paged in SQL.
+    """
+    batch = db.get(BatchJob, batch_job_id)
+    if batch is None:
+        raise ValueError("배치 작업을 찾을 수 없습니다.")
+    page = max(1, int(page or 1))
+    page_size = max(1, min(50, int(page_size or 10)))
+    offset = (page - 1) * page_size
+
+    failed_task_draft_ids = select(WorkflowTask.prompt_draft_id).where(
+        WorkflowTask.deleted_at.is_(None),
+        WorkflowTask.prompt_draft_id.is_not(None),
+        WorkflowTask.status.in_(REWORKABLE_TASK_STATES),
+        or_(WorkflowTask.batch_job_id == batch.id, WorkflowTask.batch_job_id.is_(None)),
+    )
+    draft_failure_filter = or_(
+        ImagePromptDraft.status.in_(FAILED_DRAFT_STATES),
+        and_(ImagePromptDraft.status == "READY", ImagePromptDraft.promotion_status == PROMOTION_FAILED),
+        ImagePromptDraft.id.in_(failed_task_draft_ids),
+    )
+    draft_base = select(ImagePromptDraft).where(
+        ImagePromptDraft.batch_job_id == batch.id,
+        draft_failure_filter,
+    )
+    draft_total = int(db.scalar(select(func.count()).select_from(draft_base.subquery())) or 0)
+
+    orphan_base = select(WorkflowTask).where(
+        WorkflowTask.batch_job_id == batch.id,
+        WorkflowTask.prompt_draft_id.is_(None),
+        WorkflowTask.deleted_at.is_(None),
+        WorkflowTask.status.in_(REWORKABLE_TASK_STATES),
+    )
+    orphan_total = int(db.scalar(select(func.count()).select_from(orphan_base.subquery())) or 0)
+    total = draft_total + orphan_total
+
+    draft_limit = max(0, min(page_size, draft_total - offset))
+    drafts = []
+    if draft_limit:
+        drafts = db.scalars(
+            draft_base.order_by(
+                ImagePromptDraft.slot_index.asc(),
+                ImagePromptDraft.created_at.asc(),
+                ImagePromptDraft.id.asc(),
+            ).offset(offset).limit(draft_limit)
+        ).all()
+    orphan_offset = max(0, offset - draft_total)
+    orphan_limit = page_size - len(drafts)
+    orphan_tasks = []
+    if orphan_limit and orphan_offset < orphan_total:
+        orphan_tasks = db.scalars(
+            orphan_base.order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+            .offset(orphan_offset).limit(orphan_limit)
+        ).all()
+
+    draft_ids = [draft.id for draft in drafts]
+    linked_tasks = db.scalars(
+        select(WorkflowTask)
+        .where(WorkflowTask.prompt_draft_id.in_(draft_ids), WorkflowTask.deleted_at.is_(None))
+        .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+    ).all() if draft_ids else []
+    tasks_by_draft: dict[str, list[WorkflowTask]] = {}
+    for task in linked_tasks:
+        tasks_by_draft.setdefault(str(task.prompt_draft_id), []).append(task)
+    duplicate_draft_ids = {key for key, values in tasks_by_draft.items() if len(values) > 1}
+
+    asset_ids = {draft.asset_id for draft in drafts if draft.asset_id}
+    assets = {
+        asset.id: asset
+        for asset in db.scalars(select(Asset).where(Asset.id.in_(asset_ids))).all()
+    } if asset_ids else {}
+    items = [
+        _batch_detail_item(
+            draft,
+            tasks_by_draft.get(draft.id, []),
+            assets.get(draft.asset_id),
+            duplicate=draft.id in duplicate_draft_ids,
+        )
+        for draft in drafts
+    ]
+    items.extend(_orphan_task_detail_item(task) for task in orphan_tasks)
+    warnings = [
+        {
+            "type": "duplicate_runpod_task",
+            "promptDraftId": draft_id,
+            "taskIds": [task.id for task in tasks_by_draft[draft_id]],
+        }
+        for draft_id in sorted(duplicate_draft_ids)
+    ]
+    warnings.extend({
+        "type": "missing_prompt_draft_link",
+        "taskId": task.id,
+        "batchJobId": batch.id,
+    } for task in orphan_tasks)
+    prompt_failed = int(db.scalar(
+        select(func.count()).select_from(ImagePromptDraft).where(
+            ImagePromptDraft.batch_job_id == batch.id,
+            ImagePromptDraft.status.in_(FAILED_DRAFT_STATES),
+        )
+    ) or 0)
+    return {
+        "batch": _batch_payload(db, batch),
+        "items": items,
+        "warnings": warnings,
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+        "summary": {
+            "promptFailed": prompt_failed,
+            "runpodFailed": max(0, total - prompt_failed),
+            "retryable": total - orphan_total,
+            "active": int(batch.runpod_pending_submit_count or 0) + int(batch.runpod_queued_count or 0) + int(batch.runpod_in_progress_count or 0),
+            "completed": int(batch.video_completed_count or 0),
+        },
+    }
+
+
 def _batch_payload(db: Session, batch: BatchJob) -> dict[str, Any]:
     promotion_failed_count = _promotion_failed_count(db, batch.id)
     video_status_counts = _video_terminal_issue_counts(db, [batch.id]).get(batch.id, {})

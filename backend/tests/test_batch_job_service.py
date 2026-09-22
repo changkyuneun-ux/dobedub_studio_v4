@@ -1572,6 +1572,30 @@ def test_batch_job_detail_separates_prompt_and_runpod_failures(db_session, monke
     assert detail["items"][1]["assetId"] == asset_ids[1]
 
 
+def test_batch_job_failure_detail_pages_failures_in_database(db_session, monkeypatch):
+    db_session.add(_user())
+    asset_ids = _seed_unique_assets(db_session, "paged_failure_asset", 12)
+    monkeypatch.setattr(prompt_batch_service, "active_instruction_text", lambda _: ("instruction", "wf@1"))
+    created = batch_job_service.create_batch_job(
+        db_session,
+        {"workflowId": "Blowbang1.json", "requestedFrames": 81, "items": _asset_items_from_ids(asset_ids)},
+        created_by="operator_1",
+    )
+    for draft in _drafts_of(db_session, created["id"]):
+        draft.status = "FAILED"
+        draft.failure_message = "Grok 503"
+    db_session.commit()
+
+    first = batch_job_service.batch_job_failure_detail(db_session, created["id"], page=1, page_size=10)
+    second = batch_job_service.batch_job_failure_detail(db_session, created["id"], page=2, page_size=10)
+
+    assert first["total"] == 12
+    assert first["pageSize"] == 10
+    assert len(first["items"]) == 10
+    assert len(second["items"]) == 2
+    assert first["summary"]["promptFailed"] == 12
+
+
 def test_batch_payload_counts_cancelled_runpod_tasks_separately(db_session):
     db_session.add(_user())
     db_session.add(_asset("asset_cancelled_runpod"))

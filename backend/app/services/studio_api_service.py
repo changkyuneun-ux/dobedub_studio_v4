@@ -1445,7 +1445,7 @@ def monitor_active_jobs() -> dict:
             JOBS[task_id] = job
             stored_status = job.get("runpodStatus") if isinstance(job.get("runpodStatus"), dict) else {}
             error = str(stored_status.get("error") or "RunPod HTTP 404: job not found")
-            job_service.reconcile_runpod_job_not_found(job_runtime(), job, error)
+            job_service.reconcile_legacy_runpod_job_not_found(job_runtime(), job, error)
             reconciled_not_found += 1
     task_ids = [
         task_id

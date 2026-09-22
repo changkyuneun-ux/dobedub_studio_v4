@@ -139,6 +139,22 @@ def batch_job_detail(
     return detail
 
 
+@router.get("/{batch_job_id}/failures")
+def batch_job_failures(
+    batch_job_id: str,
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(10, ge=1, le=50),
+    _: CurrentUser = Depends(current_user_from_headers),
+    db: Session = Depends(get_db),
+):
+    try:
+        return batch_job_service.batch_job_failure_detail(
+            db, batch_job_id, page=page, page_size=pageSize
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/{batch_job_id}/cancel")
 def cancel_batch_job(
     batch_job_id: str,

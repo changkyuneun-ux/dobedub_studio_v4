@@ -123,8 +123,9 @@ def list_jobs(
         stmt = stmt.where(WebtoonCutJob.display_name.contains(query))
     page = max(1, int(page or 1))
     page_size = min(100, max(1, int(page_size or 20)))
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     items = db.scalars(stmt.order_by(desc(WebtoonCutJob.created_at)).offset((page - 1) * page_size).limit(page_size)).all()
-    return {"items": [_job_payload(db, job) for job in items], "page": page, "pageSize": page_size}
+    return {"items": [_job_payload(db, job) for job in items], "page": page, "pageSize": page_size, "total": total}
 
 
 def list_job_workers(db: Session, *, created_by: str | None) -> dict:

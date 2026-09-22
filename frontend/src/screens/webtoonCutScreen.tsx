@@ -30,7 +30,7 @@ type SelectedFileStructure = {
 };
 
 const POLL_INTERVAL_MS = 2500;
-const JOBS_PAGE_SIZE = 20;
+const JOBS_PAGE_SIZE = 10;
 const OUTPUTS_PAGE_SIZE = 50;
 
 export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props) {
@@ -51,6 +51,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [jobStatusFilter, setJobStatusFilter] = useState("");
   const [jobsPage, setJobsPage] = useState(1);
+  const [jobsTotal, setJobsTotal] = useState(0);
   const [outputsPage, setOutputsPage] = useState(1);
   const [usedState, setUsedState] = useState("");
   const [flagFilter, setFlagFilter] = useState("");
@@ -140,6 +141,7 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
         pageSize: JOBS_PAGE_SIZE
       });
       setJobs(response.items);
+      setJobsTotal(response.total || 0);
       const running = response.items.find((job) => !["completed", "failed", "cancelled"].includes(job.status)) || null;
       setActiveJob(running);
       if (response.items[0] && !response.items.some((job) => job.jobId === selectedJobId)) setSelectedJobId(response.items[0].jobId);
@@ -571,8 +573,8 @@ export function WebtoonCutScreen({ user, health: _health, onGoTo, mode }: Props)
               {!jobs.length ? <div className="v3-empty-panel">컷 분할 이력이 없습니다.</div> : null}
               <div className="v3-webtoon-cut-pagination">
                 <button className="v3-secondary-button" type="button" disabled={jobsPage <= 1} onClick={() => setJobsPage((page) => Math.max(1, page - 1))}>이전</button>
-                <span>{jobsPage} 페이지</span>
-                <button className="v3-secondary-button" type="button" disabled={jobs.length < JOBS_PAGE_SIZE} onClick={() => setJobsPage((page) => page + 1)}>다음</button>
+                <span>{jobsTotal ? (jobsPage - 1) * JOBS_PAGE_SIZE + 1 : 0}-{Math.min(jobsTotal, jobsPage * JOBS_PAGE_SIZE)} / {jobsTotal} · {jobsPage} / {Math.max(1, Math.ceil(jobsTotal / JOBS_PAGE_SIZE))} 페이지</span>
+                <button className="v3-secondary-button" type="button" disabled={jobsPage >= Math.max(1, Math.ceil(jobsTotal / JOBS_PAGE_SIZE))} onClick={() => setJobsPage((page) => page + 1)}>다음</button>
               </div>
             </div>
 

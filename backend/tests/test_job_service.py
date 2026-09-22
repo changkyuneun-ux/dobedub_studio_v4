@@ -198,7 +198,7 @@ def test_runpod_not_found_remains_retryable_during_reconciliation_grace():
     assert recorded[-1]["status"] == "IN_PROGRESS"
 
 
-def test_legacy_failed_not_found_is_reopened_while_manifest_is_pending():
+def test_legacy_failed_not_found_stays_failed_while_manifest_is_missing():
     job = {
         "taskId": "task_legacy_not_found",
         "runpodJobId": "runpod-legacy-not-found",
@@ -220,17 +220,18 @@ def test_legacy_failed_not_found_is_reopened_while_manifest_is_pending():
         RuntimeError("manifest is not available yet")
     )
 
-    outcome = job_service.reconcile_runpod_job_not_found(
+    outcome = job_service.reconcile_legacy_runpod_job_not_found(
         runtime,
         job,
         job["runpodStatus"]["error"],
         now_epoch=2_000_000.0,
     )
 
-    assert outcome == "retry"
-    assert job["status"] == "IN_PROGRESS"
-    assert job["progress"] < 100
-    assert job["runpodStatus"]["providerStatus"] == "NOT_FOUND_RECONCILING"
+    assert outcome == "failed"
+    assert job["status"] == "FAILED"
+    assert job["progress"] == 100
+    assert job["runpodStatus"]["providerStatus"] == "NOT_FOUND"
+    assert job["runpodStatus"]["notFoundRecovery"]["final"] is True
 
 
 def test_runpod_not_found_becomes_failed_only_after_grace_and_repeated_checks():

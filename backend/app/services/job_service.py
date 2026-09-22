@@ -371,6 +371,68 @@ def reconcile_runpod_job_not_found(
     return "recovered"
 
 
+def reconcile_legacy_runpod_job_not_found(
+    runtime: JobRuntime,
+    job: dict,
+    error: str,
+    *,
+    now_epoch: float | None = None,
+) -> str:
+    """Probe durable output for an already-failed legacy 404 without reopening it.
+
+    The active-job grace period is only valid while a provider job may still be
+    publishing its manifest.  Applying that grace period to historical FAILED
+    rows makes old work appear IN_PROGRESS after every deployment.  Historical
+    rows therefore remain terminal unless their output manifest can be imported.
+    """
+    observed_at = float(now_epoch if now_epoch is not None else time.time())
+    previous_status = job.get("runpodStatus") if isinstance(job.get("runpodStatus"), dict) else {}
+    previous_recovery = (
+        previous_status.get("notFoundRecovery")
+        if isinstance(previous_status.get("notFoundRecovery"), dict)
+        else {}
+    )
+    recovery = {
+        "attempts": max(0, int(previous_recovery.get("attempts") or 0)) + 1,
+        "firstSeenEpoch": float(previous_recovery.get("firstSeenEpoch") or observed_at),
+        "lastSeenEpoch": observed_at,
+        "final": True,
+    }
+    manifest_probe = {
+        "status": "COMPLETED",
+        "id": job.get("runpodJobId"),
+        "providerStatus": "NOT_FOUND",
+    }
+    try:
+        _save_completed_outputs_if_needed(runtime, job, manifest_probe)
+    except Exception:
+        job["status"] = "FAILED"
+        job["progress"] = 100
+        job["historySaved"] = True
+        job["runpodStatus"] = {
+            **previous_status,
+            "status": "FAILED",
+            "error": error,
+            "providerStatus": "NOT_FOUND",
+            "notFoundRecovery": recovery,
+        }
+        record_job(runtime, job)
+        return "failed"
+
+    job["status"] = "COMPLETED"
+    job["progress"] = 100
+    job["historySaved"] = True
+    job["runpodStatus"] = {
+        **(job.get("runpodStatus") or {}),
+        "status": "COMPLETED",
+        "providerStatus": "RECOVERED_FROM_MANIFEST",
+        "notFoundRecovery": recovery,
+    }
+    job["runpodStatus"].pop("error", None)
+    record_job(runtime, job)
+    return "recovered"
+
+
 def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
     job = runtime.jobs.get(task_id)
     if not job:

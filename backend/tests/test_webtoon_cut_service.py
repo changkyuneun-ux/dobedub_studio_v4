@@ -524,6 +524,29 @@ def test_cut_history_includes_worker_name_and_lists_worker_filter_options(db_ses
     }
 
 
+def test_cut_history_returns_total_for_ten_item_pagination(db_session):
+    from backend.app.services.webtoon_cut_service import list_jobs
+
+    db_session.add(_asset("asset_paged_source"))
+    db_session.add_all([
+        WebtoonCutJob(
+            id=f"wcut_paged_{index:02d}", status="completed", input_kind="image",
+            source_asset_id="asset_paged_source", display_name=f"{index:03d}.png",
+            safe_stem=f"{index:03d}", created_by="cut_worker",
+        )
+        for index in range(12)
+    ])
+    db_session.commit()
+
+    first = list_jobs(db_session, created_by="cut_worker", page=1, page_size=10)
+    second = list_jobs(db_session, created_by="cut_worker", page=2, page_size=10)
+
+    assert first["total"] == 12
+    assert first["pageSize"] == 10
+    assert len(first["items"]) == 10
+    assert len(second["items"]) == 2
+
+
 def test_admin_api_can_delete_job_visible_in_global_history(api_client):
     from backend.app.db.session import SessionLocal
 

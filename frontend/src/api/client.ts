@@ -630,6 +630,7 @@ export type WebtoonCutJobListResponse = {
   items: WebtoonCutJobResponse[];
   page: number;
   pageSize: number;
+  total: number;
 };
 
 export type WebtoonCutWorkerOption = {
@@ -790,6 +791,19 @@ export type BatchJobDetailResponse = {
   batch: BatchJobResponse;
   items: BatchJobDetailItemResponse[];
   warnings: Array<Record<string, unknown>>;
+};
+
+export type BatchJobFailureDetailResponse = BatchJobDetailResponse & {
+  page: number;
+  pageSize: number;
+  total: number;
+  summary: {
+    promptFailed: number;
+    runpodFailed: number;
+    retryable: number;
+    active: number;
+    completed: number;
+  };
 };
 
 export type BatchJobRetryResponse = {
@@ -1915,6 +1929,12 @@ export const apiClient = {
   activeBatchJobs: () => requestJson<ActiveBatchJobListResponse>("/api/batch-jobs/active"),
   batchJobDetail: (batchJobId: string) =>
     requestJson<BatchJobDetailResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}`),
+  batchJobFailures: (batchJobId: string, params: { page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams();
+    query.set("page", String(params.page || 1));
+    query.set("pageSize", String(params.pageSize || 10));
+    return requestJson<BatchJobFailureDetailResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/failures?${query.toString()}`);
+  },
   retryFailedBatchItems: (batchJobId: string) =>
     requestJson<BatchJobRetryResponse>(`/api/batch-jobs/${encodeURIComponent(batchJobId)}/retry-failed`, {
       method: "POST",

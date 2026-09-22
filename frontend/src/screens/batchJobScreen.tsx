@@ -1,5 +1,5 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from "react";
-import { apiClient, BatchJobDetailItemResponse, BatchJobDetailResponse, BatchJobResponse, HealthResponse, ResolutionTier, WorkflowItem } from "../api/client";
+import { apiClient, BatchJobDetailItemResponse, BatchJobFailureDetailResponse, BatchJobResponse, HealthResponse, ResolutionTier, WorkflowItem } from "../api/client";
 import { User, canUse } from "../auth";
 import { AppShell } from "../components/AppShell";
 import { ProtectedImage } from "../components/ProtectedAssets";
@@ -116,7 +116,8 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const [confirmingBatch, setConfirmingBatch] = useState(false);
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
   const [confirmingCancellation, setConfirmingCancellation] = useState(false);
-  const [recoveryDetail, setRecoveryDetail] = useState<BatchJobDetailResponse | null>(null);
+  const [recoveryDetail, setRecoveryDetail] = useState<BatchJobFailureDetailResponse | null>(null);
+  const [recoveryLoadingBatch, setRecoveryLoadingBatch] = useState<BatchJobResponse | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [selectedRecoveryKeys, setSelectedRecoveryKeys] = useState<string[]>([]);
   const [recoveryPage, setRecoveryPage] = useState(1);
@@ -202,29 +203,33 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
     }
   }
 
-  async function loadRecoveryDetail(batchId: string) {
+  async function loadRecoveryDetail(batchId: string, nextPage = recoveryPage) {
     setRecoveryBusy(true);
     setNotice("");
     try {
-      const detail = await apiClient.batchJobDetail(batchId);
-      const errorItems = (detail.items || []).filter(isRecoveryErrorItem);
+      const detail = await apiClient.batchJobFailures(batchId, { page: nextPage, pageSize: RECOVERY_PAGE_SIZE });
       setRecoveryDetail(detail);
-      setSelectedRecoveryKeys(errorItems.filter((item) => item.selectable).map(retryItemKey));
-      setRecoveryPage(1);
+      setSelectedRecoveryKeys((detail.items || []).filter((item) => item.selectable).map(retryItemKey));
+      setRecoveryPage(detail.page || nextPage);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "재처리 정보를 불러오지 못했습니다.");
     } finally {
       setRecoveryBusy(false);
+      setRecoveryLoadingBatch(null);
     }
   }
 
   function openRecoveryModal(job: BatchJobResponse) {
     if (job.failedCount <= 0) return;
-    void loadRecoveryDetail(job.id);
+    setRecoveryLoadingBatch(job);
+    setRecoveryDetail(null);
+    setRecoveryPage(1);
+    void loadRecoveryDetail(job.id, 1);
   }
 
   function closeRecoveryModal() {
     setRecoveryDetail(null);
+    setRecoveryLoadingBatch(null);
     setSelectedRecoveryKeys([]);
     setRecoveryPage(1);
     setRecoveryPreview(null);
@@ -238,7 +243,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
 
   async function refreshRecoveryDetail() {
     if (!recoveryDetail) return;
-    await loadRecoveryDetail(recoveryDetail.batch.id);
+    await loadRecoveryDetail(recoveryDetail.batch.id, recoveryPage);
     await refreshActive();
     await loadHistory(page);
   }
@@ -454,16 +459,17 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
   const instructionMissing = Boolean(instructionStatus && !instructionStatus.configured);
   const recoveryItems = recoveryDetail?.items || [];
   const recoveryErrorItems = recoveryItems.filter(isRecoveryErrorItem);
-  const recoveryRetryableCount = recoveryItems.filter((item) => item.retryable).length;
-  const recoveryPromptFailedCount = recoveryItems.filter((item) => item.retryKind === "prompt").length;
-  const recoveryRunpodFailedCount = recoveryItems.filter((item) => item.retryKind === "runpod" || item.retryKind === "promotion").length;
-  const recoveryActiveCount = recoveryItems.filter((item) => ["PENDING_SUBMIT", "DISPATCHING", "QUEUED", "IN_QUEUE", "IN_PROGRESS", "RUNNING", "GENERATING"].includes(String(item.runpodStatus || item.promptStatus || "").toUpperCase())).length;
-  const recoveryCompletedCount = recoveryItems.filter((item) => ["COMPLETED", "SUCCESS"].includes(String(item.runpodStatus || "").toUpperCase())).length;
-  const recoveryTotalPages = Math.max(1, Math.ceil(recoveryErrorItems.length / RECOVERY_PAGE_SIZE));
+  const recoveryRetryableCount = recoveryDetail?.summary.retryable || 0;
+  const recoveryPromptFailedCount = recoveryDetail?.summary.promptFailed || 0;
+  const recoveryRunpodFailedCount = recoveryDetail?.summary.runpodFailed || 0;
+  const recoveryActiveCount = recoveryDetail?.summary.active || 0;
+  const recoveryCompletedCount = recoveryDetail?.summary.completed || 0;
+  const recoveryTotal = recoveryDetail?.total || 0;
+  const recoveryTotalPages = Math.max(1, Math.ceil(recoveryTotal / RECOVERY_PAGE_SIZE));
   const recoveryCurrentPage = Math.min(recoveryPage, recoveryTotalPages);
-  const recoveryFirstItemIndex = recoveryErrorItems.length ? (recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE + 1 : 0;
-  const recoveryLastItemIndex = recoveryErrorItems.length ? Math.min(recoveryErrorItems.length, recoveryCurrentPage * RECOVERY_PAGE_SIZE) : 0;
-  const paginatedRecoveryItems = recoveryErrorItems.slice((recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE, recoveryCurrentPage * RECOVERY_PAGE_SIZE);
+  const recoveryFirstItemIndex = recoveryTotal ? (recoveryCurrentPage - 1) * RECOVERY_PAGE_SIZE + 1 : 0;
+  const recoveryLastItemIndex = recoveryTotal ? Math.min(recoveryTotal, recoveryCurrentPage * RECOVERY_PAGE_SIZE) : 0;
+  const paginatedRecoveryItems = recoveryErrorItems;
   const selectablePageBatchIds = history.filter((job) => String(job.status).toUpperCase() === "INCOMPLETE" && canOperateBatchJob(job)).map((job) => job.id);
   const allSelectablePageBatchesSelected = selectablePageBatchIds.length > 0 && selectablePageBatchIds.every((id) => selectedBatchIds.includes(id));
 
@@ -682,7 +688,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
           </div>
         </div>
       ) : null}
-      {recoveryDetail ? (
+      {recoveryDetail || recoveryLoadingBatch ? (
         <div className="v3-modal-overlay" role="presentation">
           <div className="v3-modal-panel v3-batch-recovery-modal" role="dialog" aria-modal="true" aria-labelledby="batch-recovery-title">
             <div className="v3-batch-recovery-title">
@@ -692,7 +698,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               </div>
               <button className="v3-icon-button" type="button" aria-label="재처리 관리 닫기" onClick={closeRecoveryModal}>×</button>
             </div>
-            <div className="v3-batch-recovery-header">
+            {!recoveryDetail ? <div className="v3-empty-panel">실패 내역을 불러오는 중입니다.</div> : <><div className="v3-batch-recovery-header">
               <div className="v3-batch-recovery-summary">
                 <strong>{recoveryDetail.batch.id}</strong>
                 <span>{recoveryDetail.batch.sourceZipFileName || recoveryDetail.batch.sourceDirName || "-"} · {recoveryDetail.batch.totalImages}개 항목 · {recoveryDetail.batch.workflowId} · {formatFrameDuration(recoveryDetail.batch.requestedFrames, recoveryDetail.batch.workflowId)}</span>
@@ -720,7 +726,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
             ) : null}
             <div className="v3-batch-recovery-list-title">
               <strong>오류건 내역</strong>
-              <span>{recoveryFirstItemIndex}-{recoveryLastItemIndex} / {recoveryErrorItems.length}건</span>
+              <span>{recoveryFirstItemIndex}-{recoveryLastItemIndex} / {recoveryTotal}건</span>
             </div>
             <div className="v3-batch-recovery-table">
               <div className="v3-batch-recovery-head">
@@ -758,11 +764,11 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
               })}
               {!recoveryErrorItems.length ? <div className="v3-empty-panel">재처리할 오류 항목이 없습니다.</div> : null}
             </div>
-            {recoveryErrorItems.length > RECOVERY_PAGE_SIZE ? (
+            {recoveryTotal > RECOVERY_PAGE_SIZE ? (
               <div className="v3-batch-recovery-pagination">
-                <button type="button" disabled={recoveryCurrentPage <= 1 || recoveryBusy} onClick={() => setRecoveryPage((current) => Math.max(1, current - 1))}>이전</button>
+                <button type="button" disabled={recoveryCurrentPage <= 1 || recoveryBusy} onClick={() => void loadRecoveryDetail(recoveryDetail.batch.id, recoveryCurrentPage - 1)}>이전</button>
                 <strong>{recoveryCurrentPage} / {recoveryTotalPages} 페이지</strong>
-                <button type="button" disabled={recoveryCurrentPage >= recoveryTotalPages || recoveryBusy} onClick={() => setRecoveryPage((current) => Math.min(recoveryTotalPages, current + 1))}>다음</button>
+                <button type="button" disabled={recoveryCurrentPage >= recoveryTotalPages || recoveryBusy} onClick={() => void loadRecoveryDetail(recoveryDetail.batch.id, recoveryCurrentPage + 1)}>다음</button>
               </div>
             ) : null}
             {recoveryPreview ? (
@@ -775,7 +781,7 @@ export function BatchJobScreen({ user, health: _health, onGoTo, workflows }: Pro
                   <ProtectedImage src={recoveryPreview.src} alt={recoveryPreview.alt} />
                 </div>
               </div>
-            ) : null}
+            ) : null}</>}
           </div>
         </div>
       ) : null}

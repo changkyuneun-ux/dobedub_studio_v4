@@ -1186,6 +1186,44 @@ def test_monitor_recovers_a_legacy_failed_404_from_manifest(db_session, monkeypa
     assert task.runpod_status_json["providerStatus"] == "RECOVERED_FROM_MANIFEST"
 
 
+def test_monitor_does_not_reopen_legacy_failed_404_without_manifest(db_session, monkeypatch):
+    from backend.app.services import studio_api_service
+
+    studio_api_service.JOBS.clear()
+    db_session.add(WorkflowTask(
+        id="task_legacy_failed_404_without_manifest",
+        runpod_job_id="runpod-legacy-failed-404-without-manifest",
+        workflow_id="1-images_81.json",
+        execution_mode="runpod",
+        status="FAILED",
+        progress=100,
+        runpod_status_json={
+            "status": "FAILED",
+            "providerStatus": "NOT_FOUND",
+            "error": 'RunPod HTTP 404: {"detail":"job not found"}',
+        },
+        payload_json={},
+    ))
+    db_session.commit()
+    monkeypatch.setattr(studio_api_service, "dispatch_next_queued_job", lambda: {"status": "idle"})
+    monkeypatch.setattr(
+        studio_api_service,
+        "save_runpod_outputs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(studio_api_service.OutputImportPending("pending")),
+    )
+
+    result = studio_api_service.monitor_active_jobs()
+
+    assert result["reconciledNotFound"] == 1
+    db_session.expire_all()
+    task = db_session.get(WorkflowTask, "task_legacy_failed_404_without_manifest")
+    assert task is not None
+    assert task.status == "FAILED"
+    assert task.progress == 100
+    assert task.runpod_status_json["notFoundRecovery"]["final"] is True
+    assert task.dispatch_claimed_at is None
+
+
 def test_failed_404_recovery_claim_has_only_one_owner(db_session):
     db_session.add(WorkflowTask(
         id="task_failed_404_claim",
