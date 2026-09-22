@@ -50,10 +50,10 @@ from backend.app.services.prompt_batch_service import (
     latest_active_prompt_generation_batch,
     list_prompt_drafts,
     prompt_generation_batch_payload,
+    repair_failed_prompt_draft,
     retry_prompt_draft,
     update_prompt_draft,
 )
-from backend.app.services.prompt_recovery_service import repair_and_submit_prompt
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -595,16 +595,11 @@ def update_image_prompt_draft(
     db: Session = Depends(get_db),
 ):
     try:
-        if payload.get("submitImmediately"):
-            return repair_and_submit_prompt(
+        if payload.get("repairFailed"):
+            return repair_failed_prompt_draft(
                 db,
                 draft_id,
-                actor={
-                    "id": current_user.id,
-                    "name": current_user.name,
-                    "role": current_user.role,
-                    "permissions": current_user.permissions,
-                },
+                actor_id=current_user.id,
                 can_manage=has_permission(current_user.permissions, "jobs:manage"),
                 positive_prompt=payload.get("positivePrompt"),
             )

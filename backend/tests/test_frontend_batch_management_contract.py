@@ -404,12 +404,13 @@ def test_prompt_history_supports_failed_prompt_repair_and_image_preview() -> Non
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
     prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
 
-    assert "repairAndSubmitImagePromptDraft" in client
-    assert "submitImmediately: true" in client
+    assert "repairImagePromptDraft" in client
+    assert "repairFailed: true" in client
     assert "setPreviewItem(item)" in prompt_history
     assert "<ProtectedAssetPreview" in prompt_history
     assert 'canUse(user, "jobs:manage")' in prompt_history
-    assert "저장 및 RunPod 요청" in prompt_history
+    assert "RunPod ComfyUI 요청 목록" in prompt_history
+    assert "저장 및 RunPod 요청" not in prompt_history
     assert "프롬프트 생성</span>" in prompt_history
     assert 'generationLabel = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "FAILED"' in prompt_history
 

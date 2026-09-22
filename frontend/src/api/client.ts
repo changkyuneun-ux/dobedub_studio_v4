@@ -1737,10 +1737,10 @@ export const apiClient = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
-  repairAndSubmitImagePromptDraft: (draftId: string, positivePrompt: string) =>
-    requestJson<PromptRecoveryResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
+  repairImagePromptDraft: (draftId: string, positivePrompt: string) =>
+    requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}`, {
       method: "PATCH",
-      body: JSON.stringify({ positivePrompt, submitImmediately: true })
+      body: JSON.stringify({ positivePrompt, repairFailed: true })
     }),
   retryImagePromptDraft: (draftId: string) =>
     requestJson<GrokImagePromptDraftResponse>(`/api/prompts/image-drafts/${encodeURIComponent(draftId)}/retry`, { method: "POST" }),

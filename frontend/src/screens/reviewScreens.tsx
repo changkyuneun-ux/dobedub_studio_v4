@@ -1140,11 +1140,7 @@ function PromptGenerationHistory({
       const failed = ["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase());
       let updated: GrokImagePromptDraftResponse;
       if (failed) {
-        const response = await apiClient.repairAndSubmitImagePromptDraft(editingItem.draftId, normalized);
-        updated = { ...response.draft, runpodTaskId: response.runpodTaskId, runpodStatus: response.runpodStatus };
-        if (!response.runpodQueued) {
-          setNotice(`프롬프트는 저장했지만 RunPod 요청 생성에 실패했습니다: ${response.submissionError || "알 수 없는 오류"}`);
-        }
+        updated = await apiClient.repairImagePromptDraft(editingItem.draftId, normalized);
       } else {
         updated = await apiClient.updateImagePromptDraft(editingItem.draftId, { positivePrompt: normalized });
       }
@@ -1289,7 +1285,7 @@ function PromptGenerationHistory({
         <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="promptRecoveryTitle">
           <div className="v3-modal-panel">
             <div className="v3-panel-title-row"><div id="promptRecoveryTitle" className="v3-panel-title">{["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "실패 프롬프트 수동 입력" : "Positive Prompt 수정"}</div><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>닫기</button></div>
-            <p className="v3-muted-text">{["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "저장하면 즉시 RunPod ComfyUI 제출 대기 작업으로 연결됩니다." : "수정한 Positive Prompt를 저장합니다. 기존 RunPod 작업은 다시 제출하지 않습니다."}</p>
+            <p className="v3-muted-text">{["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "저장한 프롬프트는 RunPod ComfyUI 요청 목록에 표시됩니다. 영상 요청은 해당 화면에서 사용자가 직접 처리합니다." : "수정한 Positive Prompt를 저장합니다. 기존 RunPod 작업은 다시 제출하지 않습니다."}</p>
             <div className="v3-summary-card">
               <div className="v3-summary-row"><span>작업자</span><strong>{editingItem.createdByName || editingItem.createdBy || "-"}</strong></div>
               <div className="v3-summary-row"><span>파일</span><strong>{editingItem.asset?.fileName || editingItem.assetId}</strong></div>
@@ -1297,7 +1293,7 @@ function PromptGenerationHistory({
               {user?.id !== editingItem.createdBy ? <div className="v3-summary-row"><span>수정 권한</span><strong>관리자 수정</strong></div> : null}
             </div>
             <label className="v3-field"><span>Positive Prompt</span><textarea rows={10} value={editingPrompt} onChange={(event) => setEditingPrompt(event.target.value)} autoFocus /></label>
-            <div className="v3-modal-actions"><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>취소</button><button className="v3-primary-button" type="button" disabled={savingPrompt || !editingPrompt.trim()} onClick={() => void savePromptEdit()}>{savingPrompt ? "저장 중" : ["FAILED", "MANUAL_REQUIRED"].includes(String(editingItem.status || "").toUpperCase()) ? "저장 및 RunPod 요청" : "저장"}</button></div>
+            <div className="v3-modal-actions"><button className="v3-secondary-button" type="button" disabled={savingPrompt} onClick={() => setEditingItem(null)}>취소</button><button className="v3-primary-button" type="button" disabled={savingPrompt || !editingPrompt.trim()} onClick={() => void savePromptEdit()}>{savingPrompt ? "저장 중" : "저장"}</button></div>
           </div>
         </div>
       ) : null}
