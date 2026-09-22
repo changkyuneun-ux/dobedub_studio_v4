@@ -151,6 +151,8 @@ export type AppShellProps = {
   sidebarFooter?: React.ReactNode;
   /** 우측 340px 패널(Run Summary 등). 생략하면 본문이 전체 폭을 차지 */
   rightPanel?: React.ReactNode;
+  /** 공통 본문 그리드에 화면 한정 레이아웃 변형을 적용할 때 사용 */
+  bodyClassName?: string;
   children: React.ReactNode;
 };
 
@@ -165,6 +167,7 @@ export function AppShell({
   sidebarExtra,
   sidebarFooter,
   rightPanel,
+  bodyClassName,
   children
 }: AppShellProps) {
   const navGroups = area === "admin"
@@ -311,7 +314,7 @@ export function AppShell({
           {headerActions ? <div className="v3-header-actions">{headerActions}</div> : null}
         </header>
 
-        <div className={`v3-body${rightPanel ? " has-right-panel" : ""}`}>
+        <div className={`v3-body${rightPanel ? " has-right-panel" : ""}${bodyClassName ? ` ${bodyClassName}` : ""}`}>
           <div className="v3-content">{children}</div>
           {rightPanel ? <aside className="v3-right-panel">{rightPanel}</aside> : null}
         </div>

@@ -109,8 +109,9 @@ function formatRunpodHistoryTime(totalSeconds?: number | string | null) {
   return `${minutes}:${seconds}`;
 }
 
-function formatRunpodHistoryDate(value?: string | null) {
-  return formatKstTimestamp(value);
+function formatKstDateOnly(value?: string | null) {
+  const formatted = formatKstTimestamp(value);
+  return formatted === "-" ? formatted : formatted.slice(0, 10);
 }
 
 function batchZipDownloadName(batch: BatchJobResponse) {
@@ -119,7 +120,7 @@ function batchZipDownloadName(batch: BatchJobResponse) {
   return `${base}_output.zip`;
 }
 
-const RUNPOD_HISTORY_GRID = "32px 36px minmax(44px, .28fr) minmax(58px, .35fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(110px, .85fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(62px, .45fr) minmax(62px, .45fr) minmax(88px, .55fr) 52px";
+const RUNPOD_HISTORY_GRID = "32px 36px minmax(44px, .28fr) minmax(76px, .4fr) minmax(110px, .9fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(96px, .75fr) minmax(110px, .85fr) minmax(72px, .5fr) 72px minmax(170px, 1.25fr) minmax(62px, .45fr) minmax(62px, .45fr) minmax(88px, .55fr) 52px";
 
 // E-03 · 3a "작업 이력" — design_handoff_dobedub_v3/3 Review.dc.html의 첫 화면.
 // 목록·페이지네이션·삭제는 B-01/C-03에서 이미 완성된 로직(loadHistoryPage,
@@ -531,6 +532,7 @@ export function Create3aScreen({
       onNavigate={(key) => shellNavigate(key, onGoTo)}
       headerEyebrow="TASK HISTORY"
       headerTitle="작업 이력"
+      bodyClassName="v3-task-history-body"
       headerActions={historyTab === "runpod" ? <span className="v3-header-meta">{runpodHistoryTotal}건 · KST</span> : null}
       sidebarFooter={<p className="v3-muted-text">보관 기한 90일 · RunPod 이력 10건 / 페이지 · 이후 Assets만 유지</p>}
       rightPanel={
@@ -828,7 +830,7 @@ export function Create3aScreen({
               </span>
               <span className="v3-review-seg-name">{rowNo}</span>
               <span style={{ fontSize: 12 }}>{item.workerName || item.user?.name || "-"}</span>
-              <span style={{ color: "var(--v3-text-secondary)", fontSize: 11 }}>{formatRunpodHistoryDate(item.timestampUtc || item.timestamp)}</span>
+              <span className="v3-history-date-cell">{formatKstDateOnly(item.timestampUtc || item.timestamp)}</span>
               <span className="v3-review-prompt" title={item.workflowName || item.workflow || item.workflowId || ""}>{item.workflowName || item.workflow || item.workflowId || "-"}</span>
               <span className="v3-review-prompt" title={displayBatchId}>{displayBatchId || "-"}</span>
               <span className="v3-review-prompt" title={item.promptDraftId || ""}>
@@ -1266,7 +1268,7 @@ function PromptGenerationHistory({
           >
             <span className="v3-review-seg-name">{(page - 1) * pageSize + index + 1}</span>
             <span className="v3-prompt-history-worker">{item.createdByName || item.createdBy || "-"}</span>
-            <span className="v3-prompt-history-date">{formatKstHistoryDate(item.createdAt)}</span>
+            <span className="v3-prompt-history-date">{formatKstDateOnly(item.createdAt)}</span>
             <span className="v3-prompt-history-workflow">{item.workflowId || "-"}</span>
             <span className="v3-prompt-history-batch-id" title={displayBatchId}>{displayBatchId || "-"}</span>
             <button className="v3-prompt-history-image v3-prompt-history-cell-button" type="button" title="이미지 미리보기" onClick={(event) => { event.stopPropagation(); setPreviewItem(item); }}>
@@ -1338,10 +1340,6 @@ function PromptGrokResponseDetail({ item }: { item: GrokImagePromptDraftResponse
       </div>
     </>
   );
-}
-
-function formatKstHistoryDate(value?: string | null) {
-  return formatKstTimestamp(value);
 }
 
 function formatRunpodSeconds(value?: number | string | null) {

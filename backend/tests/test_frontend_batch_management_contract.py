@@ -208,6 +208,20 @@ def test_task_history_consumes_dedicated_prompt_and_runpod_contracts() -> None:
     assert "}, [historyTab, runpodPage, runpodWorkflowFilter, runpodResultFilter, runpodWorkerFilter, runpodRunDate, selectedBatchJobId, runpodJobSearch]);" in source
 
 
+def test_task_history_uses_compact_detail_panel_and_date_only_columns() -> None:
+    shell = Path("frontend/src/components/AppShell.tsx").read_text(encoding="utf-8")
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "bodyClassName?: string" in shell
+    assert 'bodyClassName="v3-task-history-body"' in source
+    assert ".v3-body.v3-task-history-body.has-right-panel" in css
+    assert "grid-template-columns: minmax(0, 1fr) 170px" in css
+    assert "function formatKstDateOnly" in source
+    assert "formatKstDateOnly(item.timestampUtc || item.timestamp)" in source
+    assert "formatKstDateOnly(item.createdAt)" in source
+
+
 def test_prompt_history_exposes_batch_id_and_uses_selected_batch_candidate_filter() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
     css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
