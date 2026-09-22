@@ -414,6 +414,16 @@ def test_prompt_history_supports_failed_prompt_repair_and_image_preview() -> Non
     assert 'generationLabel = normalizedStatus === "FAILED" || normalizedStatus === "MANUAL_REQUIRED" ? "FAILED"' in prompt_history
 
 
+def test_prompt_history_allows_successful_prompt_editing_without_runpod_resubmission() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
+
+    assert "updateImagePromptDraft(editingItem.draftId" in prompt_history
+    assert "const canEditPrompt" in prompt_history
+    assert "disabled={!canEditPrompt}" in prompt_history
+    assert "저장" in prompt_history
+
+
 def test_studio_workflow_default_reset_preserves_five_second_generation_length() -> None:
     source = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
     reset_block = source.split("async function resetSegmentConfigsToDefaults", 1)[1].split("function copyFirstSegmentConfig", 1)[0]

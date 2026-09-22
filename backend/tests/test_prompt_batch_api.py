@@ -126,3 +126,41 @@ def test_prompt_generation_active_list_keeps_regular_users_scoped_to_their_own_b
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["items"]] == ["pgb_owner_visible"]
+
+
+def test_manager_can_edit_another_workers_successful_prompt_without_submitting_runpod(api_client):
+    session = SessionLocal()
+    try:
+        session.add_all([
+            _asset("asset_prompt_edit_by_manager"),
+            User(id="prompt-edit-manager", name="Prompt Edit Manager", role="SUPER_ADMIN", permissions_json=["admin:*"], is_active=True),
+            User(id="prompt-edit-owner", name="Prompt Edit Owner", role="OPERATOR", permissions_json=["prompts:build"], is_active=True),
+            ImagePromptDraft(
+                id="draft_prompt_edit_by_manager",
+                asset_id="asset_prompt_edit_by_manager",
+                workflow_id="1-images.json",
+                slot_index=1,
+                status=service.DRAFT_READY,
+                provider="grok",
+                model="grok-test",
+                instruction_version="wf@1",
+                positive_prompt="original successful prompt",
+                requested_frames=81,
+                warnings_json=[],
+                raw_json={},
+                created_by="prompt-edit-owner",
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    response = api_client.patch(
+        "/api/prompts/image-drafts/draft_prompt_edit_by_manager",
+        headers=_headers("prompt-edit-manager", role="SUPER_ADMIN"),
+        json={"positivePrompt": "edited successful prompt"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["positivePrompt"] == "edited successful prompt"
+    assert response.json()["status"] == service.DRAFT_READY

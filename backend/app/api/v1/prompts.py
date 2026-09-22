@@ -612,6 +612,7 @@ def update_image_prompt_draft(
             db,
             draft_id,
             created_by=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
             positive_prompt=payload.get("positivePrompt"),
             negative_prompt=payload.get("negativePrompt"),
             requested_frames=payload.get("requestedFrames"),

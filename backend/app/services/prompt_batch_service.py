@@ -489,11 +489,16 @@ def update_prompt_draft(
     draft_id: str,
     *,
     created_by: str,
+    can_manage: bool = False,
     positive_prompt: str | None = None,
     negative_prompt: str | None = None,
     requested_frames: int | None = None,
 ) -> dict[str, Any]:
-    draft = _owned_draft(db, draft_id, created_by)
+    draft = db.scalar(select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id))
+    if draft is None:
+        raise PromptDraftNotFoundError("프롬프트 초안을 찾을 수 없습니다.")
+    if draft.created_by != created_by and not can_manage:
+        raise PromptDraftPermissionError("다른 작업자의 프롬프트를 수정할 권한이 없습니다.")
     if positive_prompt is not None:
         draft.positive_prompt = str(positive_prompt).strip() or None
     if negative_prompt is not None:
