@@ -164,6 +164,29 @@ export type AdminWorkflow = WorkflowItem & {
   metadataExists?: boolean;
   metadataNodeCount?: number | null;
   metadataSubgraphCount?: number | null;
+  source?: string;
+  currentRevision?: number | null;
+  latestRevision?: number | null;
+  integrityStatus?: "OK" | "ERROR" | string;
+  currentRevisionMetadata?: {
+    workflowSha256?: string;
+    paramConfigSha256?: string;
+    validationStatus?: string;
+    nodeCount?: number;
+    inputImageCount?: number;
+    segmentCount?: number;
+  };
+  latestRevisionMetadata?: AdminWorkflow["currentRevisionMetadata"];
+  statistics?: {
+    total: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    inProgress: number;
+    averageElapsedSeconds?: number | null;
+    latestCreatedAt?: string | null;
+    latestCompletedAt?: string | null;
+  };
 };
 
 export type AdminUsersResponse = {

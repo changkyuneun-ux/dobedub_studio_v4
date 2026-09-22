@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.core.security import create_access_token, ensure_admin_user, hash_password, normalize_permissions, normalize_role, user_payload
 from backend.app.core.timezone_utils import UTC_TIMEZONE, timestamp_fields, utc_now
-from backend.app.db.models import User
-from backend.app.services.metadata_loader import ensure_metadata_current, read_json_if_exists
-from backend.app.services.metadata_service import metadata_paths
+from backend.app.db.models import User, WorkflowDefinition, WorkflowRevision
 from backend.app.services.permission_service import (
     permission_governance_catalog,
     role_permission_code_map,
@@ -23,10 +20,16 @@ from backend.app.services.permission_service import (
 )
 from backend.app.services.workflow_parser import (
     generate_param_config,
-    list_workflows as parse_workflow_list,
     workflow_schema as parse_workflow_schema,
 )
-from backend.app.services.workflow_visibility import is_retired_workflow
+from backend.app.services.workflow_catalog_service import workflow_statistics
+from backend.app.services.workflow_release_service import (
+    ReleaseFiles,
+    prepare_release,
+    promote_release_files,
+    verify_release_files,
+    write_release_files,
+)
 
 
 WORKFLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.json$")
@@ -138,29 +141,6 @@ def _payload_bool(value: object) -> bool:
     return bool(value)
 
 
-def workflow_registry_path() -> Path:
-    return get_settings().data_dir / "workflow-registry.json"
-
-
-def load_workflow_registry() -> dict:
-    path = workflow_registry_path()
-    if not path.exists():
-        return {"items": {}}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {"items": {}}
-    return data if isinstance(data, dict) and isinstance(data.get("items"), dict) else {"items": {}}
-
-
-def save_workflow_registry(registry: dict) -> None:
-    path = workflow_registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(f".{datetime.utcnow().timestamp():.0f}.tmp")
-    tmp_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
-
-
 def segment_defaults_path() -> Path:
     return get_settings().data_dir / "segment-defaults.json"
 
@@ -212,147 +192,255 @@ def segment_default_config(config: dict) -> dict:
     }
 
 
-def workflow_registry_item(workflow_id: str) -> dict:
-    registry = load_workflow_registry()
-    return dict(registry.get("items", {}).get(workflow_id) or {})
+def is_workflow_active(workflow_id: str, db: Session | None = None) -> bool:
+    if db is None:
+        from backend.app.db.session import SessionLocal
+
+        with SessionLocal() as session:
+            definition = session.get(WorkflowDefinition, workflow_id)
+            return bool(definition and definition.status == "ACTIVE" and definition.current_revision_id)
+    definition = db.get(WorkflowDefinition, workflow_id)
+    return bool(definition and definition.status == "ACTIVE" and definition.current_revision_id)
 
 
-def is_workflow_active(workflow_id: str) -> bool:
-    item = workflow_registry_item(workflow_id)
-    return bool(item.get("active", True))
-
-
-def count_active_workflows() -> tuple[int, int]:
+def count_active_workflows(db: Session | None = None) -> tuple[int, int]:
     """전체 워크플로 정의 수와 그중 활성(active) 상태인 수를 반환한다.
 
     Sandbox 대시보드 WORKFLOWS 타일에서 "N 정의" 대신 "active N개"를 보여주기
     위해 추가됨(2026-09-14). list_admin_workflows()처럼 메타데이터 전체를
-    읽지 않고 레지스트리의 active 플래그만 확인해 가볍게 계산한다.
+    읽지 않고 DB 상태만 집계해 계산한다.
     """
-    settings = get_settings()
-    try:
-        workflows = parse_workflow_list(settings.workflows_dir)
-    except Exception:  # noqa: BLE001
-        return 0, 0
-    registry_items = load_workflow_registry().get("items", {})
-    total = 0
-    active = 0
-    for workflow in workflows:
-        workflow_id = workflow.get("id")
-        if is_retired_workflow(workflow_id):
-            continue
-        total += 1
-        item = registry_items.get(str(workflow_id)) or {}
-        if bool(item.get("active", True)):
-            active += 1
-    return total, active
+    if db is None:
+        from backend.app.db.session import SessionLocal
+
+        with SessionLocal() as session:
+            return count_active_workflows(session)
+    total = db.scalar(select(func.count()).select_from(WorkflowDefinition)) or 0
+    active = db.scalar(
+        select(func.count()).select_from(WorkflowDefinition).where(WorkflowDefinition.status == "ACTIVE")
+    ) or 0
+    return int(total), int(active)
 
 
-def list_admin_workflows() -> dict:
+def _revision_payload(revision: WorkflowRevision | None) -> dict:
+    if revision is None:
+        return {}
+    return {
+        "id": revision.id,
+        "revision": revision.revision,
+        "workflowSha256": revision.workflow_sha256,
+        "paramConfigSha256": revision.param_config_sha256,
+        "validationStatus": revision.validation_status,
+        "validation": revision.validation_json or {},
+        "nodeCount": revision.node_count,
+        "inputImageCount": revision.input_image_count,
+        "segmentCount": revision.segment_count,
+        **timestamp_fields("createdAt", revision.created_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+    }
+
+
+def list_admin_workflows(db: Session) -> dict:
     settings = get_settings()
-    workflows = parse_workflow_list(settings.workflows_dir)
-    registry = load_workflow_registry()
-    registry_items = registry.get("items", {})
-    metadata_map_path = settings.metadata_dir / "workflow-widget-map.json"
-    metadata_map = read_json_if_exists(metadata_map_path, {"workflows": {}}) or {"workflows": {}}
-    metadata_workflows = metadata_map.get("workflows") or {}
     items = []
-    for workflow in workflows:
-        workflow_id = workflow.get("id")
-        if is_retired_workflow(workflow_id):
-            continue
-        meta = dict(registry_items.get(workflow_id) or {})
-        path = settings.workflows_dir / str(workflow_id)
-        param_path = settings.workflows_dir / f"{Path(str(workflow_id)).stem}.paramconfig.json"
-        workflow_metadata = metadata_workflows.get(str(workflow_id)) or {}
+    definitions = list(db.scalars(select(WorkflowDefinition).order_by(WorkflowDefinition.id)))
+    statistics = workflow_statistics(db, (definition.id for definition in definitions))
+    for definition in definitions:
+        latest = db.scalar(
+            select(WorkflowRevision)
+            .where(WorkflowRevision.workflow_id == definition.id)
+            .order_by(WorkflowRevision.revision.desc())
+            .limit(1)
+        )
+        current = db.get(WorkflowRevision, definition.current_revision_id) if definition.current_revision_id else None
+        inspected = current or latest
+        integrity = verify_release_files(settings.workflows_dir, inspected) if inspected else {"ok": False, "workflow": "MISSING", "paramConfig": "MISSING"}
+        validation = (latest.validation_json if latest else {}) or {}
         items.append({
-            **workflow,
-            "active": bool(meta.get("active", True)),
-            "status": meta.get("status") or ("ACTIVE" if meta.get("active", True) else "INACTIVE"),
-            "description": meta.get("description") or "",
-            **timestamp_fields("registeredAt", meta.get("registeredAt"), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="workflow-registry"),
-            **timestamp_fields("updatedAt", meta.get("updatedAt"), naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="workflow-registry"),
-            "fileExists": path.exists(),
-            "paramConfigExists": param_path.exists(),
-            "paramConfigGenerated": bool(meta.get("paramConfigGenerated")),
-            "metadataExists": bool(workflow_metadata),
-            "metadataNodeCount": workflow_metadata.get("nodeCount"),
-            "metadataSubgraphCount": len(workflow_metadata.get("segments") or []),
+            "id": definition.id,
+            "name": definition.display_name,
+            "label": definition.display_name,
+            "mode": "multi_segment" if int(validation.get("hasSaveVideo") or 0) else "single",
+            "keyframeCount": int(latest.input_image_count if latest else 0),
+            "segmentCount": int(latest.segment_count if latest else 0),
+            "active": definition.status == "ACTIVE",
+            "status": definition.status,
+            "source": definition.source,
+            "description": definition.description or "",
+            "registeredBy": definition.registered_by,
+            "updatedBy": definition.updated_by,
+            **timestamp_fields("registeredAt", definition.registered_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+            **timestamp_fields("updatedAt", definition.updated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+            **timestamp_fields("activatedAt", definition.activated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+            **timestamp_fields("deactivatedAt", definition.deactivated_at, naive_timezone=UTC_TIMEZONE, source_timezone="UTC", source="database"),
+            "currentRevision": current.revision if current else None,
+            "latestRevision": latest.revision if latest else None,
+            "currentRevisionMetadata": _revision_payload(current),
+            "latestRevisionMetadata": _revision_payload(latest),
+            "integrity": integrity,
+            "integrityStatus": "OK" if integrity.get("ok") else "ERROR",
+            "fileExists": integrity.get("workflow") == "OK",
+            "paramConfigExists": integrity.get("paramConfig") == "OK",
+            "paramConfigGenerated": bool((latest.validation_json if latest else {}).get("paramConfigGenerated")),
+            "metadataExists": bool(latest),
+            "metadataNodeCount": latest.node_count if latest else None,
+            "metadataSubgraphCount": latest.segment_count if latest else None,
+            "statistics": statistics.get(definition.id, {}),
         })
-    return {"items": items, "registryPath": str(workflow_registry_path())}
+    return {"items": items, "registryPath": None, "metadataSource": "database"}
 
 
-def register_admin_workflow(payload: dict) -> dict:
+def register_admin_workflow(db: Session, payload: dict, actor_id: str | None = None) -> dict:
     workflow_id = normalize_workflow_id(payload.get("workflowId") or payload.get("fileName"))
-    if is_retired_workflow(workflow_id):
-        raise ValueError("This workflow is not approved for new requests")
     workflow_json = payload.get("workflowJson")
     if not isinstance(workflow_json, dict):
         raise ValueError("workflowJson object is required")
-    validation = validate_workflow_registration_payload(workflow_json)
     settings = get_settings()
     settings.workflows_dir.mkdir(parents=True, exist_ok=True)
-    workflow_path = settings.workflows_dir / workflow_id
-    backup_path = backup_existing_workflow_files(workflow_id)
-    workflow_path.write_text(json.dumps(workflow_json, ensure_ascii=False, indent=2), encoding="utf-8")
     param_config = payload.get("paramConfigJson")
     param_config_generated = False
-    if isinstance(param_config, dict):
-        param_path = settings.workflows_dir / f"{Path(workflow_id).stem}.paramconfig.json"
-        param_path.write_text(json.dumps(param_config, ensure_ascii=False, indent=2), encoding="utf-8")
-    else:
+    if not isinstance(param_config, dict):
         param_config = generate_param_config(workflow_id, workflow_json)
-        param_path = settings.workflows_dir / f"{Path(workflow_id).stem}.paramconfig.json"
-        param_path.write_text(json.dumps(param_config, ensure_ascii=False, indent=2), encoding="utf-8")
         param_config_generated = True
-    registry = load_workflow_registry()
-    items = registry.setdefault("items", {})
-    now = utc_now().isoformat().replace("+00:00", "Z")
-    existing = dict(items.get(workflow_id) or {})
-    items[workflow_id] = {
-        **existing,
-        "active": bool(payload.get("active", existing.get("active", False))),
-        "status": "ACTIVE" if payload.get("active", existing.get("active", False)) else "INACTIVE",
-        "description": _optional_string(payload.get("description")) or existing.get("description") or "",
-        "paramConfigGenerated": param_config_generated,
-        "lastValidation": validation,
-        "lastBackupPath": str(backup_path) if backup_path else existing.get("lastBackupPath"),
-        "registeredAt": existing.get("registeredAt") or now,
-        "updatedAt": now,
-    }
-    save_workflow_registry(registry)
-    segment_defaults = sync_workflow_segment_defaults(workflow_id)
-    manifest = ensure_metadata_current(*metadata_paths(), force=True)
-    response = list_admin_workflows()
+    prepared = prepare_release(workflow_id, workflow_json, param_config)
+    definition = db.get(WorkflowDefinition, workflow_id)
+    if definition is None:
+        definition = WorkflowDefinition(
+            id=workflow_id,
+            display_name=Path(workflow_id).stem,
+            description=_optional_string(payload.get("description")),
+            status="INACTIVE",
+            source="ADMIN_UPLOAD",
+            registered_by=actor_id,
+            updated_by=actor_id,
+        )
+        db.add(definition)
+        db.flush()
+    else:
+        definition.description = _optional_string(payload.get("description")) or definition.description
+        definition.updated_by = actor_id
+        if definition.status == "ARCHIVED":
+            definition.status = "INACTIVE"
+            definition.archived_at = None
+
+    duplicate = db.scalar(
+        select(WorkflowRevision).where(
+            WorkflowRevision.workflow_id == workflow_id,
+            WorkflowRevision.workflow_sha256 == prepared.workflow_sha256,
+            WorkflowRevision.param_config_sha256 == prepared.param_config_sha256,
+        )
+    )
+    files = None
+    if duplicate is None:
+        next_revision = int(
+            (db.scalar(select(func.max(WorkflowRevision.revision)).where(WorkflowRevision.workflow_id == workflow_id)) or 0) + 1
+        )
+        files = write_release_files(settings.workflows_dir, workflow_id, next_revision, prepared)
+        validation = {**prepared.validation, "paramConfigGenerated": param_config_generated}
+        duplicate = WorkflowRevision(
+            workflow_id=workflow_id,
+            revision=next_revision,
+            workflow_path=files.workflow_path,
+            workflow_sha256=prepared.workflow_sha256,
+            workflow_size_bytes=len(prepared.workflow_bytes),
+            param_config_path=files.param_config_path,
+            param_config_sha256=prepared.param_config_sha256,
+            param_config_size_bytes=len(prepared.param_config_bytes),
+            validation_status="VALID",
+            validation_json=validation,
+            node_count=prepared.node_count,
+            input_image_count=prepared.input_image_count,
+            segment_count=prepared.segment_count,
+            created_by=actor_id,
+        )
+        db.add(duplicate)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if files:
+            (settings.workflows_dir / files.workflow_path).unlink(missing_ok=True)
+            (settings.workflows_dir / files.param_config_path).unlink(missing_ok=True)
+        raise
+    response = list_admin_workflows(db)
     response["registeredWorkflowId"] = workflow_id
     response["paramConfigGenerated"] = param_config_generated
     response["paramConfigJson"] = param_config
-    response["segmentDefaultsUpdated"] = True
-    response["segmentDefaults"] = segment_defaults
+    response["segmentDefaultsUpdated"] = False
     response["metadataUpdated"] = True
-    response["metadataManifest"] = manifest
-    response["validation"] = validation
-    response["backupPath"] = str(backup_path) if backup_path else None
+    response["validation"] = duplicate.validation_json
+    response["revision"] = duplicate.revision
     return response
 
 
-def set_admin_workflow_active(workflow_id: str, active: bool) -> dict:
+def set_admin_workflow_active(
+    db: Session,
+    workflow_id: str,
+    active: bool,
+    actor_id: str | None = None,
+    revision_id: int | None = None,
+) -> dict:
     workflow_id = normalize_workflow_id(workflow_id)
-    if is_retired_workflow(workflow_id):
-        raise ValueError("This workflow is not approved for new requests")
+    definition = db.get(WorkflowDefinition, workflow_id)
+    if definition is None:
+        raise ValueError("Workflow is not registered")
     settings = get_settings()
-    if not (settings.workflows_dir / workflow_id).exists():
-        raise ValueError("Workflow file not found")
-    registry = load_workflow_registry()
-    items = registry.setdefault("items", {})
-    item = dict(items.get(workflow_id) or {})
-    item["active"] = bool(active)
-    item["status"] = "ACTIVE" if active else "INACTIVE"
-    item["updatedAt"] = utc_now().isoformat().replace("+00:00", "Z")
-    item.setdefault("registeredAt", item["updatedAt"])
-    items[workflow_id] = item
-    save_workflow_registry(registry)
-    return list_admin_workflows()
+    now = utc_now().replace(tzinfo=None)
+    if active:
+        revision = db.get(WorkflowRevision, revision_id) if revision_id else db.scalar(
+            select(WorkflowRevision)
+            .where(WorkflowRevision.workflow_id == workflow_id)
+            .order_by(WorkflowRevision.revision.desc())
+            .limit(1)
+        )
+        if revision is None or revision.workflow_id != workflow_id or revision.validation_status != "VALID":
+            raise ValueError("Workflow has no valid revision")
+        integrity = verify_release_files(settings.workflows_dir, revision)
+        if not integrity.get("ok"):
+            raise ValueError("Workflow release file integrity check failed")
+        promote_release_files(
+            settings.workflows_dir,
+            workflow_id,
+            ReleaseFiles(workflow_path=revision.workflow_path, param_config_path=revision.param_config_path),
+        )
+        sync_workflow_segment_defaults(workflow_id)
+        definition.status = "ACTIVE"
+        definition.current_revision_id = revision.id
+        definition.activated_at = now
+    else:
+        definition.status = "INACTIVE"
+        definition.deactivated_at = now
+    definition.updated_by = actor_id
+    db.commit()
+    return list_admin_workflows(db)
+
+
+def list_workflow_revisions(db: Session, workflow_id: str) -> dict:
+    normalized = normalize_workflow_id(workflow_id)
+    if db.get(WorkflowDefinition, normalized) is None:
+        raise ValueError("Workflow is not registered")
+    revisions = list(
+        db.scalars(
+            select(WorkflowRevision)
+            .where(WorkflowRevision.workflow_id == normalized)
+            .order_by(WorkflowRevision.revision.desc())
+        )
+    )
+    return {"workflowId": normalized, "items": [_revision_payload(revision) for revision in revisions]}
+
+
+def archive_admin_workflow(db: Session, workflow_id: str, actor_id: str | None = None) -> dict:
+    normalized = normalize_workflow_id(workflow_id)
+    definition = db.get(WorkflowDefinition, normalized)
+    if definition is None:
+        raise ValueError("Workflow is not registered")
+    if definition.status == "ACTIVE":
+        raise ValueError("Deactivate workflow before archiving")
+    now = utc_now().replace(tzinfo=None)
+    definition.status = "ARCHIVED"
+    definition.archived_at = now
+    definition.updated_by = actor_id
+    db.commit()
+    return list_admin_workflows(db)
 
 
 def normalize_workflow_id(value: object) -> str:
@@ -367,48 +455,6 @@ def normalize_workflow_id(value: object) -> str:
     if not WORKFLOW_ID_PATTERN.match(workflow_id) or workflow_id.endswith(".paramconfig.json"):
         raise ValueError("Invalid workflowId")
     return workflow_id
-
-
-def validate_workflow_registration_payload(workflow_json: dict) -> dict:
-    node_count = len(workflow_json)
-    if node_count == 0:
-        raise ValueError("workflowJson must contain at least one node")
-    invalid_node_ids = []
-    class_types = []
-    for node_id, node in workflow_json.items():
-        if not isinstance(node, dict):
-            invalid_node_ids.append(str(node_id))
-            continue
-        class_type = str(node.get("class_type") or node.get("type") or "").strip()
-        if class_type:
-            class_types.append(class_type)
-        if "inputs" not in node and "widgets_values" not in node:
-            invalid_node_ids.append(str(node_id))
-    if invalid_node_ids:
-        raise ValueError(f"Invalid workflow nodes: {', '.join(invalid_node_ids[:5])}")
-    if not class_types:
-        raise ValueError("workflowJson has no node class_type/type metadata")
-    return {
-        "ok": True,
-        "nodeCount": node_count,
-        "classTypeCount": len(class_types),
-        "hasLoadImage": any(class_type == "LoadImage" for class_type in class_types),
-        "hasSaveVideo": any(class_type == "SaveVideo" for class_type in class_types),
-    }
-
-
-def backup_existing_workflow_files(workflow_id: str) -> Path | None:
-    settings = get_settings()
-    workflow_path = settings.workflows_dir / workflow_id
-    param_path = settings.workflows_dir / f"{Path(workflow_id).stem}.paramconfig.json"
-    existing_files = [path for path in (workflow_path, param_path) if path.exists()]
-    if not existing_files:
-        return None
-    backup_dir = settings.data_dir / "workflow-backups" / Path(workflow_id).stem / datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    for source in existing_files:
-        shutil.copy2(source, backup_dir / source.name)
-    return backup_dir
 
 
 def _optional_string(value: object) -> str | None:

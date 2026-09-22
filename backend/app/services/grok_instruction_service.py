@@ -14,9 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import get_settings
-from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS, is_retired_workflow
-
-
 _VALID_ROLES = {"CORE", "ROUTER", "GUIDE"}
 _SINGLETON_ROLES = {"CORE", "ROUTER"}
 _ROLE_ORDER = {"CORE": 0, "ROUTER": 1, "GUIDE": 2}
@@ -32,6 +29,14 @@ def _seed_path() -> Path:
 
 def _runtime_path() -> Path:
     return get_settings().grok_instruction_set_path
+
+
+def _active_workflow_ids() -> list[str]:
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.workflow_catalog_service import list_active_workflow_ids
+
+    with SessionLocal() as db:
+        return list_active_workflow_ids(db)
 
 
 def ensure_instruction_set() -> Path:
@@ -55,10 +60,11 @@ def list_instruction_documents(workflow_id: str) -> dict[str, Any]:
 def list_instruction_source_workflows() -> list[str]:
     """Return only workflows that can be copied as an instruction source."""
     document_set = _load_set()
+    active_ids = set(_active_workflow_ids())
     return [
         workflow["workflowId"]
         for workflow in document_set["workflowInstructionSets"]
-        if workflow.get("documents") and not is_retired_workflow(workflow["workflowId"])
+        if workflow.get("documents") and workflow["workflowId"] in active_ids
     ]
 
 
@@ -232,7 +238,7 @@ def _migrate_retired_default_documents(document_set: dict[str, Any]) -> bool:
     source = legacy if legacy is not None and legacy.get("documents") else next(
         (
             _find_workflow(document_set, workflow_id)
-            for workflow_id in sorted(SUPPORTED_WORKFLOW_IDS)
+            for workflow_id in _active_workflow_ids()
             if (_find_workflow(document_set, workflow_id) or {}).get("documents")
         ),
         None,
@@ -242,7 +248,7 @@ def _migrate_retired_default_documents(document_set: dict[str, Any]) -> bool:
 
     migrated = False
     source_workflow_id = source["workflowId"]
-    for workflow_id in sorted(SUPPORTED_WORKFLOW_IDS):
+    for workflow_id in _active_workflow_ids():
         target = _get_or_create_workflow(document_set, workflow_id)
         if target.get("documents"):
             continue

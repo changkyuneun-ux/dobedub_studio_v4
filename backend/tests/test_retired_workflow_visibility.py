@@ -3,47 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.app.services import admin_service, workflow_service
-from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS, assert_workflow_selectable, canonical_workflow_id
-
-
-REMOVED_WORKFLOW_IDS = {
-    "1-images.json",
-    "1-images_10s_chain.json",
-    "Blowbang1.json",
-    "Pickme_Workflow.json",
-    "video_wan2_2_14B_flf2v_2-images-1.json",
-    "video_minimax_h3_r2v.json",
-}
-
-
-def test_retired_workflows_are_hidden_from_studio_and_admin_lists(monkeypatch, tmp_path):
-    items = [{"id": workflow_id, "name": Path(workflow_id).stem} for workflow_id in sorted(REMOVED_WORKFLOW_IDS | SUPPORTED_WORKFLOW_IDS)]
-    settings = SimpleNamespace(workflows_dir=tmp_path, metadata_dir=tmp_path)
-
-    monkeypatch.setattr(workflow_service, "get_settings", lambda: settings)
-    monkeypatch.setattr(workflow_service, "parse_workflow_list", lambda _directory: items)
-    monkeypatch.setattr(admin_service, "get_settings", lambda: settings)
-    monkeypatch.setattr(admin_service, "parse_workflow_list", lambda _directory: items)
-    monkeypatch.setattr(admin_service, "load_workflow_registry", lambda: {"items": {}})
-    monkeypatch.setattr(admin_service, "read_json_if_exists", lambda _path, default: default)
-    monkeypatch.setattr(admin_service, "workflow_registry_path", lambda: tmp_path / "workflow-registry.json")
-
-    assert {item["id"] for item in workflow_service.list_workflows()} == SUPPORTED_WORKFLOW_IDS
-    assert {item["id"] for item in admin_service.list_admin_workflows()["items"]} == SUPPORTED_WORKFLOW_IDS
-
-
-def test_unapproved_workflow_cannot_be_reactivated_or_registered_again():
-    with pytest.raises(ValueError, match="not approved"):
-        admin_service.set_admin_workflow_active("1-images.json", True)
-
-    with pytest.raises(ValueError, match="not approved"):
-        admin_service.register_admin_workflow({"workflowId": "1-images.json"})
-
-
-def test_unapproved_workflow_cannot_be_used_by_a_direct_request():
-    with pytest.raises(ValueError, match="not approved"):
-        assert_workflow_selectable("Pickme_Workflow.json")
+from backend.app.db.models import WorkflowDefinition, WorkflowRevision
+from backend.app.services import workflow_service
+from backend.app.services.workflow_visibility import assert_workflow_selectable, canonical_workflow_id
 
 
 @pytest.mark.parametrize(
@@ -55,11 +17,50 @@ def test_unapproved_workflow_cannot_be_used_by_a_direct_request():
         ("wan22_default.json", "wan22_default_81.json"),
     ],
 )
-def test_legacy_workflow_ids_are_canonicalized_for_existing_requests(legacy_id, canonical_id):
+def test_legacy_workflow_ids_are_canonicalized(legacy_id, canonical_id):
     assert canonical_workflow_id(legacy_id) == canonical_id
-    assert assert_workflow_selectable(legacy_id) == canonical_id
 
 
-@pytest.mark.parametrize("workflow_id", sorted(SUPPORTED_WORKFLOW_IDS))
-def test_approved_workflow_can_be_used_by_a_direct_request(workflow_id):
-    assert assert_workflow_selectable(workflow_id) == workflow_id
+def test_studio_list_uses_database_status_without_filename_allowlist(db_session, monkeypatch, tmp_path):
+    settings = SimpleNamespace(workflows_dir=tmp_path, workflow_seed_dir=tmp_path)
+    monkeypatch.setattr(workflow_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        workflow_service,
+        "parse_workflow_list",
+        lambda _directory: [
+            {"id": "partner-v9.json", "name": "partner-v9"},
+            {"id": "held.json", "name": "held"},
+        ],
+    )
+    active = WorkflowDefinition(id="partner-v9.json", display_name="partner-v9", status="ACTIVE", source="ADMIN_UPLOAD")
+    held = WorkflowDefinition(id="held.json", display_name="held", status="INACTIVE", source="ADMIN_UPLOAD")
+    db_session.add_all([active, held])
+    db_session.flush()
+    revision = WorkflowRevision(
+        workflow_id=active.id,
+        revision=1,
+        workflow_path="releases/partner-v9/1/workflow.json",
+        workflow_sha256="a" * 64,
+        workflow_size_bytes=1,
+        param_config_path="releases/partner-v9/1/paramconfig.json",
+        param_config_sha256="b" * 64,
+        param_config_size_bytes=1,
+        validation_status="VALID",
+    )
+    db_session.add(revision)
+    db_session.flush()
+    active.current_revision_id = revision.id
+    db_session.commit()
+
+    assert [item["id"] for item in workflow_service.list_workflows()] == ["partner-v9.json"]
+
+
+def test_unregistered_workflow_is_rejected_when_not_bundled(db_session, monkeypatch, tmp_path):
+    from backend.app import core
+    del core  # import package before patching the local runtime import
+    monkeypatch.setattr(
+        "backend.app.core.config.get_settings",
+        lambda: SimpleNamespace(workflow_seed_dir=Path(tmp_path)),
+    )
+    with pytest.raises(ValueError, match="not registered"):
+        assert_workflow_selectable("unknown.json")

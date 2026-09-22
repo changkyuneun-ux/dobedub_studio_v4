@@ -6,7 +6,19 @@ from pathlib import Path
 import pytest
 
 from backend.app.services import grok_instruction_service as svc
-from backend.app.services.workflow_visibility import SUPPORTED_WORKFLOW_IDS
+
+
+ACTIVE_WORKFLOW_IDS = frozenset({
+    "1-images_81.json",
+    "1-images_10s_chain_81.json",
+    "wan22_10s_chain.json",
+    "wan22_default_81.json",
+})
+
+
+@pytest.fixture(autouse=True)
+def _dynamic_active_workflows(monkeypatch):
+    monkeypatch.setattr(svc, "_active_workflow_ids", lambda: sorted(ACTIVE_WORKFLOW_IDS))
 
 
 def _write_set(path: Path, payload: dict) -> None:
@@ -81,7 +93,7 @@ def test_legacy_default_instruction_is_copied_to_every_approved_workflow(tmp_pat
     ]})
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    for workflow_id in SUPPORTED_WORKFLOW_IDS:
+    for workflow_id in ACTIVE_WORKFLOW_IDS:
         assert "1-images only" in svc.resolve_workflow_instruction_set(workflow_id)["compiledMarkdown"]
 
     with pytest.raises(ValueError, match="활성 프롬프트 지시문이 없습니다"):
@@ -161,7 +173,7 @@ def test_instruction_source_workflows_only_lists_workflows_with_documents(tmp_pa
     })
     monkeypatch.setattr(svc, "_runtime_path", lambda: target)
 
-    assert set(svc.list_instruction_source_workflows()) == SUPPORTED_WORKFLOW_IDS
+    assert set(svc.list_instruction_source_workflows()) == ACTIVE_WORKFLOW_IDS
 
 
 def test_existing_legacy_documents_move_to_flat_wan_without_overwriting_target(tmp_path, monkeypatch):
@@ -183,5 +195,5 @@ def test_existing_legacy_documents_move_to_flat_wan_without_overwriting_target(t
     stored = json.loads(target.read_text(encoding="utf-8"))
     stored_sets = {item["workflowId"]: item for item in stored["workflowInstructionSets"]}
     assert stored_sets["1-images.json"]["documents"] == []
-    for workflow_id in SUPPORTED_WORKFLOW_IDS:
+    for workflow_id in ACTIVE_WORKFLOW_IDS:
         assert stored_sets[workflow_id]["documents"]

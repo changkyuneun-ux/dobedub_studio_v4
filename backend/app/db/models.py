@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.base import Base
@@ -310,6 +310,77 @@ class CollectionItem(Base):
     collection_id: Mapped[int] = mapped_column(Integer, ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True)
     asset_id: Mapped[str] = mapped_column(String(64), ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+
+
+class WorkflowDefinition(Base):
+    __tablename__ = "workflow_definitions"
+    __table_args__ = (
+        Index("ix_workflow_definitions_status_updated", "status", "updated_at", "id"),
+        Index("ix_workflow_definitions_source_status", "source", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(191), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="INACTIVE", index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "workflow_revisions.id",
+            name="fk_workflow_definitions_current_revision",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    registered_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
+    registered_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkflowRevision(Base):
+    __tablename__ = "workflow_revisions"
+    __table_args__ = (
+        Index("uq_workflow_revisions_number", "workflow_id", "revision", unique=True),
+        Index(
+            "uq_workflow_revisions_content",
+            "workflow_id",
+            "workflow_sha256",
+            "param_config_sha256",
+            unique=True,
+        ),
+        Index("ix_workflow_revisions_workflow_created", "workflow_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(191),
+        ForeignKey("workflow_definitions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    workflow_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    workflow_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    workflow_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    param_config_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    param_config_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    param_config_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_image_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    segment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str | None] = mapped_column(String(191), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, nullable=False)
 
 
