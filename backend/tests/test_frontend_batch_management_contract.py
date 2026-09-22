@@ -477,6 +477,20 @@ def test_runpod_request_positive_prompt_uses_shared_edit_modal_and_refreshes_que
     assert "v3-runpod-prompt-cell is-editable" in runpod_screen
 
 
+def test_admin_workflow_screen_archives_only_inactive_workflows_with_native_confirmation() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    shell = Path("frontend/src/StudioShell.tsx").read_text(encoding="utf-8")
+    screen = Path("frontend/src/screens/adminScreens.tsx").read_text(encoding="utf-8")
+
+    assert "archiveAdminWorkflow" in client
+    assert "/archive" in client
+    assert "archiveAdminWorkflow" in shell
+    assert "pendingWorkflowDelete" in screen
+    assert "워크플로우 삭제" in screen
+    assert "window.confirm" not in screen
+    assert "disabled={loading || selected.active}" in screen
+
+
 def test_prompt_history_requeues_edited_prompt_only_after_overwrite_confirmation() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")

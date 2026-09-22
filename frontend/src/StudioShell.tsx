@@ -1283,6 +1283,23 @@ export function StudioShell({
     }
   }
 
+  async function archiveAdminWorkflow(workflowId: string) {
+    setAdminWorkflowsLoading(true);
+    setAdminWorkflowsNotice("");
+    try {
+      const response = await apiClient.archiveAdminWorkflow(workflowId);
+      const items = response.items || [];
+      setAdminWorkflowItems(items);
+      setSelectedAdminWorkflowId(items[0]?.id || "");
+      setAdminWorkflowsNotice("비활성 워크플로우를 삭제했습니다. 실행 이력과 리비전은 보존됩니다.");
+      void loadWorkflows();
+    } catch (error) {
+      setAdminWorkflowsNotice(error instanceof Error ? error.message : "Workflow delete failed");
+    } finally {
+      setAdminWorkflowsLoading(false);
+    }
+  }
+
   async function loadAdminUsers() {
     setAdminUsersLoading(true);
     setAdminUsersNotice("");
@@ -2249,6 +2266,7 @@ export function StudioShell({
         onNewWorkflow={startNewAdminWorkflowRegistration}
         onActivate={(workflowId) => void setAdminWorkflowActive(workflowId, true)}
         onDeactivate={(workflowId) => void setAdminWorkflowActive(workflowId, false)}
+        onArchive={(workflowId) => void archiveAdminWorkflow(workflowId)}
       />
     ) : route === "admin.workflowRegister" ? (
       <Create4dScreen

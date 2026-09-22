@@ -242,7 +242,11 @@ def _revision_payload(revision: WorkflowRevision | None) -> dict:
 def list_admin_workflows(db: Session) -> dict:
     settings = get_settings()
     items = []
-    definitions = list(db.scalars(select(WorkflowDefinition).order_by(WorkflowDefinition.id)))
+    definitions = list(db.scalars(
+        select(WorkflowDefinition)
+        .where(WorkflowDefinition.status != "ARCHIVED")
+        .order_by(WorkflowDefinition.id)
+    ))
     statistics = workflow_statistics(db, (definition.id for definition in definitions))
     for definition in definitions:
         latest = db.scalar(

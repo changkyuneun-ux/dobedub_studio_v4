@@ -2063,6 +2063,10 @@ export const apiClient = {
     requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
       method: "POST"
     }),
+  archiveAdminWorkflow: (workflowId: string) =>
+    requestJson<AdminWorkflowsResponse>(`/api/admin/workflows/${encodeURIComponent(workflowId)}/archive`, {
+      method: "POST"
+    }),
   dashboardSummary: (
     range: DashboardRange,
     limit = 20,

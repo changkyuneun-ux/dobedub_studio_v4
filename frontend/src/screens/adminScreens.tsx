@@ -1717,7 +1717,8 @@ export function Create4aScreen({
   onSelect,
   onNewWorkflow,
   onActivate,
-  onDeactivate
+  onDeactivate,
+  onArchive
 }: {
   user: User;
   onGoTo: (route: StudioRoute) => void;
@@ -1729,7 +1730,9 @@ export function Create4aScreen({
   onNewWorkflow: () => void;
   onActivate: (workflowId: string) => void;
   onDeactivate: (workflowId: string) => void;
+  onArchive: (workflowId: string) => void;
 }) {
+  const [pendingWorkflowDelete, setPendingWorkflowDelete] = useState<AdminWorkflow | null>(null);
   const selected = items.find((item) => item.id === selectedWorkflowId) || null;
   const selectedRevision = selected?.currentRevisionMetadata || selected?.latestRevisionMetadata;
   const shortHash = (value?: string) => value ? `${value.slice(0, 12)}…` : "-";
@@ -1795,12 +1798,34 @@ export function Create4aScreen({
           <div className="v3-inline-actions" style={{ padding: "0 16px 16px" }}>
             {canActivate ? <button className="v3-primary-button" type="button" disabled={loading || selected.active || selected.integrityStatus !== "OK"} onClick={() => onActivate(selected.id)}>Activate</button> : null}
             {canActivate ? <button className="v3-secondary-button" type="button" disabled={loading || !selected.active} onClick={() => onDeactivate(selected.id)}>Deactivate</button> : null}
+            {canWrite ? <button className="v3-danger-outline-button" type="button" disabled={loading || selected.active} onClick={() => setPendingWorkflowDelete(selected)}>삭제</button> : null}
             {canWrite ? <button className="v3-secondary-button" type="button" onClick={onNewWorkflow}>New Workflow</button> : null}
           </div>
         </div>
       ) : (
         <p className="v3-muted-text">{loading ? "불러오는 중입니다..." : "왼쪽에서 워크플로를 선택하거나 새로 등록하세요."}</p>
       )}
+      {pendingWorkflowDelete ? (
+        <div className="v3-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="workflowDeleteTitle">
+          <div className="v3-modal-panel v3-batch-confirm-modal">
+            <div className="v3-panel-title-row">
+              <div id="workflowDeleteTitle" className="v3-panel-title">워크플로우 삭제</div>
+              <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => setPendingWorkflowDelete(null)}>닫기</button>
+            </div>
+            <p className="v3-modal-confirm-message">선택한 비활성 워크플로우를 목록에서 삭제하시겠습니까?</p>
+            <div className="v3-summary-card">
+              <div className="v3-summary-row"><span>워크플로우</span><strong>{pendingWorkflowDelete.label || pendingWorkflowDelete.name || pendingWorkflowDelete.id}</strong></div>
+              <div className="v3-summary-row"><span>상태</span><strong>{pendingWorkflowDelete.status}</strong></div>
+              <div className="v3-summary-row"><span>보존 정보</span><strong>기존 실행 이력 · 통계 · 리비전 파일</strong></div>
+            </div>
+            <p className="v3-muted-text">활성 워크플로우는 삭제할 수 없습니다. 동일 Workflow ID를 다시 등록하면 비활성 상태로 복원됩니다.</p>
+            <div className="v3-modal-actions">
+              <button className="v3-secondary-button" type="button" disabled={loading} onClick={() => setPendingWorkflowDelete(null)}>취소</button>
+              <button className="v3-danger-outline-button" type="button" disabled={loading || pendingWorkflowDelete.active} onClick={() => { const workflowId = pendingWorkflowDelete.id; setPendingWorkflowDelete(null); onArchive(workflowId); }}>삭제</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

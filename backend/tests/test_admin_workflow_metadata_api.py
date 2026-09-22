@@ -136,7 +136,7 @@ def test_integrity_mismatch_blocks_activation(api_client, monkeypatch, tmp_path)
     assert "integrity" in response.json()["detail"]
 
 
-def test_archive_requires_deactivation_and_preserves_revisions(api_client, monkeypatch, tmp_path):
+def test_archive_requires_deactivation_hides_workflow_and_preserves_revisions(api_client, monkeypatch, tmp_path):
     _seed_admin()
     settings = _settings(tmp_path)
     monkeypatch.setattr("backend.app.services.admin_service.get_settings", lambda: settings)
@@ -149,6 +149,9 @@ def test_archive_requires_deactivation_and_preserves_revisions(api_client, monke
     assert api_client.post("/api/admin/workflows/archive-me.json/deactivate", headers=_headers()).status_code == 200
     archived = api_client.post("/api/admin/workflows/archive-me.json/archive", headers=_headers())
     assert archived.status_code == 200
-    item = next(item for item in archived.json()["items"] if item["id"] == "archive-me.json")
-    assert item["status"] == "ARCHIVED"
+    assert all(item["id"] != "archive-me.json" for item in archived.json()["items"])
     assert (settings.workflows_dir / "releases/archive-me/1/workflow.json").exists()
+
+    revisions = api_client.get("/api/admin/workflows/archive-me.json/revisions", headers=_headers())
+    assert revisions.status_code == 200
+    assert [item["revision"] for item in revisions.json()["items"]] == [1]
