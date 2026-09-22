@@ -20,7 +20,7 @@ from backend.app.core.timezone_utils import (
     timestamp_fields,
     timestamp_pair,
 )
-from backend.app.db.models import Asset, Collection, CollectionItem, ImagePromptDraft, PromptFeedback, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
+from backend.app.db.models import Asset, Collection, CollectionItem, ImagePromptDraft, PromptFeedback, RunpodRequestItem, TaskInputAsset, TaskOutputAsset, TaskPrompt, User, WorkflowTask
 from backend.app.db.session import SessionLocal
 from backend.app.services.json_repository import hydrate_input_images, hydrate_output_asset
 from backend.app.services.metadata_service import get_workflow_widget_metadata
@@ -609,6 +609,10 @@ def restore_job_from_task(task_id: str) -> dict | None:
             "lastDispatchError": task.last_dispatch_error,
             "restoredFromDb": True,
         }
+        if bool(payload.get("preserveOutputAssetsUntilSuccess")) and str(task.status or "").upper() not in TERMINAL_STATES:
+            result["outputAssets"] = []
+            result["outputUrl"] = ""
+            result["outputsSaved"] = False
         created_at_fields = _task_timestamp_fields(task, "createdAt", task.created_at)
         # Keep the restored in-memory job invariant: createdAt is an epoch used
         # by JobService to calculate elapsed time and monitor progress.
@@ -655,11 +659,21 @@ def restore_existing_job_for_prompt_draft(prompt_draft_id: str, *, batch_job_id:
     return restore_job_from_task(task_id)
 
 
-def _reset_task_for_rework(session: Session, task: WorkflowTask, *, actor_id: str, reset_created_at: bool = True) -> None:
+def _reset_task_for_rework(
+    session: Session,
+    task: WorkflowTask,
+    *, actor_id: str,
+    reset_created_at: bool = True,
+    preserve_outputs_until_success: bool = False,
+) -> None:
     now = now_seoul_naive()
     payload = dict(task.payload_json or {})
     for key in ("regeneratedFromTaskId", "runpodJobId", "generationSeed"):
         payload.pop(key, None)
+    if preserve_outputs_until_success:
+        payload["preserveOutputAssetsUntilSuccess"] = True
+    else:
+        payload.pop("preserveOutputAssetsUntilSuccess", None)
     if not isinstance(payload.get("user"), dict) or not payload["user"].get("id"):
         payload["user"] = {
             "id": task.user_id or actor_id,
@@ -685,10 +699,12 @@ def _reset_task_for_rework(session: Session, task: WorkflowTask, *, actor_id: st
     task.updated_at = now
     if reset_created_at:
         task.created_at = now
-    for link in list(task.output_assets):
-        session.delete(link)
+    if not preserve_outputs_until_success:
+        for link in list(task.output_assets):
+            session.delete(link)
     for prompt in list(task.prompts):
-        prompt.output_asset_ids = []
+        if not preserve_outputs_until_success:
+            prompt.output_asset_ids = []
         prompt.updated_at = now
     _sync_request_batch(session, task)
 
@@ -726,6 +742,54 @@ def requeue_task_for_rework(task_id: str, *, actor_id: str, can_manage: bool = F
     restored = restore_job_from_task(task_id)
     if restored is None:
         raise KeyError(task_id)
+    return restored
+
+
+def requeue_prompt_draft_task(session: Session, draft_id: str, *, actor_id: str, can_manage: bool = False) -> dict:
+    """Requeue one linked terminal task while retaining its previous output until success."""
+    draft = session.scalar(select(ImagePromptDraft).where(ImagePromptDraft.id == draft_id).with_for_update())
+    if draft is None:
+        raise KeyError(draft_id)
+    if not can_manage and str(draft.created_by or "") != str(actor_id or ""):
+        raise PermissionError("다른 작업자의 RunPod 작업은 재요청할 수 없습니다.")
+    tasks = session.scalars(
+        select(WorkflowTask)
+        .options(selectinload(WorkflowTask.output_assets), selectinload(WorkflowTask.prompts), selectinload(WorkflowTask.user))
+        .where(WorkflowTask.prompt_draft_id == draft_id, WorkflowTask.deleted_at.is_(None))
+        .with_for_update()
+    ).all()
+    if len(tasks) != 1:
+        raise ValueError("연결된 RunPod 작업이 하나일 때만 재요청할 수 있습니다.")
+    task = tasks[0]
+    if str(task.status or "").upper() not in REPLAYABLE_STATES:
+        raise ValueError("종료된 RunPod 작업만 재요청할 수 있습니다.")
+    positive_prompt = str(draft.positive_prompt or "").strip()
+    if str(draft.status or "").upper() != "READY" or not positive_prompt:
+        raise ValueError("저장된 Positive Prompt가 필요합니다.")
+
+    payload = dict(task.payload_json or {})
+    segments = [dict(segment) for segment in (payload.get("segments") or []) if isinstance(segment, dict)]
+    if not segments:
+        raise ValueError("연결된 작업의 프롬프트 세그먼트를 찾을 수 없습니다.")
+    for segment in segments:
+        segment["positivePrompt"] = positive_prompt
+    payload["segments"] = segments
+    task.payload_json = payload
+    task.positive_prompts = [{"index": segment.get("index") or index, "text": positive_prompt} for index, segment in enumerate(segments, start=1)]
+    for prompt in task.prompts:
+        prompt.positive_prompt = positive_prompt
+    if task.request_item_id:
+        request_item = session.get(RunpodRequestItem, task.request_item_id)
+        if request_item is not None:
+            request_item.positive_prompt = positive_prompt
+            request_item.status = "PENDING_SUBMIT"
+            request_item.failure_message = None
+            request_item.materialization_claimed_at = None
+    _reset_task_for_rework(session, task, actor_id=actor_id, preserve_outputs_until_success=True)
+    session.commit()
+    restored = restore_job_from_task(task.id)
+    if restored is None:
+        raise KeyError(task.id)
     return restored
 
 
@@ -1152,8 +1216,15 @@ def _record_job_status(session: Session, job: dict, *, resolve_asset: Callable[[
     _replace_input_assets(session, task, job, resolve_asset=resolve_asset)
     if not task.prompts:
         _replace_task_prompts(session, task, job)
-    _replace_output_assets(session, task, job, resolve_asset=resolve_asset)
-    _sync_task_prompt_outputs(session, task, job)
+    new_outputs = [asset for asset in job.get("outputAssets") or [] if isinstance(asset, dict)]
+    preserve_outputs = bool((task.payload_json or {}).get("preserveOutputAssetsUntilSuccess"))
+    if new_outputs or not preserve_outputs:
+        _replace_output_assets(session, task, job, resolve_asset=resolve_asset)
+        _sync_task_prompt_outputs(session, task, job)
+        if new_outputs and preserve_outputs:
+            payload = dict(task.payload_json or {})
+            payload.pop("preserveOutputAssetsUntilSuccess", None)
+            task.payload_json = payload
     _sync_request_batch(session, task)
 
 

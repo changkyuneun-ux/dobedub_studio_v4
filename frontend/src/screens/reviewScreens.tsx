@@ -1127,6 +1127,21 @@ function PromptGenerationHistory({
     }
   }
 
+  async function requeueRunpodForPrompt(item: GrokImagePromptDraftResponse) {
+    if (!window.confirm("기존 영상이 있는 경우 덮어쓰기가 됩니다. 진행하시겠습니까?")) return;
+    setRetryingDraftId(item.draftId);
+    setNotice("");
+    try {
+      await apiClient.requeueRunpodForPromptDraft(item.draftId);
+      const response = await loadPromptHistory(page);
+      selectPromptHistoryItem(response.items.find((candidate) => candidate.draftId === item.draftId) || item);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "RunPod 재요청에 실패했습니다.");
+    } finally {
+      setRetryingDraftId("");
+    }
+  }
+
   async function savePromptEdit() {
     if (!editingItem) return;
     const normalized = editingPrompt.trim();
@@ -1260,7 +1275,7 @@ function PromptGenerationHistory({
             </button>
             <button className={`v3-review-prompt v3-prompt-history-cell-button ${canEditPrompt ? "is-editable" : ""} ${promptTone}`} type="button" disabled={!canEditPrompt} title={canEditPrompt ? "Positive Prompt 수정" : item.positivePrompt || item.error || ""} onClick={(event) => { event.stopPropagation(); if (canEditPrompt) { setEditingItem(item); setEditingPrompt(item.positivePrompt || ""); } }}>{generated ? item.positivePrompt || "-" : canEditPrompt ? "클릭하여 Positive Prompt 입력" : item.error || "-"}</button>
             <span className={`v3-status-badge ${generationTone}`}>{generationLabel}</span>
-            <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>
+            {item.requeueRequired ? <button className="v3-text-link-button" type="button" disabled={retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void requeueRunpodForPrompt(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재요청"}</button> : <span className={`v3-status-badge ${runpodResultStatusTone(item.runpodStatus ?? undefined)}`}>{runpodStatusDisplay(item.runpodStatus, "미요청")}</span>}
             <button className="v3-text-link-button" type="button" disabled={!canRetry || retryingDraftId === item.draftId} onClick={(event) => { event.stopPropagation(); void retryPromptHistoryItem(item); }}>{retryingDraftId === item.draftId ? "요청 중" : "재생성"}</button>
           </div>
         );

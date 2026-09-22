@@ -844,6 +844,8 @@ class DraftRunpodTask(NamedTuple):
 
     id: str
     status: str | None
+    positive_prompt: str
+    task_count: int
 
 
 def _latest_runpod_tasks_by_draft(db: Session, draft_ids: list[str]) -> dict[str, DraftRunpodTask]:
@@ -852,15 +854,24 @@ def _latest_runpod_tasks_by_draft(db: Session, draft_ids: list[str]) -> dict[str
     # 최대 1.6MB)까지 끌어와, 영상을 표시하지도 않는 프롬프트 이력 화면을
     # 느리게 만들고 ECS 메모리 부족의 원인이 됐다.
     rows = db.execute(
-        select(WorkflowTask.prompt_draft_id, WorkflowTask.id, WorkflowTask.status)
+        select(WorkflowTask.prompt_draft_id, WorkflowTask.id, WorkflowTask.status, WorkflowTask.positive_prompts)
         .where(WorkflowTask.prompt_draft_id.in_(draft_ids), WorkflowTask.deleted_at.is_(None))
         .order_by(WorkflowTask.prompt_draft_id.asc(), WorkflowTask.created_at.desc(), WorkflowTask.id.desc())
     ).all()
     latest: dict[str, DraftRunpodTask] = {}
-    for prompt_draft_id, task_id, status in rows:
+    counts: dict[str, int] = {}
+    for prompt_draft_id, _task_id, _status, _positive_prompts in rows:
+        draft_id = str(prompt_draft_id or "")
+        if draft_id:
+            counts[draft_id] = counts.get(draft_id, 0) + 1
+    for prompt_draft_id, task_id, status, positive_prompts in rows:
         draft_id = str(prompt_draft_id or "")
         if draft_id and draft_id not in latest:
-            latest[draft_id] = DraftRunpodTask(id=task_id, status=status)
+            prompt_text = ""
+            if isinstance(positive_prompts, list) and positive_prompts:
+                first = positive_prompts[0]
+                prompt_text = str(first.get("text") if isinstance(first, dict) else first or "").strip()
+            latest[draft_id] = DraftRunpodTask(task_id, status, prompt_text, counts.get(draft_id, 1))
     return latest
 
 
@@ -876,6 +887,15 @@ def _draft_payload_from_related(
     runpod_task: DraftRunpodTask | None,
     created_by_name: str | None,
 ) -> dict[str, Any]:
+    normalized_draft_prompt = str(draft.positive_prompt or "").strip()
+    requeue_required = bool(
+        runpod_task
+        and runpod_task.task_count == 1
+        and str(runpod_task.status or "").upper() in (RUNPOD_SUCCESS_STATES | RUNPOD_FAILED_STATES | RUNPOD_CANCELLED_STATES)
+        and draft.status == DRAFT_READY
+        and normalized_draft_prompt
+        and normalized_draft_prompt != runpod_task.positive_prompt
+    )
     return {
         "draftId": draft.id,
         "assetId": draft.asset_id,
@@ -905,6 +925,8 @@ def _draft_payload_from_related(
         } if asset else None,
         "runpodTaskId": runpod_task.id if runpod_task else None,
         "runpodStatus": runpod_task.status if runpod_task else None,
+        "requeueRequired": requeue_required,
+        "requeueBlockedReason": "MULTIPLE_TASKS" if runpod_task and runpod_task.task_count != 1 else None,
         "grokResponse": {
             "endpoint": attempt.endpoint if attempt else None,
             "model": attempt.model if attempt else None,

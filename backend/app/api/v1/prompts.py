@@ -54,6 +54,7 @@ from backend.app.services.prompt_batch_service import (
     retry_prompt_draft,
     update_prompt_draft,
 )
+from backend.app.services.task_tracking_service import requeue_prompt_draft_task
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -634,6 +635,27 @@ def retry_image_prompt_draft(
         return retry_prompt_draft(db, draft_id, created_by=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/image-drafts/{draft_id}/requeue-runpod")
+def requeue_image_prompt_draft_runpod(
+    draft_id: str,
+    current_user: CurrentUser = Depends(require_permission("prompts:build")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return requeue_prompt_draft_task(
+            db,
+            draft_id,
+            actor_id=current_user.id,
+            can_manage=has_permission(current_user.permissions, "jobs:manage"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="프롬프트 또는 연결 작업을 찾을 수 없습니다.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/generate/{request_id}")
