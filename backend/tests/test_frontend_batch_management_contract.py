@@ -291,9 +291,21 @@ def test_runpod_history_shows_video_and_generation_times_before_download() -> No
     assert 'return `${minutes}:${seconds}`;' in source
     assert "<span>작업자</span><span>실행일</span>" in table
     assert "<span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span>" in table
-    assert "formatRunpodHistoryDate(item.timestampUtc || item.timestamp)" in table
+    assert "formatKstDateOnly(item.timestampUtc || item.timestamp)" in table
     assert "<span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span>" in table
     assert "{formatRunpodHistoryTime(item.durationSeconds)}</span>\n              <span>{formatRunpodHistoryTime(item.runpodResponse?.executionSeconds ?? item.elapsedSeconds)}</span>\n              <span>" in table
+
+
+def test_history_action_columns_have_clear_labels_and_safe_right_margin() -> None:
+    source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
+    css = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+    prompt_history = source.split("function PromptGrokResponseDetail", 1)[0].split("function PromptGenerationHistory", 1)[1]
+
+    assert '<span className="v3-history-delete-column">삭제</span>' in source
+    assert '<span className="v3-history-delete-column">' in source
+    assert ".v3-history-delete-column" in css
+    assert "padding-right: 14px" in css
+    assert "<span>프롬프트 재생성</span>" in prompt_history
 
 
 def test_runpod_history_prompt_modal_retry_and_column_contract() -> None:

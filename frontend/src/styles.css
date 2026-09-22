@@ -7514,6 +7514,7 @@ button {
 .v3-status-badge::before { background: currentColor; border-radius: 50%; content: ""; display: block; flex: none; height: 6px; width: 6px; }
 .v3-status-badge.is-failed { color: #a5301f; }
 .v3-history-head, .v3-history-row { border-left: 3px solid transparent; }
+.v3-history-delete-column { box-sizing: border-box; padding-right: 14px; text-align: right; }
 .v3-history-row.is-tone-fail { border-left-color: var(--v3-danger); }
 .v3-history-row.is-tone-run { border-left-color: #2368bd; }
 .v3-history-row.is-tone-wait { border-left-color: var(--v3-warning); }

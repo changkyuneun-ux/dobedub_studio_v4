@@ -789,7 +789,7 @@ export function Create3aScreen({
         {/* 16컬럼 그리드 정합성: head와 row가 같은 RUNPOD_HISTORY_GRID를 쓰고, 행 좌측 3px 상태 바는
             border-left로 그려 컬럼 수·폭을 바꾸지 않는다. head에도 같은 폭의 투명 border-left를 둔다(.v3-history-head). */}
         <div className="v3-review-table-head v3-history-head" style={{ gridTemplateColumns: RUNPOD_HISTORY_GRID }}>
-          <span><input type="checkbox" aria-label="현재 페이지 종료 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span style={{ textAlign: "right" }}>삭제</span>
+          <span><input type="checkbox" aria-label="현재 페이지 종료 작업 전체 선택" checked={allTerminalItemsSelected} disabled={!terminalRunpodItems.length} onChange={toggleAllRunpodSelection} /></span><span>No</span><span>작업자</span><span>실행일</span><span>워크플로우</span><span>Batch ID</span><span>Prompt ID</span><span>Studio Task</span><span>RunPod Job ID</span><span>결과</span><span>입력 이미지</span><span>생성 영상</span><span>영상길이</span><span>생성시간</span><span>다운로드</span><span className="v3-history-delete-column">삭제</span>
         </div>
         {runpodHistoryLoading ? <p className="v3-muted-text" style={{ padding: 16 }}>불러오는 중입니다...</p> : null}
         {runpodHistoryNotice ? <p className={runpodHistoryNoticeKind === "success" ? "v3-inline-success" : "v3-inline-error"} style={{ margin: 16 }} role="alert">{runpodHistoryNotice}</p> : null}
@@ -879,7 +879,7 @@ export function Create3aScreen({
                   </button>
                 ) : resultUrl ? <button className="v3-text-link-button" type="button" onClick={(event) => { event.stopPropagation(); onDownload(item); }}>Download</button> : "-"}
               </span>
-              <span style={{ textAlign: "right" }}>
+              <span className="v3-history-delete-column">
                 {canDelete && isTerminalHistoryStatus(item.status) ? (
                   <button
                     className="v3-text-link-button"
@@ -1244,7 +1244,7 @@ function PromptGenerationHistory({
         </label>
       </div>
       <div className="v3-prompt-history-head">
-        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span><span>Positive Prompt</span><span>프롬프트 생성</span><span>RunPod</span><span>재생성</span>
+        <span>No</span><span>작업자</span><span>KST 생성일</span><span>워크플로우</span><span>Batch ID</span><span>이미지</span><span>Positive Prompt</span><span>프롬프트 생성</span><span>RunPod</span><span>프롬프트 재생성</span>
       </div>
       {loading ? <p className="v3-muted-text" style={{ padding: 16 }}>프롬프트 이력을 불러오는 중입니다...</p> : null}
       {notice ? <p className="v3-inline-error" style={{ margin: 16 }} role="alert">{notice}</p> : null}
