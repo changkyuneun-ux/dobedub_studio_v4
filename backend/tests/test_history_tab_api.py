@@ -9,7 +9,12 @@ from sqlalchemy.exc import OperationalError
 from backend.app.core.security import create_access_token
 from backend.app.db.models import Asset, BatchJob, ImagePromptDraft, PromptGenerationAttempt, TaskOutputAsset, User, WorkflowTask
 from backend.app.db.session import SessionLocal
-from backend.app.services.task_tracking_service import active_task_ids, pending_output_import_task_ids
+from backend.app.services.task_tracking_service import (
+    active_task_ids,
+    claim_active_task_ids,
+    claim_runpod_not_found_recovery_task_ids,
+    pending_output_import_task_ids,
+)
 from pathlib import Path
 
 
@@ -1002,7 +1007,7 @@ def test_runpod_history_bulk_rework_selected_and_query_scopes(api_client):
         session.close()
 
 
-def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
+def test_monitor_keeps_runpod_job_not_found_retryable_while_manifest_is_pending(db_session, monkeypatch):
     from backend.app.services import studio_api_service
 
     studio_api_service.JOBS.clear()
@@ -1044,19 +1049,25 @@ def test_monitor_marks_runpod_job_not_found_as_failed(db_session, monkeypatch):
         raise RuntimeError('RunPod HTTP 404: {"status":404,"title":"Not Found","detail":"job not found"}')
 
     monkeypatch.setattr(studio_api_service, "runpod_request", provider_404)
+    monkeypatch.setattr(
+        studio_api_service,
+        "save_runpod_outputs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(studio_api_service.OutputImportPending("pending")),
+    )
 
     result = studio_api_service.monitor_active_jobs()
 
     assert result["failures"] == []
-    assert "task_missing_runpod_job" not in active_task_ids()
+    assert "task_missing_runpod_job" in active_task_ids()
 
     session = SessionLocal()
     try:
         task = session.get(WorkflowTask, "task_missing_runpod_job")
         assert task is not None
-        assert task.status == "FAILED"
-        assert task.progress == 100
-        assert task.runpod_status_json["providerStatus"] == "NOT_FOUND"
+        assert task.status == "IN_PROGRESS"
+        assert task.progress == 45
+        assert task.runpod_status_json["providerStatus"] == "NOT_FOUND_RECONCILING"
+        assert task.runpod_status_json["notFoundRecovery"]["attempts"] == 1
     finally:
         session.close()
 
@@ -1134,6 +1145,88 @@ def test_monitor_retries_completed_tasks_with_pending_output_import(db_session, 
     assert pending_output_import_task_ids() == ["task_pending_manifest"]
     assert result["checked"] == 1
     assert checked == ["task_pending_manifest"]
+
+
+def test_monitor_recovers_a_legacy_failed_404_from_manifest(db_session, monkeypatch):
+    from backend.app.services import studio_api_service
+
+    studio_api_service.JOBS.clear()
+    db_session.add(WorkflowTask(
+        id="task_failed_404_with_manifest",
+        runpod_job_id="runpod-failed-404-with-manifest",
+        workflow_id="1-images_81.json",
+        execution_mode="runpod",
+        status="FAILED",
+        progress=100,
+        runpod_status_json={
+            "status": "FAILED",
+            "providerStatus": "NOT_FOUND",
+            "error": 'RunPod HTTP 404: {"detail":"job not found"}',
+        },
+        payload_json={"workflowId": "1-images_81.json", "segments": []},
+    ))
+    db_session.commit()
+    monkeypatch.setattr(studio_api_service, "dispatch_next_queued_job", lambda: {"status": "idle"})
+    monkeypatch.setattr(studio_api_service, "save_runpod_outputs", lambda *_args, **_kwargs: {
+        "assets": [{
+            "assetId": "asset_recovered_manifest",
+            "downloadUrl": "/api/files/asset_recovered_manifest",
+            "outputRole": "final",
+        }],
+        "remoteUrls": [],
+    })
+
+    result = studio_api_service.monitor_active_jobs()
+
+    assert result["reconciledNotFound"] == 1
+    db_session.expire_all()
+    task = db_session.get(WorkflowTask, "task_failed_404_with_manifest")
+    assert task is not None
+    assert task.status == "COMPLETED"
+    assert task.runpod_status_json["providerStatus"] == "RECOVERED_FROM_MANIFEST"
+
+
+def test_failed_404_recovery_claim_has_only_one_owner(db_session):
+    db_session.add(WorkflowTask(
+        id="task_failed_404_claim",
+        runpod_job_id="runpod-failed-404-claim",
+        workflow_id="1-images_81.json",
+        execution_mode="runpod",
+        status="FAILED",
+        progress=100,
+        runpod_status_json={
+            "status": "FAILED",
+            "providerStatus": "NOT_FOUND",
+            "error": 'RunPod HTTP 404: {"detail":"job not found"}',
+        },
+        payload_json={},
+    ))
+    db_session.commit()
+
+    first = claim_runpod_not_found_recovery_task_ids()
+    second = claim_runpod_not_found_recovery_task_ids()
+
+    assert first == ["task_failed_404_claim"]
+    assert second == []
+
+
+def test_active_monitor_claim_has_only_one_owner(db_session):
+    db_session.add(WorkflowTask(
+        id="task_active_monitor_claim",
+        runpod_job_id="runpod-active-monitor-claim",
+        workflow_id="1-images_81.json",
+        execution_mode="runpod",
+        status="IN_PROGRESS",
+        progress=45,
+        payload_json={},
+    ))
+    db_session.commit()
+
+    first = claim_active_task_ids()
+    second = claim_active_task_ids()
+
+    assert first == ["task_active_monitor_claim"]
+    assert second == []
 
 
 def test_history_tabs_use_the_dedicated_history_api_contracts() -> None:

@@ -1095,6 +1095,29 @@ def test_batch_promotion_does_not_append_the_same_draft_twice(db_session, monkey
     assert db_session.scalars(select(RunpodRequestItem)).all() == []
 
 
+def test_promotion_repairs_task_created_marker_when_no_task_exists(db_session, monkeypatch):
+    created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
+    draft = _drafts_of(db_session, created["id"])[0]
+    draft.status = "READY"
+    draft.positive_prompt = "recover orphan promotion"
+    draft.promotion_status = batch_job_service.PROMOTION_TASK_CREATED
+    draft.promotion_claimed_at = None
+    db_session.commit()
+
+    first = batch_job_service.promote_ready_batch_drafts()
+    second = batch_job_service.promote_ready_batch_drafts()
+
+    db_session.expire_all()
+    recovered = db_session.get(ImagePromptDraft, draft.id)
+    tasks = db_session.scalars(select(WorkflowTask).where(WorkflowTask.prompt_draft_id == draft.id)).all()
+    assert first["promoted"] == 1
+    assert second["promoted"] == 0
+    assert recovered is not None
+    assert recovered.promotion_status == batch_job_service.PROMOTION_TASK_CREATED
+    assert len(tasks) == 1
+    assert tasks[0].batch_job_id == created["id"]
+
+
 def test_promotion_failure_is_persisted_and_retry_reuses_the_ready_draft(db_session, monkeypatch):
     created = _batch_with_ready_drafts(db_session, monkeypatch, count=1)
     draft = _drafts_of(db_session, created["id"])[0]

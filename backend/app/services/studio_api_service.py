@@ -21,11 +21,13 @@ from backend.app.services.runpod_client import connection_status as runpod_conne
 from backend.app.services.runpod_client import runpod_request as runpod_client_request
 from backend.app.services.storage_backends import S3AssetStorage
 from backend.app.services.task_tracking_service import (
-    active_task_ids,
+    claim_active_task_ids,
     assets_total,
     list_assets,
     record_job_status,
     pending_output_import_task_ids,
+    claim_runpod_not_found_recovery_task_ids,
+    release_active_task_claim,
     requeue_task_for_rework,
     restore_existing_job_for_prompt_draft,
     restore_job_from_task,
@@ -1433,7 +1435,23 @@ def monitor_active_jobs() -> dict:
     because the status API had a transient error.
     """
     dispatch = dispatch_next_queued_job()
-    task_ids = list(dict.fromkeys([*active_task_ids(), *pending_output_import_task_ids()]))
+    not_found_task_ids = claim_runpod_not_found_recovery_task_ids()
+    reconciled_not_found = 0
+    for task_id in not_found_task_ids:
+        with JOB_LOCK:
+            job = restore_job_from_task(task_id)
+            if not job:
+                continue
+            JOBS[task_id] = job
+            stored_status = job.get("runpodStatus") if isinstance(job.get("runpodStatus"), dict) else {}
+            error = str(stored_status.get("error") or "RunPod HTTP 404: job not found")
+            job_service.reconcile_runpod_job_not_found(job_runtime(), job, error)
+            reconciled_not_found += 1
+    task_ids = [
+        task_id
+        for task_id in dict.fromkeys([*claim_active_task_ids(), *pending_output_import_task_ids()])
+        if task_id not in not_found_task_ids
+    ]
     failures: list[str] = []
     for task_id in task_ids:
         try:
@@ -1442,12 +1460,18 @@ def monitor_active_jobs() -> dict:
             with JOB_LOCK:
                 job = JOBS.get(task_id)
                 if job_service.is_runpod_job_not_found_error(exc) and job:
-                    job_service.mark_runpod_job_not_found(job_runtime(), job, str(exc))
-                    LOGGER.warning("RunPod job no longer exists; marked task failed: %s", task_id)
+                    outcome = job_service.reconcile_runpod_job_not_found(job_runtime(), job, str(exc))
+                    LOGGER.warning("RunPod job status not found; reconciliation=%s task=%s", outcome, task_id)
                     continue
             LOGGER.exception("RunPod monitor status refresh failed: task=%s", task_id)
+            release_active_task_claim(task_id)
             failures.append(task_id)
-    return {"checked": len(task_ids), "failures": failures, "dispatch": dispatch}
+    return {
+        "checked": len(task_ids),
+        "failures": failures,
+        "dispatch": dispatch,
+        "reconciledNotFound": reconciled_not_found,
+    }
 
 
 def job_prompts(task_id: str) -> list[dict]:

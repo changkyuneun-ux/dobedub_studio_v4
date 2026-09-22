@@ -121,6 +121,162 @@ def test_completed_runpod_status_is_persisted_when_output_save_fails():
     assert recorded[-1]["runpodStatus"]["outputImportStatus"] == "PENDING"
 
 
+def test_runpod_not_found_recovers_from_a_late_s3_manifest():
+    recorded = []
+    job = {
+        "taskId": "task_late_manifest",
+        "runpodJobId": "runpod-late-manifest",
+        "executionMode": "runpod",
+        "workflowId": "1-images.json",
+        "status": "IN_PROGRESS",
+        "progress": 45,
+        "createdAt": 1_000_000.0,
+        "runpodStatus": {"status": "IN_PROGRESS"},
+        "outputsSaved": False,
+        "outputAssets": [],
+    }
+    runtime = _runtime_with_job(job)
+    runtime.save_runpod_outputs = lambda result, stored_job: {
+        "assets": [{
+            "assetId": "asset_late_video",
+            "downloadUrl": "/api/files/asset_late_video",
+            "outputRole": "final",
+        }],
+        "remoteUrls": [],
+    }
+    runtime.record_job = lambda stored_job: recorded.append(stored_job.copy())
+
+    outcome = job_service.reconcile_runpod_job_not_found(
+        runtime,
+        job,
+        'RunPod HTTP 404: {"detail":"job not found"}',
+        now_epoch=2_000_000.0,
+    )
+
+    assert outcome == "recovered"
+    assert job["status"] == "COMPLETED"
+    assert job["progress"] == 100
+    assert job["outputsSaved"] is True
+    assert job["outputAssets"][0]["assetId"] == "asset_late_video"
+    assert job["runpodStatus"]["providerStatus"] == "RECOVERED_FROM_MANIFEST"
+    assert recorded[-1]["status"] == "COMPLETED"
+
+
+def test_runpod_not_found_remains_retryable_during_reconciliation_grace():
+    recorded = []
+    job = {
+        "taskId": "task_not_found_grace",
+        "runpodJobId": "runpod-not-found-grace",
+        "executionMode": "runpod",
+        "workflowId": "1-images.json",
+        "status": "IN_PROGRESS",
+        "progress": 45,
+        "createdAt": 1_000_000.0,
+        "runpodStatus": {"status": "IN_PROGRESS"},
+        "outputsSaved": False,
+        "outputAssets": [],
+    }
+    runtime = _runtime_with_job(job)
+    runtime.save_runpod_outputs = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("manifest is not available yet")
+    )
+    runtime.record_job = lambda stored_job: recorded.append(stored_job.copy())
+
+    outcome = job_service.reconcile_runpod_job_not_found(
+        runtime,
+        job,
+        'RunPod HTTP 404: {"detail":"job not found"}',
+        now_epoch=2_000_000.0,
+    )
+
+    assert outcome == "retry"
+    assert job["status"] == "IN_PROGRESS"
+    assert job["progress"] == 45
+    assert job["runpodStatus"]["providerStatus"] == "NOT_FOUND_RECONCILING"
+    assert job["runpodStatus"]["notFoundRecovery"]["attempts"] == 1
+    assert job["runpodStatus"]["notFoundRecovery"]["firstSeenEpoch"] == 2_000_000.0
+    assert recorded[-1]["status"] == "IN_PROGRESS"
+
+
+def test_legacy_failed_not_found_is_reopened_while_manifest_is_pending():
+    job = {
+        "taskId": "task_legacy_not_found",
+        "runpodJobId": "runpod-legacy-not-found",
+        "executionMode": "runpod",
+        "workflowId": "1-images.json",
+        "status": "FAILED",
+        "progress": 100,
+        "createdAt": 1_000_000.0,
+        "runpodStatus": {
+            "status": "FAILED",
+            "providerStatus": "NOT_FOUND",
+            "error": 'RunPod HTTP 404: {"detail":"job not found"}',
+        },
+        "outputsSaved": False,
+        "outputAssets": [],
+    }
+    runtime = _runtime_with_job(job)
+    runtime.save_runpod_outputs = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("manifest is not available yet")
+    )
+
+    outcome = job_service.reconcile_runpod_job_not_found(
+        runtime,
+        job,
+        job["runpodStatus"]["error"],
+        now_epoch=2_000_000.0,
+    )
+
+    assert outcome == "retry"
+    assert job["status"] == "IN_PROGRESS"
+    assert job["progress"] < 100
+    assert job["runpodStatus"]["providerStatus"] == "NOT_FOUND_RECONCILING"
+
+
+def test_runpod_not_found_becomes_failed_only_after_grace_and_repeated_checks():
+    recorded = []
+    job = {
+        "taskId": "task_not_found_expired",
+        "runpodJobId": "runpod-not-found-expired",
+        "executionMode": "runpod",
+        "workflowId": "1-images.json",
+        "status": "IN_PROGRESS",
+        "progress": 45,
+        "createdAt": 1_000_000.0,
+        "runpodStatus": {
+            "status": "IN_PROGRESS",
+            "providerStatus": "NOT_FOUND_RECONCILING",
+            "notFoundRecovery": {
+                "attempts": 2,
+                "firstSeenEpoch": 2_000_000.0,
+                "lastSeenEpoch": 2_000_300.0,
+            },
+        },
+        "outputsSaved": False,
+        "outputAssets": [],
+    }
+    runtime = _runtime_with_job(job)
+    runtime.save_runpod_outputs = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("manifest is not available")
+    )
+    runtime.record_job = lambda stored_job: recorded.append(stored_job.copy())
+
+    outcome = job_service.reconcile_runpod_job_not_found(
+        runtime,
+        job,
+        'RunPod HTTP 404: {"detail":"job not found"}',
+        now_epoch=2_000_901.0,
+    )
+
+    assert outcome == "failed"
+    assert job["status"] == "FAILED"
+    assert job["progress"] == 100
+    assert job["runpodStatus"]["providerStatus"] == "NOT_FOUND"
+    assert job["runpodStatus"]["notFoundRecovery"]["attempts"] == 3
+    assert job["runpodStatus"]["notFoundRecovery"]["final"] is True
+    assert recorded[-1]["status"] == "FAILED"
+
+
 def test_runpod_submission_logs_generation_snapshot_before_provider_request(caplog):
     payload = {"taskId": "task_submission_log", "workflowId": "1-images_81.json", "resolutionTier": "hd"}
     runtime = job_service.JobRuntime(

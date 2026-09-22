@@ -795,7 +795,7 @@ def _unpromoted_ready_drafts(limit: int, cutoff: datetime, now: datetime):
             ImagePromptDraft.positive_prompt.is_not(None),
             func.length(func.trim(ImagePromptDraft.positive_prompt)) > 0,
             or_(
-                ImagePromptDraft.promotion_status.in_((PROMOTION_PENDING, PROMOTION_FAILED)),
+                ImagePromptDraft.promotion_status.in_((PROMOTION_PENDING, PROMOTION_FAILED, PROMOTION_TASK_CREATED)),
                 ImagePromptDraft.promotion_status.is_(None),
                 and_(
                     ImagePromptDraft.promotion_status == PROMOTION_DISPATCHING,

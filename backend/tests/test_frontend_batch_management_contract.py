@@ -498,7 +498,7 @@ def test_studio_workflow_default_reset_preserves_five_second_generation_length()
 
 def test_runpod_retry_status_updates_result_column_not_download_action() -> None:
     source = Path("frontend/src/screens/reviewScreens.tsx").read_text(encoding="utf-8")
-    download_cell = source.split("const reworkInFlight", 1)[1].split("<span style={{ textAlign: \"right\" }}", 1)[0]
+    download_cell = source.split("const reworkInFlight", 1)[1].split('<span className="v3-history-delete-column">', 1)[0]
 
     assert "const resultStatusLabel = runpodResultStatusLabel(item)" in source
     assert '<span className={`v3-status-badge ${resultStatusTone}`}>{resultStatusLabel}</span>' in source

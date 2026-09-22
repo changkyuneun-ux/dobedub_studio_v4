@@ -906,6 +906,63 @@ def active_task_ids() -> list[str]:
         session.close()
 
 
+def claim_active_task_ids(*, limit: int = 100) -> list[str]:
+    """Atomically lease active RunPod tasks to one status-monitor worker."""
+    session = SessionLocal()
+    try:
+        now = now_seoul_naive()
+        stale_before = now - timedelta(seconds=STALE_DISPATCH_CLAIM_SECONDS)
+        candidates = session.scalars(
+            select(WorkflowTask.id)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.execution_mode == "runpod",
+                WorkflowTask.runpod_job_id.is_not(None),
+                func.upper(WorkflowTask.status).in_(ACTIVE_STATES),
+                or_(WorkflowTask.dispatch_claimed_at.is_(None), WorkflowTask.dispatch_claimed_at <= stale_before),
+            )
+            .order_by(WorkflowTask.created_at.asc(), WorkflowTask.id.asc())
+            .limit(max(1, min(500, int(limit or 100))))
+        ).all()
+        claimed_ids: list[str] = []
+        for task_id in candidates:
+            claimed = session.execute(
+                update(WorkflowTask)
+                .where(
+                    WorkflowTask.id == task_id,
+                    func.upper(WorkflowTask.status).in_(ACTIVE_STATES),
+                    or_(
+                        WorkflowTask.dispatch_claimed_at.is_(None),
+                        WorkflowTask.dispatch_claimed_at <= stale_before,
+                    ),
+                )
+                .values(dispatch_claimed_at=now)
+            )
+            if claimed.rowcount:
+                claimed_ids.append(task_id)
+        session.commit()
+        return claimed_ids
+    finally:
+        session.close()
+
+
+def release_active_task_claim(task_id: str) -> None:
+    """Release a monitor lease when polling failed before status persistence."""
+    session = SessionLocal()
+    try:
+        session.execute(
+            update(WorkflowTask)
+            .where(
+                WorkflowTask.id == task_id,
+                func.upper(WorkflowTask.status).in_(ACTIVE_STATES),
+            )
+            .values(dispatch_claimed_at=None)
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
 def pending_output_import_task_ids() -> list[str]:
     """Return completed RunPod tasks whose manifest-backed output is absent.
 
@@ -929,6 +986,63 @@ def pending_output_import_task_ids() -> list[str]:
             .order_by(WorkflowTask.updated_at.asc(), WorkflowTask.id.asc())
             .limit(20)
         ))
+    finally:
+        session.close()
+
+
+def claim_runpod_not_found_recovery_task_ids(*, limit: int = 100) -> list[str]:
+    """Claim legacy false-failure candidates that may have a late S3 manifest.
+
+    The provider status row can disappear before the worker publishes its
+    durable manifest.  Only failed RunPod tasks without registered outputs are
+    candidates, and a finalized reconciliation envelope prevents endless
+    retries for genuinely missing jobs.
+    """
+    session = SessionLocal()
+    try:
+        now = now_seoul_naive()
+        stale_before = now - timedelta(seconds=STALE_DISPATCH_CLAIM_SECONDS)
+        missing_output = ~select(TaskOutputAsset.id).where(
+            TaskOutputAsset.task_id == WorkflowTask.id,
+        ).exists()
+        candidates = session.scalars(
+            select(WorkflowTask)
+            .where(
+                WorkflowTask.deleted_at.is_(None),
+                WorkflowTask.execution_mode == "runpod",
+                WorkflowTask.runpod_job_id.is_not(None),
+                func.upper(WorkflowTask.status) == "FAILED",
+                or_(WorkflowTask.dispatch_claimed_at.is_(None), WorkflowTask.dispatch_claimed_at <= stale_before),
+                missing_output,
+            )
+            .order_by(WorkflowTask.updated_at.asc(), WorkflowTask.id.asc())
+            .limit(max(1, min(500, int(limit or 100))))
+        ).all()
+        result: list[str] = []
+        for task in candidates:
+            status = task.runpod_status_json if isinstance(task.runpod_status_json, dict) else {}
+            recovery = status.get("notFoundRecovery") if isinstance(status.get("notFoundRecovery"), dict) else {}
+            error = str(status.get("error") or task.last_dispatch_error or "").lower()
+            provider_status = str(status.get("providerStatus") or "").upper()
+            if recovery.get("final"):
+                continue
+            if provider_status == "NOT_FOUND" or ("runpod http 404" in error and "not found" in error):
+                claimed = session.execute(
+                    update(WorkflowTask)
+                    .where(
+                        WorkflowTask.id == task.id,
+                        func.upper(WorkflowTask.status) == "FAILED",
+                        or_(
+                            WorkflowTask.dispatch_claimed_at.is_(None),
+                            WorkflowTask.dispatch_claimed_at <= stale_before,
+                        ),
+                    )
+                    .values(dispatch_claimed_at=now)
+                )
+                if claimed.rowcount:
+                    result.append(task.id)
+        session.commit()
+        return result
     finally:
         session.close()
 

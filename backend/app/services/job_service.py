@@ -16,6 +16,8 @@ from backend.app.services.workflow_patch_service import normalize_resolution_tie
 
 
 TERMINAL_RUNPOD_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
+RUNPOD_NOT_FOUND_GRACE_SECONDS = 15 * 60
+RUNPOD_NOT_FOUND_MIN_ATTEMPTS = 3
 
 
 LOGGER = logging.getLogger(__name__)
@@ -285,6 +287,88 @@ def mark_runpod_job_not_found(runtime: JobRuntime, job: dict, error: str) -> dic
     job["historySaved"] = True
     record_job(runtime, job)
     return job
+
+
+def reconcile_runpod_job_not_found(
+    runtime: JobRuntime,
+    job: dict,
+    error: str,
+    *,
+    now_epoch: float | None = None,
+) -> str:
+    """Resolve an ambiguous RunPod 404 against durable output storage.
+
+    RunPod's status record and the worker-written S3 manifest are independent
+    signals.  A missing provider status must not win over a late manifest, and
+    it must remain retryable long enough for an in-flight worker to publish its
+    result.  The reconciliation envelope is persisted inside runpodStatus so a
+    process restart cannot reset the grace period.
+    """
+    observed_at = float(now_epoch if now_epoch is not None else time.time())
+    previous_status = job.get("runpodStatus") if isinstance(job.get("runpodStatus"), dict) else {}
+    previous_recovery = (
+        previous_status.get("notFoundRecovery")
+        if isinstance(previous_status.get("notFoundRecovery"), dict)
+        else {}
+    )
+    attempts = max(0, int(previous_recovery.get("attempts") or 0)) + 1
+    first_seen = float(previous_recovery.get("firstSeenEpoch") or observed_at)
+    recovery = {
+        "attempts": attempts,
+        "firstSeenEpoch": first_seen,
+        "lastSeenEpoch": observed_at,
+    }
+
+    manifest_probe = {
+        "status": "COMPLETED",
+        "id": job.get("runpodJobId"),
+        "providerStatus": "NOT_FOUND",
+    }
+    try:
+        _save_completed_outputs_if_needed(runtime, job, manifest_probe)
+    except Exception:
+        elapsed = max(0.0, observed_at - first_seen)
+        if attempts < RUNPOD_NOT_FOUND_MIN_ATTEMPTS or elapsed < RUNPOD_NOT_FOUND_GRACE_SECONDS:
+            active_status = str(job.get("status") or previous_status.get("status") or "IN_PROGRESS").upper()
+            if active_status in TERMINAL_RUNPOD_STATES:
+                active_status = "IN_PROGRESS"
+                job["status"] = active_status
+                job["progress"] = min(95, max(1, int(job.get("progress") or 45)))
+            job["runpodStatus"] = {
+                **previous_status,
+                "status": active_status,
+                "error": error,
+                "providerStatus": "NOT_FOUND_RECONCILING",
+                "notFoundRecovery": recovery,
+            }
+            record_job(runtime, job)
+            return "retry"
+
+        job["status"] = "FAILED"
+        job["progress"] = 100
+        recovery["final"] = True
+        job["runpodStatus"] = {
+            "status": "FAILED",
+            "error": error,
+            "providerStatus": "NOT_FOUND",
+            "notFoundRecovery": recovery,
+        }
+        job["historySaved"] = True
+        record_job(runtime, job)
+        return "failed"
+
+    job["status"] = "COMPLETED"
+    job["progress"] = 100
+    job["historySaved"] = True
+    job["runpodStatus"] = {
+        **(job.get("runpodStatus") or {}),
+        "status": "COMPLETED",
+        "providerStatus": "RECOVERED_FROM_MANIFEST",
+        "notFoundRecovery": recovery,
+    }
+    job["runpodStatus"].pop("error", None)
+    record_job(runtime, job)
+    return "recovered"
 
 
 def cancel_job(runtime: JobRuntime, task_id: str) -> dict:
